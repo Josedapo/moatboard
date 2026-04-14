@@ -13,6 +13,13 @@ if (!process.env.DATABASE_URL) {
 }
 
 const sql = neon(process.env.DATABASE_URL);
+
+// One-shot migrations: drop legacy tables whose CHECK constraints or column
+// shape changed. Safe to run repeatedly because of `IF EXISTS`.
+console.log("Running pre-migration: dropping legacy tables...");
+await sql.query("DROP TABLE IF EXISTS theses CASCADE");
+await sql.query("DROP TABLE IF EXISTS moatboard_analyses CASCADE");
+
 const rawSchema = readFileSync("src/lib/schema.sql", "utf-8");
 
 // Strip comment lines, then split on semicolons

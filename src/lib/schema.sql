@@ -60,16 +60,55 @@ CREATE TABLE IF NOT EXISTS positions (
 
 CREATE INDEX IF NOT EXISTS idx_positions_user_id ON positions(user_id);
 
-CREATE TABLE IF NOT EXISTS theses (
-  id SERIAL PRIMARY KEY,
-  position_id INTEGER NOT NULL REFERENCES positions(id) ON DELETE CASCADE,
-  content JSONB NOT NULL,
-  generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  edited_at TIMESTAMPTZ,
-  is_edited BOOLEAN NOT NULL DEFAULT FALSE
+-- Moat assessments cached per ticker, shared across all users (one row per ticker)
+CREATE TABLE IF NOT EXISTS moat_assessments (
+  ticker VARCHAR(10) PRIMARY KEY,
+  strength VARCHAR(10) NOT NULL CHECK (strength IN ('strong', 'weak', 'unclear')),
+  archetype VARCHAR(30) NOT NULL CHECK (archetype IN (
+    'brand', 'network_effects', 'switching_costs', 'scale',
+    'ip', 'regulatory', 'cost_advantage', 'none'
+  )),
+  reasoning TEXT NOT NULL,
+  evaluated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  evaluated_with_model VARCHAR(50) NOT NULL DEFAULT 'claude-sonnet-4-6'
 );
 
-CREATE INDEX IF NOT EXISTS idx_theses_position_id ON theses(position_id);
+-- Moatboard's verdict on the business (one row per position, overwritten on regeneration)
+CREATE TABLE IF NOT EXISTS moatboard_analyses (
+  id SERIAL PRIMARY KEY,
+  position_id INTEGER NOT NULL UNIQUE REFERENCES positions(id) ON DELETE CASCADE,
+  tier VARCHAR(20) NOT NULL CHECK (tier IN ('exceptional', 'good', 'average', 'poor')),
+  verdict_reason TEXT NOT NULL,
+  scorecard_summary JSONB NOT NULL,
+  moat_strength VARCHAR(10) NOT NULL,
+  moat_archetype VARCHAR(30) NOT NULL,
+  generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Valuation: intrinsic value estimate and margin of safety per position
+CREATE TABLE IF NOT EXISTS valuations (
+  id SERIAL PRIMARY KEY,
+  position_id INTEGER NOT NULL UNIQUE REFERENCES positions(id) ON DELETE CASCADE,
+  method VARCHAR(20) NOT NULL CHECK (method IN ('dcf', 'ai_multiples')),
+  intrinsic_value NUMERIC(14, 4) NOT NULL,
+  current_price NUMERIC(14, 4) NOT NULL,
+  margin_of_safety_pct NUMERIC(7, 2) NOT NULL,
+  tier VARCHAR(20) NOT NULL CHECK (tier IN ('margin', 'fair', 'premium', 'overvalued')),
+  assumptions JSONB NOT NULL,
+  reasoning TEXT NOT NULL,
+  generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- User's thesis (one row per position; either user-written free-form or AI-generated structured)
+CREATE TABLE IF NOT EXISTS theses (
+  id SERIAL PRIMARY KEY,
+  position_id INTEGER NOT NULL UNIQUE REFERENCES positions(id) ON DELETE CASCADE,
+  source VARCHAR(10) NOT NULL CHECK (source IN ('user', 'ai')),
+  raw_text TEXT NOT NULL,
+  structured_content JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  edited_at TIMESTAMPTZ
+);
 
 CREATE TABLE IF NOT EXISTS monthly_reviews (
   id SERIAL PRIMARY KEY,

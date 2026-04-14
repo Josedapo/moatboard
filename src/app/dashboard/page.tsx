@@ -1,7 +1,10 @@
+import Link from "next/link";
 import { auth } from "@/auth";
 import { getPositionsByUserId } from "@/lib/positions";
-import { addPositionAction, deletePositionAction } from "./actions";
+import { fetchQuoteAndFundamentals } from "@/lib/financial";
+import { deletePositionAction } from "./actions";
 import DashboardNav from "@/components/DashboardNav";
+import AddPositionForm from "@/components/AddPositionForm";
 
 export const metadata = {
   title: "Dashboard",
@@ -10,11 +13,20 @@ export const metadata = {
 export default async function Dashboard() {
   const session = await auth();
   if (!session?.user?.id) {
-    return null; // middleware will redirect
+    return null; // proxy will redirect
   }
 
   const positions = await getPositionsByUserId(session.user.id);
   const today = new Date().toISOString().slice(0, 10);
+
+  // Fetch current quotes in parallel
+  const quotes = await Promise.all(
+    positions.map(async (p) => ({
+      positionId: p.id,
+      quote: (await fetchQuoteAndFundamentals(p.ticker)).quote,
+    })),
+  );
+  const quoteMap = new Map(quotes.map((q) => [q.positionId, q.quote]));
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -30,105 +42,74 @@ export default async function Dashboard() {
           </p>
         </header>
 
-        {/* Add position form */}
-        <form
-          action={addPositionAction}
-          className="mb-10 rounded-xl border border-navy-200 bg-white p-6"
-        >
-          <h2 className="mb-4 text-lg font-semibold text-navy-900">
-            Add a position
-          </h2>
-          <div className="grid gap-4 sm:grid-cols-3">
-            <div>
-              <label
-                htmlFor="ticker"
-                className="mb-1 block text-sm font-medium text-navy-700"
-              >
-                Ticker
-              </label>
-              <input
-                id="ticker"
-                name="ticker"
-                type="text"
-                required
-                placeholder="AAPL"
-                maxLength={10}
-                className="w-full rounded-lg border border-navy-300 px-3 py-2 uppercase focus:border-navy-900 focus:outline-none"
-              />
-            </div>
-            <div>
-              <label
-                htmlFor="purchasePrice"
-                className="mb-1 block text-sm font-medium text-navy-700"
-              >
-                Purchase price
-              </label>
-              <input
-                id="purchasePrice"
-                name="purchasePrice"
-                type="number"
-                step="0.0001"
-                min="0"
-                required
-                placeholder="150.00"
-                className="w-full rounded-lg border border-navy-300 px-3 py-2 focus:border-navy-900 focus:outline-none"
-              />
-            </div>
-            <div>
-              <label
-                htmlFor="purchaseDate"
-                className="mb-1 block text-sm font-medium text-navy-700"
-              >
-                Purchase date
-              </label>
-              <input
-                id="purchaseDate"
-                name="purchaseDate"
-                type="date"
-                required
-                defaultValue={today}
-                max={today}
-                className="w-full rounded-lg border border-navy-300 px-3 py-2 focus:border-navy-900 focus:outline-none"
-              />
-            </div>
-          </div>
-          <div className="mt-4">
-            <button
-              type="submit"
-              className="rounded-lg bg-navy-900 px-5 py-2 text-sm font-medium text-white hover:bg-navy-800"
-            >
-              Add position
-            </button>
-          </div>
-        </form>
+        <AddPositionForm today={today} />
 
-        {/* Positions list */}
         {positions.length > 0 && (
           <div className="space-y-3">
-            {positions.map((p) => (
-              <div
-                key={p.id}
-                className="flex items-center justify-between rounded-xl border border-navy-200 bg-white p-5"
-              >
-                <div>
-                  <div className="text-lg font-semibold text-navy-900">
-                    {p.ticker}
-                  </div>
-                  <div className="text-sm text-navy-500">
-                    Bought at ${Number(p.purchase_price).toFixed(2)} on {p.purchase_date}
+            {positions.map((p) => {
+              const quote = quoteMap.get(p.id);
+              const purchasePrice = Number(p.purchase_price);
+              const currentPrice = quote?.regularMarketPrice ?? null;
+              const changePct =
+                currentPrice !== null
+                  ? ((currentPrice - purchasePrice) / purchasePrice) * 100
+                  : null;
+              const changeColor =
+                changePct === null
+                  ? "text-navy-500"
+                  : changePct >= 0
+                    ? "text-emerald-600"
+                    : "text-red-600";
+
+              return (
+                <div
+                  key={p.id}
+                  className="flex items-center justify-between rounded-xl border border-navy-200 bg-white p-5 hover:border-navy-400"
+                >
+                  <Link
+                    href={`/dashboard/position/${p.id}`}
+                    className="flex-1"
+                  >
+                    <div className="flex items-baseline gap-3">
+                      <span className="text-lg font-semibold text-navy-900">
+                        {p.ticker}
+                      </span>
+                      {quote?.longName && (
+                        <span className="text-sm text-navy-500">
+                          {quote.longName}
+                        </span>
+                      )}
+                    </div>
+                    <div className="mt-1 text-sm text-navy-500">
+                      Bought at ${purchasePrice.toFixed(2)} on {p.purchase_date}
+                    </div>
+                  </Link>
+                  <div className="flex items-center gap-6">
+                    <div className="text-right">
+                      <div className="text-lg font-semibold text-navy-900">
+                        {currentPrice !== null
+                          ? `$${currentPrice.toFixed(2)}`
+                          : "—"}
+                      </div>
+                      <div className={`text-sm ${changeColor}`}>
+                        {changePct !== null
+                          ? `${changePct >= 0 ? "+" : ""}${changePct.toFixed(2)}%`
+                          : "No data"}
+                      </div>
+                    </div>
+                    <form action={deletePositionAction}>
+                      <input type="hidden" name="positionId" value={p.id} />
+                      <button
+                        type="submit"
+                        className="text-sm text-navy-400 hover:text-red-600"
+                      >
+                        Remove
+                      </button>
+                    </form>
                   </div>
                 </div>
-                <form action={deletePositionAction}>
-                  <input type="hidden" name="positionId" value={p.id} />
-                  <button
-                    type="submit"
-                    className="text-sm text-navy-500 hover:text-red-600"
-                  >
-                    Remove
-                  </button>
-                </form>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </main>
