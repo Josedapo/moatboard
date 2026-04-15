@@ -236,6 +236,89 @@ function nullable(value: unknown): number | null {
   return value;
 }
 
+// --- Management signals ---
+// Buffett says management is half the thesis. None of this is scored
+// formulaically — we surface the data and let the thesis writer (AI or
+// user) reason about it. Data comes from yfinance quoteSummary and is
+// best-effort: for many tickers some fields will be null.
+
+export type ManagementSignals = {
+  ceoName: string | null;
+  ceoTitle: string | null;
+  ceoAge: number | null; // approximate (current year − yearBorn)
+  ceoTotalPay: number | null; // USD
+  insiderOwnershipPct: number | null; // decimal 0–1
+  insiderNet6mPct: number | null; // net insider transactions as % of shares (signed)
+  insiderBuyCount6m: number | null;
+  insiderSellCount6m: number | null;
+  employees: number | null;
+};
+
+export async function fetchManagementSignals(
+  ticker: string,
+): Promise<ManagementSignals | null> {
+  try {
+    const res = await yf.quoteSummary(ticker, {
+      modules: [
+        "assetProfile",
+        "defaultKeyStatistics",
+        "majorHoldersBreakdown",
+        "netSharePurchaseActivity",
+      ],
+    });
+
+    // yahoo-finance2 types narrow heterogeneously across modules; cast to a
+    // permissive record so we can read fields by name without fighting the
+    // library's per-call union types.
+    const profile = (res.assetProfile ?? {}) as Record<string, unknown>;
+    const ks = (res.defaultKeyStatistics ?? {}) as Record<string, unknown>;
+    const mhb = (res.majorHoldersBreakdown ?? {}) as Record<string, unknown>;
+    const net = (res.netSharePurchaseActivity ?? {}) as Record<string, unknown>;
+
+    // Find the CEO: the title usually contains "CEO" or "Chief Executive Officer".
+    // Some companies split Chairman vs CEO — we prefer the explicit "CEO" title
+    // so the person running the business day-to-day is surfaced, not the
+    // ceremonial chair.
+    type Officer = {
+      name?: string;
+      title?: string;
+      yearBorn?: number;
+      totalPay?: number;
+    };
+    const officersRaw = profile["companyOfficers"];
+    const officers: Officer[] = Array.isArray(officersRaw)
+      ? (officersRaw as Officer[])
+      : [];
+    const ceo =
+      officers.find((o) =>
+        /chief\s+executive\s+officer/i.test(o.title ?? ""),
+      ) ||
+      officers.find((o) => /\bCEO\b/i.test(o.title ?? "")) ||
+      null;
+
+    const currentYear = new Date().getFullYear();
+    const ceoAge =
+      ceo && typeof ceo.yearBorn === "number" ? currentYear - ceo.yearBorn : null;
+
+    return {
+      ceoName: ceo?.name ?? null,
+      ceoTitle: ceo?.title ?? null,
+      ceoAge,
+      ceoTotalPay: nullable(ceo?.totalPay),
+      insiderOwnershipPct:
+        nullable(ks["heldPercentInsiders"]) ??
+        nullable(mhb["insidersPercentHeld"]),
+      insiderNet6mPct: nullable(net["netPercentInsiderShares"]),
+      insiderBuyCount6m: nullable(net["buyInfoCount"]),
+      insiderSellCount6m: nullable(net["sellInfoCount"]),
+      employees: nullable(profile["fullTimeEmployees"]),
+    };
+  } catch (err) {
+    console.error(`fetchManagementSignals failed for ${ticker}:`, err);
+    return null;
+  }
+}
+
 // --- US 10-year Treasury yield (^TNX) ---
 // Used as the terminal growth rate in DCF. Philosophy: terminal growth can't
 // exceed the risk-free long-term anchor indefinitely, and the treasury yield

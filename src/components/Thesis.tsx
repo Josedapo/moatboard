@@ -184,7 +184,15 @@ function AiThesisView({
   positionId: number;
   thesis: Thesis;
 }) {
-  const initial = thesis.structured_content as ThesisContent;
+  // Legacy AI theses saved before we added the `management` field may be
+  // missing keys. Normalise against THESIS_FIELD_ORDER so the edit UI never
+  // crashes on undefined; the user sees an empty management section and can
+  // regenerate or fill it in.
+  const raw = (thesis.structured_content ?? {}) as Partial<ThesisContent>;
+  const initial = THESIS_FIELD_ORDER.reduce((acc, key) => {
+    acc[key] = raw[key] ?? { highlight: "", body: "" };
+    return acc;
+  }, {} as ThesisContent);
   const [draft, setDraft] = useState<ThesisContent>(initial);
   const [saving, startSaving] = useTransition();
   const [resetting, startReset] = useTransition();

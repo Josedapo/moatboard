@@ -24,6 +24,7 @@ import {
   type MoatArchetype,
 } from "@/lib/verdict";
 import { composeVerdictNarrative } from "@/lib/verdictAi";
+import { assessTooHard } from "@/lib/tooHard";
 
 export type AnalysisResult = {
   tier: Tier;
@@ -68,7 +69,21 @@ export async function runAnalysis(ticker: string): Promise<AnalysisResult> {
   }
 
   const scorecard = summarizeScorecard(fundamentals, multiYear);
-  const tier = computeQualityTier(scorecard, moat.strength, fundamentals);
+  let tier = computeQualityTier(scorecard, moat.strength, fundamentals);
+
+  // "Too hard" downgrade: if the business combines a hard-to-predict sector
+  // with a weak or absent moat, Moatboard's own philosophy says it doesn't
+  // belong in the punch card. The tier reflects that — we downgrade one
+  // level so the badge doesn't contradict the risk_factors caveat.
+  const tooHard = assessTooHard({
+    sector: quote?.sector ?? null,
+    industry: quote?.industry ?? null,
+    moatStrength: moat.strength,
+    moatArchetype: moat.archetype,
+  });
+  if (tooHard.isHard) {
+    tier = downgradeTier(tier);
+  }
 
   // Try AI-composed narrative; fall back to deterministic template on failure
   // so the page never breaks if the model API is unavailable.
@@ -83,6 +98,7 @@ export async function runAnalysis(ticker: string): Promise<AnalysisResult> {
       moatReasoning: moat.reasoning,
       quote,
       fundamentals,
+      tooHardReason: tooHard.isHard ? tooHard.reason : null,
     });
   } catch (err) {
     console.error("composeVerdictNarrative failed, falling back to template:", err);
@@ -93,6 +109,9 @@ export async function runAnalysis(ticker: string): Promise<AnalysisResult> {
       moatArchetype: moat.archetype,
       fundamentals,
     });
+    if (tooHard.isHard && tooHard.reason) {
+      verdict_reason += ` ${tooHard.reason}`;
+    }
   }
 
   return {
@@ -105,4 +124,16 @@ export async function runAnalysis(ticker: string): Promise<AnalysisResult> {
     fundamentals,
     multiYear,
   };
+}
+
+function downgradeTier(tier: Tier): Tier {
+  switch (tier) {
+    case "exceptional":
+      return "good";
+    case "good":
+      return "mediocre";
+    case "mediocre":
+    case "poor":
+      return tier;
+  }
 }

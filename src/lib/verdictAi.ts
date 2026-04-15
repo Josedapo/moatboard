@@ -35,6 +35,7 @@ function buildPrompt({
   quote,
   fundamentals,
   ticker,
+  tooHardReason,
 }: {
   tier: Tier;
   scorecard: ScorecardSummary;
@@ -44,6 +45,7 @@ function buildPrompt({
   quote: Quote | null;
   fundamentals: Fundamentals;
   ticker: string;
+  tooHardReason: string | null;
 }): string {
   const dims = scorecard.dimensions;
 
@@ -81,10 +83,14 @@ function buildPrompt({
     .map(([k, v]) => `  - ${k}: ${v}`)
     .join("\n");
 
+  const tooHardLine = tooHardReason
+    ? `\nIMPORTANT: this ticker has been flagged as "too hard" (Munger's phrase) — ${tooHardReason} The tier has been downgraded one level as a result. The paragraph MUST acknowledge this limitation explicitly alongside the quality signals; do not let strong financials override the structural predictability problem.\n`
+    : "";
+
   return `You are writing one short paragraph (2-3 sentences, ~50-80 words) about the quality of a business for a buy-and-hold investor. The investor will read this immediately under a tier badge ("${tier.toUpperCase()} BUSINESS"); your paragraph elaborates with sophistication, like a seasoned analyst's note.
 
 Moatboard considers ${quote?.longName ?? ticker} ${TIER_FRAMING[tier]}
-
+${tooHardLine}
 Moat: ${moatStrength} — ${moatArchetype.replace("_", " ")}. ${moatReasoning}
 
 Quality dimensions snapshot:
@@ -109,6 +115,7 @@ export async function composeVerdictNarrative(args: {
   moatReasoning: string;
   quote: Quote | null;
   fundamentals: Fundamentals;
+  tooHardReason: string | null;
 }): Promise<string> {
   const prompt = buildPrompt(args);
 

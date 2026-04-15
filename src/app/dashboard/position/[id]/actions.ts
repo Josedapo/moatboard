@@ -6,7 +6,9 @@ import {
   fetchQuoteAndFundamentals,
   fetchMultiYearFundamentals,
   fetchTenYearTreasuryYieldAverage,
+  fetchManagementSignals,
 } from "@/lib/financial";
+import { assessTooHard } from "@/lib/tooHard";
 import { runAnalysis } from "@/lib/analysis";
 import {
   generateThesis,
@@ -95,12 +97,28 @@ export async function generateAiThesisAction(positionId: number) {
     );
   }
 
-  const { quote, fundamentals } = await fetchQuoteAndFundamentals(position.ticker);
+  const [{ quote, fundamentals }, management] = await Promise.all([
+    fetchQuoteAndFundamentals(position.ticker),
+    fetchManagementSignals(position.ticker),
+  ]);
+
+  const tooHard = assessTooHard({
+    sector: quote?.sector ?? null,
+    industry: quote?.industry ?? null,
+    moatStrength: analysis.moat_strength,
+    moatArchetype: analysis.moat_archetype,
+  });
+
+  const shareCountCagr =
+    analysis.scorecard_summary.multiYear?.shareCountTrend?.median ?? null;
 
   const content = await generateThesis(
     position.ticker,
     quote,
     fundamentals,
+    management,
+    tooHard,
+    shareCountCagr,
     analysis.tier,
     analysis.verdict_reason,
   );
