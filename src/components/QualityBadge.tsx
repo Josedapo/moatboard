@@ -18,8 +18,8 @@ const STYLES: Record<
     ring: "ring-teal-200",
     symbol: "✓",
   },
-  average: {
-    label: "Average business",
+  mediocre: {
+    label: "Mediocre business",
     bg: "bg-amber-50",
     text: "text-amber-700",
     ring: "ring-amber-200",

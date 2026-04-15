@@ -2,7 +2,7 @@
 // classification. Reusable by server actions today and by the Phase 2 public
 // DCF Calculator (KD 6, ~1300 vol/mo).
 
-export type MosTier = "margin" | "fair" | "premium" | "overvalued";
+export type MosTier = "margin" | "acceptable" | "fair" | "premium";
 
 export type DcfInputs = {
   fcfBase: number;
@@ -61,8 +61,8 @@ export function computeDcfIntrinsicValue(inputs: DcfInputs): DcfBreakdown {
 }
 
 export type ClassificationResult = {
-  mosPct: number; // positive = margin of safety; negative = overvalued (above intrinsic)
-  ivPriceRatio: number; // IV / Price; >1 undervalued, <1 overvalued
+  mosPct: number; // positive = margin of safety; negative = price above intrinsic
+  ivPriceRatio: number; // IV / Price; >1 below intrinsic, <1 above intrinsic
   tier: MosTier;
 };
 
@@ -71,34 +71,34 @@ export function classifyMarginOfSafety(
   currentPrice: number,
 ): ClassificationResult {
   if (intrinsicValue <= 0 || currentPrice <= 0) {
-    return { mosPct: 0, ivPriceRatio: 0, tier: "overvalued" };
+    return { mosPct: 0, ivPriceRatio: 0, tier: "premium" };
   }
 
-  // Vigil-aligned formulation (matches how value investors typically think):
-  //   IV/Price ratio = IV / Price  (1.15x means IV is 15% higher than price)
-  //   MoS%           = (IV - Price) / Price × 100
-  //                  = (IV/Price - 1) × 100
-  // Positive MoS = trading below intrinsic (good), Negative = above intrinsic (bad).
+  // IV/Price ratio = IV / Price  (1.15x means IV is 15% higher than price)
+  // MoS%           = (IV/Price - 1) × 100. Positive = trading below intrinsic.
   const ivPriceRatio = intrinsicValue / currentPrice;
   const mosPct = (ivPriceRatio - 1) * 100;
 
-  // Tier thresholds (Buffett-aligned):
-  //   IV/P ≥ 1.20x → margin       (≥ 20% MoS)
-  //   0.85x – 1.20x → fair        (-15% to +20%)
-  //   0.65x – 0.85x → premium     (-35% to -15%)
-  //   < 0.65x → overvalued        (< -35%)
+  // Buffett-aligned thresholds. The philosophy review rejects the earlier
+  // 20% "margin of safety": Graham/early Buffett wanted 33–50%+, and any
+  // price above intrinsic value is simply "premium" — the degree is not a
+  // decision input, since you don't buy at a premium regardless.
+  //   IV/P ≥ 1.40  → margin       (≥ 40% MoS)
+  //   1.15 – 1.40  → acceptable   (15–40%)
+  //   0.90 – 1.15  → fair         (−10% to +15%)
+  //   < 0.90       → premium      (price above intrinsic)
   let tier: MosTier;
-  if (ivPriceRatio >= 1.20) tier = "margin";
-  else if (ivPriceRatio >= 0.85) tier = "fair";
-  else if (ivPriceRatio >= 0.65) tier = "premium";
-  else tier = "overvalued";
+  if (ivPriceRatio >= 1.4) tier = "margin";
+  else if (ivPriceRatio >= 1.15) tier = "acceptable";
+  else if (ivPriceRatio >= 0.9) tier = "fair";
+  else tier = "premium";
 
   return { mosPct, ivPriceRatio, tier };
 }
 
 export const MOS_TIER_LABELS: Record<MosTier, string> = {
   margin: "Margin of Safety",
+  acceptable: "Acceptable",
   fair: "Fair Price",
   premium: "Premium",
-  overvalued: "Overvalued",
 };

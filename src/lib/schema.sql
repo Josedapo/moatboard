@@ -77,7 +77,7 @@ CREATE TABLE IF NOT EXISTS moat_assessments (
 CREATE TABLE IF NOT EXISTS moatboard_analyses (
   id SERIAL PRIMARY KEY,
   position_id INTEGER NOT NULL UNIQUE REFERENCES positions(id) ON DELETE CASCADE,
-  tier VARCHAR(20) NOT NULL CHECK (tier IN ('exceptional', 'good', 'average', 'poor')),
+  tier VARCHAR(20) NOT NULL CHECK (tier IN ('exceptional', 'good', 'mediocre', 'poor')),
   verdict_reason TEXT NOT NULL,
   scorecard_summary JSONB NOT NULL,
   moat_strength VARCHAR(10) NOT NULL,
@@ -93,7 +93,7 @@ CREATE TABLE IF NOT EXISTS valuations (
   intrinsic_value NUMERIC(14, 4) NOT NULL,
   current_price NUMERIC(14, 4) NOT NULL,
   margin_of_safety_pct NUMERIC(7, 2) NOT NULL,
-  tier VARCHAR(20) NOT NULL CHECK (tier IN ('margin', 'fair', 'premium', 'overvalued')),
+  tier VARCHAR(20) NOT NULL CHECK (tier IN ('margin', 'acceptable', 'fair', 'premium')),
   assumptions JSONB NOT NULL,
   reasoning TEXT NOT NULL,
   generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()

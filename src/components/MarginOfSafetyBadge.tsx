@@ -9,6 +9,13 @@ const STYLES: Record<
     bg: "bg-emerald-50",
     text: "text-emerald-700",
     ring: "ring-emerald-200",
+    symbol: "↓↓",
+  },
+  acceptable: {
+    label: "Acceptable",
+    bg: "bg-teal-50",
+    text: "text-teal-700",
+    ring: "ring-teal-200",
     symbol: "↓",
   },
   fair: {
@@ -20,17 +27,10 @@ const STYLES: Record<
   },
   premium: {
     label: "Premium",
-    bg: "bg-amber-50",
-    text: "text-amber-700",
-    ring: "ring-amber-200",
-    symbol: "↑",
-  },
-  overvalued: {
-    label: "Overvalued",
     bg: "bg-red-50",
     text: "text-red-700",
     ring: "ring-red-200",
-    symbol: "↑↑",
+    symbol: "↑",
   },
 };
 

@@ -20,8 +20,8 @@ const TIER_FRAMING: Record<Tier, string> = {
     "an EXCEPTIONAL business — top-tier compounder territory: durable advantage and capital efficiency that few businesses sustain.",
   good:
     "a GOOD business — solid, with most quality dimensions in healthy territory and a recognizable moat, even if not at the top tier.",
-  average:
-    "an AVERAGE business — real strengths balanced by material weaknesses; not a clear-cut compounder, not a clear-cut avoid.",
+  mediocre:
+    "a MEDIOCRE business — real strengths offset by material weaknesses. In Buffett/Munger's framework, the punch card is for wonderful or good businesses at the right price; mediocre is the default answer, not a third option to own.",
   poor:
     "a POOR business — fails Moatboard's quality bar on multiple dimensions; the things Buffett cares about are absent or broken here.",
 };

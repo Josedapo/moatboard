@@ -134,10 +134,10 @@ function ValuationView({
   const current = Number(valuation.current_price);
   // Recompute live so legacy rows / formula changes always render correctly
   const { mosPct, ivPriceRatio, tier } = classifyMarginOfSafety(intrinsic, current);
-  const isOvervalued = mosPct < 0;
+  const isAboveIntrinsic = mosPct < 0;
 
-  const headlinePhrase = isOvervalued
-    ? `Overvalued by ${Math.abs(mosPct).toFixed(1)}%`
+  const headlinePhrase = isAboveIntrinsic
+    ? `Price ${Math.abs(mosPct).toFixed(1)}% above intrinsic`
     : `Margin of Safety: ${mosPct.toFixed(1)}%`;
 
   const headlineColor = mosHeadlineColor(tier);
@@ -387,11 +387,11 @@ function valuationBoxStyles(tier: MosTier): string {
   switch (tier) {
     case "margin":
       return "border-emerald-200 bg-emerald-50 text-emerald-900";
+    case "acceptable":
+      return "border-teal-200 bg-teal-50 text-teal-900";
     case "fair":
       return "border-blue-200 bg-blue-50 text-blue-900";
     case "premium":
-      return "border-amber-200 bg-amber-50 text-amber-900";
-    case "overvalued":
       return "border-red-200 bg-red-50 text-red-900";
   }
 }
@@ -400,11 +400,11 @@ function statDividerStyles(tier: MosTier): string {
   switch (tier) {
     case "margin":
       return "sm:divide-x sm:divide-emerald-200/70";
+    case "acceptable":
+      return "sm:divide-x sm:divide-teal-200/70";
     case "fair":
       return "sm:divide-x sm:divide-blue-200/70";
     case "premium":
-      return "sm:divide-x sm:divide-amber-200/70";
-    case "overvalued":
       return "sm:divide-x sm:divide-red-200/70";
   }
 }
@@ -434,11 +434,11 @@ function mosHeadlineColor(tier: MosTier): string {
   switch (tier) {
     case "margin":
       return "text-emerald-700";
+    case "acceptable":
+      return "text-teal-700";
     case "fair":
       return "text-blue-700";
     case "premium":
-      return "text-amber-700";
-    case "overvalued":
       return "text-red-700";
   }
 }

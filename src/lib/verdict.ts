@@ -5,7 +5,7 @@
 import { scoreMetric, type Quality } from "@/lib/scorecard";
 import type { Fundamentals } from "@/lib/financial";
 
-export type Tier = "exceptional" | "good" | "average" | "poor";
+export type Tier = "exceptional" | "good" | "mediocre" | "poor";
 
 export type MoatStrength = "strong" | "weak" | "unclear";
 export type MoatArchetype =
@@ -35,7 +35,7 @@ export type ScorecardSummary = {
 export const TIER_LABELS: Record<Tier, string> = {
   exceptional: "Exceptional business",
   good: "Good business",
-  average: "Average business",
+  mediocre: "Mediocre business",
   poor: "Poor business",
 };
 
@@ -101,7 +101,7 @@ export function computeQualityTier(
     return "good";
   }
 
-  return "average";
+  return "mediocre";
 }
 
 export function renderVerdictReason({
@@ -135,8 +135,8 @@ export function renderVerdictReason({
       return `Exceptional business: ${strong} of ${total} quality dimensions strong, ${moatPhrase}. ${metricSnippet}`;
     case "good":
       return `Good business: ${strong} of ${total} quality dimensions strong, ${moatPhrase}. ${metricSnippet}`;
-    case "average":
-      return `Average business: mixed quality signals (${strong} strong, ${weak} weak), ${moatPhrase}. ${metricSnippet}`;
+    case "mediocre":
+      return `Mediocre business: mixed quality signals (${strong} strong, ${weak} weak), ${moatPhrase}. ${metricSnippet}`;
     case "poor":
       return `Poor business: ${weak} of ${total} dimensions failing, ${moatPhrase}. ${metricSnippet}`;
   }

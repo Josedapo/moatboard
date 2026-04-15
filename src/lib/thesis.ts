@@ -77,15 +77,10 @@ Current fundamentals (trailing/most recent):
 `.trim()
     : "Fundamentals data not available.";
 
-  const toneGuidance = (() => {
-    if (tier === "exceptional") {
-      return "Moatboard considers this an EXCEPTIONAL BUSINESS. Articulate a confident thesis explaining why this business is worth owning long-term, grounded in the strengths.";
-    }
-    if (tier === "good") {
-      return "Moatboard considers this a GOOD BUSINESS. Articulate a clear thesis grounded in the strengths, while staying honest about any limitations.";
-    }
-    return "Moatboard considers this an AVERAGE BUSINESS — solid in some dimensions but with material weaknesses. Articulate a thesis that explicitly acknowledges the caveats — owning this requires being comfortable with the specific weaknesses identified in the verdict reason. Do not paper them over.";
-  })();
+  const toneGuidance =
+    tier === "exceptional"
+      ? "Moatboard considers this an EXCEPTIONAL BUSINESS. Articulate a confident thesis explaining why this business is worth owning long-term, grounded in the strengths."
+      : "Moatboard considers this a GOOD BUSINESS. Articulate a clear thesis grounded in the strengths, while staying honest about any limitations.";
 
   return `You are an investment analyst writing a structured thesis for a buy-and-hold investor who thinks like a business owner. They care about durable quality, moats, and capital efficiency — not trading.
 
@@ -137,9 +132,9 @@ export async function generateThesis(
   tier: Tier,
   verdictReason: string,
 ): Promise<ThesisContent> {
-  if (tier === "poor") {
+  if (tier === "poor" || tier === "mediocre") {
     throw new Error(
-      "AI thesis generation is not available for businesses Moatboard rates as Poor.",
+      `AI thesis generation is not available for businesses Moatboard rates as ${tier === "poor" ? "Poor" : "Mediocre"}.`,
     );
   }
 

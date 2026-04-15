@@ -82,10 +82,11 @@ export async function generateAiThesisAction(positionId: number) {
     });
   }
 
-  if (analysis.tier === "poor") {
+  if (analysis.tier === "poor" || analysis.tier === "mediocre") {
     revalidatePath(`/dashboard/position/${positionId}`);
+    const label = analysis.tier === "poor" ? "Poor" : "Mediocre";
     throw new Error(
-      "Moatboard rates this business as Poor — AI thesis generation is not available. You can write your own thesis instead.",
+      `Moatboard rates this business as ${label} — AI thesis generation is not available. You can write your own thesis instead.`,
     );
   }
 
