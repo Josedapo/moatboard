@@ -85,12 +85,17 @@ CREATE TABLE IF NOT EXISTS moatboard_analyses (
   generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Valuation: intrinsic value estimate and margin of safety per position
+-- Valuation: intrinsic value estimate and margin of safety per position.
+-- DCF produces a range (low/base/high) from three hurdle rates. The primary
+-- `intrinsic_value` is the base (12% hurdle). For AI multiples fallback,
+-- low == base == high.
 CREATE TABLE IF NOT EXISTS valuations (
   id SERIAL PRIMARY KEY,
   position_id INTEGER NOT NULL UNIQUE REFERENCES positions(id) ON DELETE CASCADE,
   method VARCHAR(20) NOT NULL CHECK (method IN ('dcf', 'ai_multiples')),
   intrinsic_value NUMERIC(14, 4) NOT NULL,
+  intrinsic_value_low NUMERIC(14, 4) NOT NULL,
+  intrinsic_value_high NUMERIC(14, 4) NOT NULL,
   current_price NUMERIC(14, 4) NOT NULL,
   margin_of_safety_pct NUMERIC(7, 2) NOT NULL,
   tier VARCHAR(20) NOT NULL CHECK (tier IN ('margin', 'acceptable', 'fair', 'premium')),

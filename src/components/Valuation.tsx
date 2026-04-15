@@ -49,7 +49,8 @@ export default function ValuationSection({
         <div>
           <h2 className="text-xl font-bold text-navy-950">Valuation</h2>
           <p className="mt-1 text-xs text-navy-500">
-            Intrinsic value estimate vs current market price for {ticker}.
+            Intrinsic value range vs current market price for {ticker}. Owner
+            earnings two-stage DCF across 10%, 12% and 14% hurdle rates.
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -70,7 +71,7 @@ export default function ValuationSection({
               disabled={isPending}
               className="text-sm font-medium text-navy-600 hover:text-navy-900 disabled:opacity-50"
             >
-              {isPending ? "Regenerating..." : "Regenerate with AI"}
+              {isPending ? "Regenerating..." : "Regenerate"}
             </button>
           )}
         </div>
@@ -131,20 +132,25 @@ function ValuationView({
   valuation: Valuation;
 }) {
   const intrinsic = Number(valuation.intrinsic_value);
+  const intrinsicLow = Number(valuation.intrinsic_value_low);
+  const intrinsicHigh = Number(valuation.intrinsic_value_high);
   const current = Number(valuation.current_price);
-  // Recompute live so legacy rows / formula changes always render correctly
-  const { mosPct, ivPriceRatio, tier } = classifyMarginOfSafety(intrinsic, current);
+  const { mosPct, ivPriceRatio, tier } = classifyMarginOfSafety(
+    intrinsic,
+    current,
+  );
   const isAboveIntrinsic = mosPct < 0;
 
   const headlinePhrase = isAboveIntrinsic
-    ? `Price ${Math.abs(mosPct).toFixed(1)}% above intrinsic`
-    : `Margin of Safety: ${mosPct.toFixed(1)}%`;
+    ? `Price ${Math.abs(mosPct).toFixed(1)}% above intrinsic (base case)`
+    : `Margin of Safety: ${mosPct.toFixed(1)}% (base case)`;
 
   const headlineColor = mosHeadlineColor(tier);
+  const hasRange = valuation.method === "dcf" && intrinsicLow !== intrinsicHigh;
 
   const methodLabel =
     valuation.method === "dcf"
-      ? "DCF (10-year discounted cash flow)"
+      ? "Owner earnings two-stage DCF"
       : "AI multiples (DCF not applicable)";
 
   return (
@@ -161,21 +167,31 @@ function ValuationView({
           </div>
         </div>
 
-        <div className={`mt-5 grid gap-4 sm:grid-cols-3 ${statDividerStyles(tier)}`}>
-          <Stat
-            label="Intrinsic value"
-            value={`$${intrinsic.toFixed(2)}`}
+        {hasRange ? (
+          <ValuationRangeBar
+            bear={intrinsicLow}
+            base={intrinsic}
+            bull={intrinsicHigh}
+            price={current}
+            ivPriceRatio={ivPriceRatio}
           />
-          <Stat
-            label="Current price"
-            value={`$${current.toFixed(2)}`}
-          />
-          <Stat
-            label="IV / Price"
-            value={`${ivPriceRatio.toFixed(2)}x`}
-            valueColor={headlineColor}
-          />
-        </div>
+        ) : (
+          <div className={`mt-5 grid gap-4 sm:grid-cols-3 ${statDividerStyles(tier)}`}>
+            <Stat
+              label="Intrinsic value"
+              value={`$${intrinsic.toFixed(2)}`}
+            />
+            <Stat
+              label="Current price"
+              value={`$${current.toFixed(2)}`}
+            />
+            <Stat
+              label="IV / Price"
+              value={`${ivPriceRatio.toFixed(2)}x`}
+              valueColor={headlineColor}
+            />
+          </div>
+        )}
 
         <p className="mt-5 text-sm leading-relaxed border-t border-current/10 pt-4">
           {valuation.reasoning}
@@ -191,6 +207,9 @@ function ValuationView({
             <DcfDetails
               positionId={positionId}
               assumptions={valuation.assumptions as DcfStoredAssumptions}
+              intrinsicBase={intrinsic}
+              intrinsicLow={intrinsicLow}
+              intrinsicHigh={intrinsicHigh}
             />
           ) : (
             <MultiplesDetails
@@ -203,46 +222,191 @@ function ValuationView({
   );
 }
 
+// Visualizes the IV range (bear → base → bull) with the current price marked
+// on top. The bar itself represents the spectrum of possible intrinsic values
+// across the three hurdle rates; where the price sits relative to that range
+// tells you how robust the margin-of-safety call is.
+function ValuationRangeBar({
+  bear,
+  base,
+  bull,
+  price,
+  ivPriceRatio,
+}: {
+  bear: number;
+  base: number;
+  bull: number;
+  price: number;
+  ivPriceRatio: number;
+}) {
+  // Widen the visual scale so the price, if outside the range, still lands
+  // somewhere sensible without hugging the edge. Scale covers 10% beyond
+  // each end of the IV range OR the price, whichever is wider.
+  const rangeSpan = Math.max(bull - bear, bull * 0.01);
+  const scaleMin = Math.min(bear, price) - rangeSpan * 0.1;
+  const scaleMax = Math.max(bull, price) + rangeSpan * 0.1;
+  const scaleSpan = scaleMax - scaleMin;
+
+  const pct = (v: number) => ((v - scaleMin) / scaleSpan) * 100;
+  const bearPct = pct(bear);
+  const basePct = pct(base);
+  const bullPct = pct(bull);
+  const pricePct = Math.max(0, Math.min(100, pct(price)));
+
+  const status = (() => {
+    if (price < bear) {
+      return {
+        label: "Below bear-case IV — margin of safety in every scenario",
+        color: "text-emerald-700",
+        dot: "bg-emerald-500",
+      };
+    }
+    if (price > bull) {
+      return {
+        label: "Above bull-case IV — overvalued even on optimistic assumptions",
+        color: "text-red-700",
+        dot: "bg-red-500",
+      };
+    }
+    if (price < base) {
+      return {
+        label: "Within the valuation range — margin of safety under the base case",
+        color: "text-teal-700",
+        dot: "bg-teal-500",
+      };
+    }
+    return {
+      label: "Within the valuation range — above the base case",
+      color: "text-amber-700",
+      dot: "bg-amber-500",
+    };
+  })();
+
+  return (
+    <div className="mt-6">
+      {/* Numbers row above the bar */}
+      <div className="relative h-5 text-[11px] font-semibold tabular-nums">
+        <span
+          className="absolute -translate-x-1/2 text-navy-600"
+          style={{ left: `${bearPct}%` }}
+        >
+          ${bear.toFixed(2)}
+        </span>
+        <span
+          className="absolute -translate-x-1/2 text-navy-900"
+          style={{ left: `${basePct}%` }}
+        >
+          ${base.toFixed(2)}
+        </span>
+        <span
+          className="absolute -translate-x-1/2 text-navy-600"
+          style={{ left: `${bullPct}%` }}
+        >
+          ${bull.toFixed(2)}
+        </span>
+      </div>
+
+      {/* Main bar */}
+      <div className="relative h-9">
+        {/* Background track across entire scale */}
+        <div className="absolute inset-x-0 top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-current/10" />
+        {/* Active range: bear to bull */}
+        <div
+          className="absolute top-1/2 h-1.5 -translate-y-1/2 rounded-full bg-current/40"
+          style={{ left: `${bearPct}%`, width: `${bullPct - bearPct}%` }}
+        />
+        {/* Base tick */}
+        <div
+          className="absolute top-1/2 h-4 w-0.5 -translate-x-1/2 -translate-y-1/2 bg-current/70"
+          style={{ left: `${basePct}%` }}
+          aria-label="base case"
+        />
+
+        {/* Price marker */}
+        <div
+          className="absolute top-0 -translate-x-1/2"
+          style={{ left: `${pricePct}%` }}
+        >
+          <div className={`mx-auto h-4 w-4 rotate-45 rounded-sm border-2 border-white shadow ${status.dot}`} />
+          <div className="mt-0.5 whitespace-nowrap text-[10px] font-semibold text-navy-900">
+            Price ${price.toFixed(2)}
+          </div>
+        </div>
+      </div>
+
+      {/* Legend row under the bar */}
+      <div className="relative mt-1 h-4 text-[10px] font-medium uppercase tracking-wider">
+        <span
+          className="absolute -translate-x-1/2 opacity-60"
+          style={{ left: `${bearPct}%` }}
+        >
+          Bear
+        </span>
+        <span
+          className="absolute -translate-x-1/2 opacity-80"
+          style={{ left: `${basePct}%` }}
+        >
+          Base
+        </span>
+        <span
+          className="absolute -translate-x-1/2 opacity-60"
+          style={{ left: `${bullPct}%` }}
+        >
+          Bull
+        </span>
+      </div>
+
+      {/* Status line */}
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-current/10 pt-3">
+        <div className={`flex items-center gap-2 text-xs font-medium ${status.color}`}>
+          <span className={`h-2 w-2 rounded-full ${status.dot}`} />
+          {status.label}
+        </div>
+        <div className="text-[11px] font-semibold uppercase tracking-wider opacity-70">
+          IV / Price <span className="tabular-nums">{ivPriceRatio.toFixed(2)}x</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function DcfDetails({
   positionId,
   assumptions,
+  intrinsicBase,
+  intrinsicLow,
+  intrinsicHigh,
 }: {
   positionId: number;
   assumptions: DcfStoredAssumptions;
+  intrinsicBase: number;
+  intrinsicLow: number;
+  intrinsicHigh: number;
 }) {
   const [editing, setEditing] = useState(false);
-  const [growthRate, setGrowthRate] = useState(
-    (assumptions.growth_rate * 100).toFixed(1),
+  const [stageOneGrowth, setStageOneGrowth] = useState(
+    (assumptions.stage_one_growth * 100).toFixed(1),
   );
   const [terminalGrowth, setTerminalGrowth] = useState(
     (assumptions.terminal_growth * 100).toFixed(1),
-  );
-  const [discountRate, setDiscountRate] = useState(
-    (assumptions.discount_rate * 100).toFixed(1),
   );
   const [saving, startSaving] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
   function save() {
     setError(null);
-    const g = Number(growthRate) / 100;
+    const g = Number(stageOneGrowth) / 100;
     const t = Number(terminalGrowth) / 100;
-    const d = Number(discountRate) / 100;
-    if (!Number.isFinite(g) || !Number.isFinite(t) || !Number.isFinite(d)) {
+    if (!Number.isFinite(g) || !Number.isFinite(t)) {
       setError("All values must be numeric");
-      return;
-    }
-    if (d <= t) {
-      setError("Discount rate must be greater than terminal growth");
       return;
     }
     startSaving(async () => {
       try {
         await updateValuationAssumptionsAction({
           positionId,
-          growthRate: g,
+          stageOneGrowth: g,
           terminalGrowth: t,
-          discountRate: d,
         });
         setEditing(false);
       } catch (err) {
@@ -251,48 +415,118 @@ function DcfDetails({
     });
   }
 
+  const terminalSource =
+    assumptions.treasury_source === "yfinance_tnx"
+      ? "5y avg US 10y Treasury yield"
+      : "fallback (Treasury fetch failed)";
+
   return (
-    <div className="space-y-4">
-      <table className="w-full text-sm">
-        <tbody className="divide-y divide-navy-100">
-          <Row label="FCF base (TTM)" value={formatLargeUSD(assumptions.fcf_base)} />
-          <Row
-            label="Growth rate (years 1-10)"
-            value={
-              editing ? (
-                <PctInput value={growthRate} onChange={setGrowthRate} />
-              ) : (
-                `${(assumptions.growth_rate * 100).toFixed(1)}%`
-              )
-            }
-          />
-          <Row
-            label="Terminal growth"
-            value={
-              editing ? (
-                <PctInput value={terminalGrowth} onChange={setTerminalGrowth} />
-              ) : (
-                `${(assumptions.terminal_growth * 100).toFixed(1)}%`
-              )
-            }
-          />
-          <Row
-            label="Discount rate (WACC)"
-            value={
-              editing ? (
-                <PctInput value={discountRate} onChange={setDiscountRate} />
-              ) : (
-                `${(assumptions.discount_rate * 100).toFixed(1)}%`
-              )
-            }
-          />
-          <Row label="Net debt" value={formatLargeUSD(assumptions.net_debt)} />
-          <Row
-            label="Shares outstanding"
-            value={formatShares(assumptions.shares_outstanding)}
-          />
-        </tbody>
-      </table>
+    <div className="space-y-5">
+      <div>
+        <h5 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-navy-500">
+          Owner earnings (base year)
+        </h5>
+        <table className="w-full text-sm">
+          <tbody className="divide-y divide-navy-100">
+            <Row label="Net income" value={formatLargeUSD(assumptions.net_income)} />
+            <Row
+              label="+ Depreciation & amortization"
+              value={formatLargeUSD(assumptions.depreciation_amortization)}
+            />
+            <Row
+              label={`− Maintenance capex proxy (${assumptions.years_of_history || 0}y avg)`}
+              value={formatLargeUSD(assumptions.maintenance_capex_proxy)}
+            />
+            <Row
+              label="= Owner earnings"
+              value={
+                <span className="font-semibold">
+                  {formatLargeUSD(assumptions.owner_earnings_base)}
+                </span>
+              }
+            />
+          </tbody>
+        </table>
+        {assumptions.base_note && (
+          <p className="mt-1 text-[11px] text-amber-700">{assumptions.base_note}</p>
+        )}
+      </div>
+
+      <div>
+        <h5 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-navy-500">
+          Growth assumptions
+        </h5>
+        <table className="w-full text-sm">
+          <tbody className="divide-y divide-navy-100">
+            <Row
+              label="Stage 1 growth (years 1–5)"
+              value={
+                editing ? (
+                  <PctInput value={stageOneGrowth} onChange={setStageOneGrowth} />
+                ) : (
+                  `${(assumptions.stage_one_growth * 100).toFixed(1)}%`
+                )
+              }
+            />
+            <Row
+              label="Terminal growth (year 10+)"
+              value={
+                editing ? (
+                  <PctInput value={terminalGrowth} onChange={setTerminalGrowth} />
+                ) : (
+                  `${(assumptions.terminal_growth * 100).toFixed(1)}%`
+                )
+              }
+              sub={`Anchor: ${terminalSource}`}
+            />
+            <Row
+              label="Stage 2 (years 6–10)"
+              value={<span className="text-navy-500">Geometric fade</span>}
+            />
+          </tbody>
+        </table>
+      </div>
+
+      <div>
+        <h5 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-navy-500">
+          Hurdle rates & intrinsic value range
+        </h5>
+        <table className="w-full text-sm">
+          <tbody className="divide-y divide-navy-100">
+            <Row
+              label={`Bull (${(assumptions.hurdle_rates.high * 100).toFixed(0)}% hurdle)`}
+              value={`$${intrinsicHigh.toFixed(2)}`}
+            />
+            <Row
+              label={`Base (${(assumptions.hurdle_rates.base * 100).toFixed(0)}% hurdle)`}
+              value={
+                <span className="font-semibold">
+                  ${intrinsicBase.toFixed(2)}
+                </span>
+              }
+            />
+            <Row
+              label={`Bear (${(assumptions.hurdle_rates.low * 100).toFixed(0)}% hurdle)`}
+              value={`$${intrinsicLow.toFixed(2)}`}
+            />
+          </tbody>
+        </table>
+      </div>
+
+      <div>
+        <h5 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-navy-500">
+          Other inputs
+        </h5>
+        <table className="w-full text-sm">
+          <tbody className="divide-y divide-navy-100">
+            <Row label="Net debt" value={formatLargeUSD(assumptions.net_debt)} />
+            <Row
+              label="Shares outstanding"
+              value={formatShares(assumptions.shares_outstanding)}
+            />
+          </tbody>
+        </table>
+      </div>
 
       {error && (
         <p className="rounded-lg bg-red-50 p-2 text-xs text-red-700">{error}</p>
@@ -311,9 +545,8 @@ function DcfDetails({
             <button
               onClick={() => {
                 setEditing(false);
-                setGrowthRate((assumptions.growth_rate * 100).toFixed(1));
+                setStageOneGrowth((assumptions.stage_one_growth * 100).toFixed(1));
                 setTerminalGrowth((assumptions.terminal_growth * 100).toFixed(1));
-                setDiscountRate((assumptions.discount_rate * 100).toFixed(1));
               }}
               disabled={saving}
               className="text-xs text-navy-600 hover:text-navy-900"
@@ -326,7 +559,7 @@ function DcfDetails({
             onClick={() => setEditing(true)}
             className="text-xs font-medium text-navy-600 hover:text-navy-900"
           >
-            Edit assumptions
+            Edit growth assumptions
           </button>
         )}
       </div>
@@ -353,10 +586,21 @@ function MultiplesDetails({
   );
 }
 
-function Row({ label, value }: { label: string; value: React.ReactNode }) {
+function Row({
+  label,
+  value,
+  sub,
+}: {
+  label: string;
+  value: React.ReactNode;
+  sub?: string;
+}) {
   return (
     <tr>
-      <td className="py-2 text-navy-500">{label}</td>
+      <td className="py-2 text-navy-500">
+        {label}
+        {sub && <div className="text-[10px] text-navy-400">{sub}</div>}
+      </td>
       <td className="py-2 text-right font-medium text-navy-900">{value}</td>
     </tr>
   );
@@ -413,10 +657,12 @@ function Stat({
   label,
   value,
   valueColor,
+  sub,
 }: {
   label: string;
   value: string;
   valueColor?: string;
+  sub?: string;
 }) {
   return (
     <div className="px-1 sm:first:pl-0 sm:px-5 sm:last:pr-0">
@@ -426,6 +672,9 @@ function Stat({
       <div className={`mt-1 text-2xl font-bold tabular-nums ${valueColor ?? ""}`}>
         {value}
       </div>
+      {sub && (
+        <div className="mt-0.5 text-[11px] font-medium opacity-70">{sub}</div>
+      )}
     </div>
   );
 }

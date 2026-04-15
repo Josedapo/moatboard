@@ -2,7 +2,11 @@
 
 import { auth } from "@/auth";
 import { getPositionById } from "@/lib/positions";
-import { fetchQuoteAndFundamentals } from "@/lib/financial";
+import {
+  fetchQuoteAndFundamentals,
+  fetchMultiYearFundamentals,
+  fetchTenYearTreasuryYieldAverage,
+} from "@/lib/financial";
 import { runAnalysis } from "@/lib/analysis";
 import {
   generateThesis,
@@ -20,13 +24,14 @@ import {
   deleteThesis,
 } from "@/lib/theses";
 import {
-  computeDcfIntrinsicValue,
   classifyMarginOfSafety,
+  computeIntrinsicValueRange,
+  computeOwnerEarningsBase,
+  observedGrowthRate,
+  DEFAULT_HURDLE_RATES,
 } from "@/lib/valuation";
-import {
-  suggestDcfAssumptions,
-  estimateWithMultiples,
-} from "@/lib/valuationAi";
+import { estimateWithMultiples } from "@/lib/valuationAi";
+import { buildDcfReasoning } from "@/lib/positionFlow";
 import {
   getValuationByPositionId,
   saveValuation,
@@ -161,7 +166,11 @@ export async function deleteThesisAction(positionId: number) {
 
 export async function runValuationAction(positionId: number) {
   const position = await assertPositionOwner(positionId);
-  const { quote, fundamentals } = await fetchQuoteAndFundamentals(position.ticker);
+  const [{ quote, fundamentals }, multiYear, treasury] = await Promise.all([
+    fetchQuoteAndFundamentals(position.ticker),
+    fetchMultiYearFundamentals(position.ticker),
+    fetchTenYearTreasuryYieldAverage(),
+  ]);
 
   if (!quote || quote.regularMarketPrice == null) {
     throw new Error(
@@ -170,101 +179,139 @@ export async function runValuationAction(positionId: number) {
   }
 
   const currentPrice = quote.regularMarketPrice;
-  const fcf = fundamentals?.freeCashflow ?? null;
   const sharesOutstanding = quote.sharesOutstanding;
-  const useDcf =
-    fcf !== null && fcf > 0 && sharesOutstanding !== null && sharesOutstanding > 0;
 
-  if (useDcf) {
-    const assumptions = await suggestDcfAssumptions(
+  if (sharesOutstanding === null || sharesOutstanding <= 0) {
+    await saveMultiplesFallback(
+      positionId,
       position.ticker,
       quote,
       fundamentals,
-    );
-    const netDebt =
-      (fundamentals?.totalDebt ?? 0) - (fundamentals?.totalCash ?? 0);
-
-    const breakdown = computeDcfIntrinsicValue({
-      fcfBase: fcf!,
-      growthRate: assumptions.growth_rate,
-      terminalGrowth: assumptions.terminal_growth,
-      discountRate: assumptions.discount_rate,
-      netDebt,
-      sharesOutstanding: sharesOutstanding!,
-    });
-
-    const { mosPct, tier } = classifyMarginOfSafety(
-      breakdown.intrinsicValue,
       currentPrice,
+      "shares outstanding not available",
     );
-
-    const stored: DcfStoredAssumptions = {
-      fcf_base: fcf!,
-      growth_rate: assumptions.growth_rate,
-      terminal_growth: assumptions.terminal_growth,
-      discount_rate: assumptions.discount_rate,
-      net_debt: netDebt,
-      shares_outstanding: sharesOutstanding!,
-    };
-
-    await saveValuation({
-      positionId,
-      method: "dcf",
-      intrinsicValue: breakdown.intrinsicValue,
-      currentPrice,
-      marginOfSafetyPct: mosPct,
-      tier,
-      assumptions: stored,
-      reasoning: assumptions.reasoning,
-    });
-  } else {
-    // Fallback: AI multiples-based estimate
-    const reasonNotApplicable =
-      fcf === null
-        ? "FCF data not available"
-        : fcf <= 0
-          ? "FCF is negative"
-          : "shares outstanding not available";
-
-    const estimate = await estimateWithMultiples(
-      position.ticker,
-      quote,
-      fundamentals,
-    );
-
-    const { mosPct, tier } = classifyMarginOfSafety(
-      estimate.intrinsic_value,
-      currentPrice,
-    );
-
-    await saveValuation({
-      positionId,
-      method: "ai_multiples",
-      intrinsicValue: estimate.intrinsic_value,
-      currentPrice,
-      marginOfSafetyPct: mosPct,
-      tier,
-      assumptions: {
-        basis: estimate.basis,
-        sector_multiple_used: estimate.sector_multiple_used,
-      },
-      reasoning: `${estimate.reasoning} (DCF not applicable: ${reasonNotApplicable}.)`,
-    });
+    revalidatePath(`/dashboard/position/${positionId}`);
+    return;
   }
+
+  const trailingFcf = fundamentals?.freeCashflow ?? null;
+  const ownerEarnings = computeOwnerEarningsBase(multiYear, trailingFcf);
+
+  if (!ownerEarnings || ownerEarnings.value <= 0) {
+    const reason =
+      trailingFcf !== null && trailingFcf <= 0
+        ? "owner earnings / FCF is negative"
+        : "cash-flow base not available";
+    await saveMultiplesFallback(
+      positionId,
+      position.ticker,
+      quote,
+      fundamentals,
+      currentPrice,
+      reason,
+    );
+    revalidatePath(`/dashboard/position/${positionId}`);
+    return;
+  }
+
+  const stageOneGrowth = observedGrowthRate(multiYear);
+  const terminalGrowth = treasury.fiveYearAveragePct;
+  const netDebt =
+    (fundamentals?.totalDebt ?? 0) - (fundamentals?.totalCash ?? 0);
+
+  const range = computeIntrinsicValueRange({
+    ownerEarningsBase: ownerEarnings.value,
+    stageOneGrowth,
+    terminalGrowth,
+    netDebt,
+    sharesOutstanding,
+  });
+
+  const { mosPct, tier } = classifyMarginOfSafety(range.base, currentPrice);
+
+  const stored: DcfStoredAssumptions = {
+    owner_earnings_base: ownerEarnings.value,
+    net_income: ownerEarnings.netIncome,
+    depreciation_amortization: ownerEarnings.depreciationAmortization,
+    maintenance_capex_proxy: ownerEarnings.maintenanceCapexProxy,
+    stage_one_growth: stageOneGrowth,
+    terminal_growth: terminalGrowth,
+    treasury_yield_pct: treasury.fiveYearAveragePct,
+    treasury_source: treasury.source,
+    hurdle_rates: {
+      low: DEFAULT_HURDLE_RATES[2],
+      base: DEFAULT_HURDLE_RATES[1],
+      high: DEFAULT_HURDLE_RATES[0],
+    },
+    net_debt: netDebt,
+    shares_outstanding: sharesOutstanding,
+    years_of_history: ownerEarnings.yearsUsed,
+    base_note: ownerEarnings.note,
+  };
+
+  await saveValuation({
+    positionId,
+    method: "dcf",
+    intrinsicValue: range.base,
+    intrinsicValueLow: range.low,
+    intrinsicValueHigh: range.high,
+    currentPrice,
+    marginOfSafetyPct: mosPct,
+    tier,
+    assumptions: stored,
+    reasoning: buildDcfReasoning(
+      ownerEarnings.yearsUsed,
+      stageOneGrowth,
+      terminalGrowth,
+      treasury.source,
+    ),
+  });
 
   revalidatePath(`/dashboard/position/${positionId}`);
 }
 
+async function saveMultiplesFallback(
+  positionId: number,
+  ticker: string,
+  quote: NonNullable<Awaited<ReturnType<typeof fetchQuoteAndFundamentals>>["quote"]>,
+  fundamentals: Awaited<ReturnType<typeof fetchQuoteAndFundamentals>>["fundamentals"],
+  currentPrice: number,
+  reasonNotApplicable: string,
+) {
+  const estimate = await estimateWithMultiples(ticker, quote, fundamentals);
+  const { mosPct, tier } = classifyMarginOfSafety(
+    estimate.intrinsic_value,
+    currentPrice,
+  );
+
+  await saveValuation({
+    positionId,
+    method: "ai_multiples",
+    intrinsicValue: estimate.intrinsic_value,
+    intrinsicValueLow: estimate.intrinsic_value,
+    intrinsicValueHigh: estimate.intrinsic_value,
+    currentPrice,
+    marginOfSafetyPct: mosPct,
+    tier,
+    assumptions: {
+      basis: estimate.basis,
+      sector_multiple_used: estimate.sector_multiple_used,
+    },
+    reasoning: `${estimate.reasoning} (DCF not applicable: ${reasonNotApplicable}.)`,
+  });
+}
+
+// User can override the derived stage-one growth and terminal growth.
+// Hurdle rates are fixed (10/12/14%) to preserve the philosophical frame:
+// Buffett uses a fixed hurdle, not a CAPM-derived WACC per company.
 export async function updateValuationAssumptionsAction({
   positionId,
-  growthRate,
+  stageOneGrowth,
   terminalGrowth,
-  discountRate,
 }: {
   positionId: number;
-  growthRate: number;
+  stageOneGrowth: number;
   terminalGrowth: number;
-  discountRate: number;
 }) {
   await assertPositionOwner(positionId);
   const valuation = await getValuationByPositionId(positionId);
@@ -273,37 +320,43 @@ export async function updateValuationAssumptionsAction({
   }
   if (valuation.method !== "dcf") {
     throw new Error(
-      "Editing assumptions only applies to DCF valuations. Use 'Regenerate with AI' for multiples-based valuations.",
+      "Editing assumptions only applies to DCF valuations. Use 'Regenerate' for multiples-based valuations.",
     );
+  }
+  if (!Number.isFinite(stageOneGrowth) || !Number.isFinite(terminalGrowth)) {
+    throw new Error("Growth values must be numeric");
+  }
+  if (stageOneGrowth < 0 || stageOneGrowth > 0.3) {
+    throw new Error("Stage-one growth must be between 0% and 30%");
+  }
+  if (terminalGrowth < 0 || terminalGrowth > 0.05) {
+    throw new Error("Terminal growth must be between 0% and 5%");
   }
 
   const stored = valuation.assumptions as DcfStoredAssumptions;
   const newAssumptions: DcfStoredAssumptions = {
     ...stored,
-    growth_rate: growthRate,
+    stage_one_growth: stageOneGrowth,
     terminal_growth: terminalGrowth,
-    discount_rate: discountRate,
   };
 
-  const breakdown = computeDcfIntrinsicValue({
-    fcfBase: stored.fcf_base,
-    growthRate,
+  const range = computeIntrinsicValueRange({
+    ownerEarningsBase: stored.owner_earnings_base,
+    stageOneGrowth,
     terminalGrowth,
-    discountRate,
     netDebt: stored.net_debt,
     sharesOutstanding: stored.shares_outstanding,
   });
 
   const currentPrice = Number(valuation.current_price);
-  const { mosPct, tier } = classifyMarginOfSafety(
-    breakdown.intrinsicValue,
-    currentPrice,
-  );
+  const { mosPct, tier } = classifyMarginOfSafety(range.base, currentPrice);
 
   await saveValuation({
     positionId,
     method: "dcf",
-    intrinsicValue: breakdown.intrinsicValue,
+    intrinsicValue: range.base,
+    intrinsicValueLow: range.low,
+    intrinsicValueHigh: range.high,
     currentPrice,
     marginOfSafetyPct: mosPct,
     tier,

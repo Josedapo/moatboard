@@ -235,3 +235,65 @@ function nullable(value: unknown): number | null {
   if (typeof value !== "number" || !Number.isFinite(value)) return null;
   return value;
 }
+
+// --- US 10-year Treasury yield (^TNX) ---
+// Used as the terminal growth rate in DCF. Philosophy: terminal growth can't
+// exceed the risk-free long-term anchor indefinitely, and the treasury yield
+// reflects current macro reality rather than a hardcoded guess.
+
+export type TreasuryYield = {
+  fiveYearAveragePct: number; // e.g. 0.034 for 3.4%
+  currentPct: number;
+  source: "yfinance_tnx" | "fallback";
+};
+
+const TREASURY_FALLBACK_PCT = 0.025;
+
+export async function fetchTenYearTreasuryYieldAverage(): Promise<TreasuryYield> {
+  try {
+    const today = new Date();
+    const fiveYearsAgo = new Date(today.getFullYear() - 5, today.getMonth(), today.getDate());
+    // ^TNX is quoted in basis points × 10 (e.g. 42.35 = 4.235%).
+    const history = await yf.historical("^TNX", {
+      period1: fiveYearsAgo.toISOString().slice(0, 10),
+      period2: today.toISOString().slice(0, 10),
+      interval: "1mo",
+    });
+
+    if (!Array.isArray(history) || history.length === 0) {
+      return {
+        fiveYearAveragePct: TREASURY_FALLBACK_PCT,
+        currentPct: TREASURY_FALLBACK_PCT,
+        source: "fallback",
+      };
+    }
+
+    const closes = history
+      .map((h) => (typeof h.close === "number" ? h.close : null))
+      .filter((v): v is number => v !== null && Number.isFinite(v));
+
+    if (closes.length === 0) {
+      return {
+        fiveYearAveragePct: TREASURY_FALLBACK_PCT,
+        currentPct: TREASURY_FALLBACK_PCT,
+        source: "fallback",
+      };
+    }
+
+    const avg = closes.reduce((s, v) => s + v, 0) / closes.length;
+    const current = closes[closes.length - 1];
+    // ^TNX is in percent units (e.g. 4.2 = 4.2%). Convert to decimal.
+    return {
+      fiveYearAveragePct: avg / 100,
+      currentPct: current / 100,
+      source: "yfinance_tnx",
+    };
+  } catch (err) {
+    console.error("fetchTenYearTreasuryYieldAverage failed:", err);
+    return {
+      fiveYearAveragePct: TREASURY_FALLBACK_PCT,
+      currentPct: TREASURY_FALLBACK_PCT,
+      source: "fallback",
+    };
+  }
+}

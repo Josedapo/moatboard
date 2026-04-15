@@ -1,12 +1,12 @@
 import Anthropic from "@anthropic-ai/sdk";
 import type { Quote, Fundamentals } from "@/lib/financial";
 
-export type DcfAssumptions = {
-  growth_rate: number;
-  terminal_growth: number;
-  discount_rate: number;
-  reasoning: string;
-};
+// DCF assumptions (growth / terminal / discount) are NOT AI-suggested.
+// The two-stage model in `valuation.ts` derives them deterministically from
+// observed history (stage 1 = capped 5y revenue CAGR), the US 10y Treasury
+// yield (terminal anchor), and three fixed hurdle rates (10/12/14%).
+// The AI is kept only for the multiples fallback path used for businesses
+// where DCF cannot be applied (negative owner earnings, no shares out, etc.).
 
 export type MultiplesEstimate = {
   intrinsic_value: number;
@@ -21,72 +21,6 @@ let _client: Anthropic | null = null;
 function getClient(): Anthropic {
   if (!_client) _client = new Anthropic();
   return _client;
-}
-
-export async function suggestDcfAssumptions(
-  ticker: string,
-  quote: Quote | null,
-  fundamentals: Fundamentals | null,
-): Promise<DcfAssumptions> {
-  const prompt = `You are setting conservative-realistic DCF assumptions for a buy-and-hold investor. Goal: avoid optimistic projections that inflate intrinsic value.
-
-Company: ${quote?.longName ?? ticker} (${ticker})
-Sector: ${quote?.sector ?? "Unknown"}
-Industry: ${quote?.industry ?? "Unknown"}
-Business: ${quote?.longBusinessSummary?.slice(0, 600) ?? "n/a"}
-
-Recent fundamentals:
-- Revenue Growth YoY: ${formatPct(fundamentals?.revenueGrowth)}
-- Earnings Growth YoY: ${formatPct(fundamentals?.earningsGrowth)}
-- Operating Margin: ${formatPct(fundamentals?.operatingMargins)}
-- FCF: ${formatLargeUSD(fundamentals?.freeCashflow)}
-- Debt/Equity: ${formatNum(fundamentals?.debtToEquity)}%
-- Trailing P/E: ${formatNum(fundamentals?.trailingPE)}
-- Forward P/E: ${formatNum(fundamentals?.forwardPE)}
-
-Rules:
-- growth_rate (years 1-10): anchor on observed historical growth tempered by competitive dynamics, sector maturity, and base-rate reality. Cap at 0.20 (20%) even for the fastest growers — long-horizon DCF cannot justify higher.
-- terminal_growth: 0.02-0.03 (2-3%, GDP-like). Default 0.025.
-- discount_rate (WACC): 0.08-0.14 based on risk profile. Higher for cyclicals, leveraged businesses, geographic risk; lower for stable, low-debt, defensive businesses. Default 0.10.
-
-OUTPUT (strict JSON, no preamble):
-
-{
-  "growth_rate": 0.10,
-  "terminal_growth": 0.025,
-  "discount_rate": 0.10,
-  "reasoning": "1-2 sentences explaining the choice of growth, terminal, and discount given this business."
-}`;
-
-  const response = await getClient().messages.create({
-    model: MODEL,
-    max_tokens: 600,
-    messages: [{ role: "user", content: prompt }],
-  });
-
-  const textBlock = response.content.find((b) => b.type === "text");
-  if (!textBlock || textBlock.type !== "text") {
-    throw new Error("No text response from Claude");
-  }
-  const raw = textBlock.text.trim();
-  const m = raw.match(/\{[\s\S]*\}/);
-  if (!m) throw new Error(`Could not find JSON: ${raw.slice(0, 200)}`);
-  const parsed = JSON.parse(m[0]) as DcfAssumptions;
-
-  if (
-    !Number.isFinite(parsed.growth_rate) ||
-    !Number.isFinite(parsed.terminal_growth) ||
-    !Number.isFinite(parsed.discount_rate)
-  ) {
-    throw new Error("DCF assumptions missing or non-numeric");
-  }
-
-  // Sanity bounds — clamp to safe ranges
-  parsed.growth_rate = clamp(parsed.growth_rate, 0.0, 0.25);
-  parsed.terminal_growth = clamp(parsed.terminal_growth, 0.0, 0.04);
-  parsed.discount_rate = clamp(parsed.discount_rate, 0.06, 0.18);
-
-  return parsed;
 }
 
 export async function estimateWithMultiples(
@@ -145,10 +79,6 @@ OUTPUT (strict JSON, no preamble):
   }
 
   return parsed;
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.max(min, Math.min(max, value));
 }
 
 function formatPct(value: number | null | undefined): string {
