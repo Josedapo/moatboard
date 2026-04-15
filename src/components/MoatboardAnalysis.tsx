@@ -5,7 +5,7 @@ import type { MoatboardAnalysis as Analysis } from "@/lib/moatboardAnalyses";
 import type { Fundamentals } from "@/lib/financial";
 import type { Tier, MoatArchetype, MoatStrength } from "@/lib/verdict";
 import { runAnalysisAction } from "@/app/dashboard/position/[id]/actions";
-import { scoreMetric } from "@/lib/scorecard";
+import { scoreMetric, type MultiYearScore } from "@/lib/scorecard";
 import QualityBadge from "@/components/QualityBadge";
 import ScorecardCard from "@/components/ScorecardCard";
 
@@ -104,75 +104,155 @@ export default function MoatboardAnalysis({
       {/* Quality Scorecard (always visible — it's the data behind the verdict) */}
       {fundamentals ? (
         <div>
-          <h3 className="mb-4 text-base font-bold text-navy-900">
+          <h3 className="mb-1 text-base font-bold text-navy-900">
             Quality Scorecard
           </h3>
+          <p className="mb-4 text-xs text-navy-500">
+            Six dimensions drive the verdict. Multi-year metrics use the
+            median across available annual filings and require the worst
+            year to also clear the threshold.
+          </p>
           <div className="space-y-5">
-            <ScorecardGroup title="Profitability">
-              <ScorecardCard
-                label="ROE"
-                hint="Return on Equity"
-                value={formatPct(fundamentals.returnOnEquity)}
-                quality={scoreMetric("returnOnEquity", fundamentals.returnOnEquity)}
-              />
-              <ScorecardCard
-                label="ROA"
-                hint="Return on Assets"
-                value={formatPct(fundamentals.returnOnAssets)}
-                quality={scoreMetric("returnOnAssets", fundamentals.returnOnAssets)}
-              />
-              <ScorecardCard
-                label="Gross Margin"
-                value={formatPct(fundamentals.grossMargins)}
-                quality={scoreMetric("grossMargins", fundamentals.grossMargins)}
-              />
+            <ScorecardGroup title="Business quality — scored">
+              {analysis ? (
+                <>
+                  <ScorecardCard
+                    label="ROIC"
+                    hint={multiYearHint(
+                      analysis.scorecard_summary.multiYear
+                        .returnOnInvestedCapital,
+                    )}
+                    value={formatPct(
+                      analysis.scorecard_summary.multiYear
+                        .returnOnInvestedCapital.median,
+                    )}
+                    quality={
+                      analysis.scorecard_summary.dimensions
+                        .returnOnInvestedCapital
+                    }
+                  />
+                  <ScorecardCard
+                    label="FCF Margin"
+                    hint={multiYearHint(
+                      analysis.scorecard_summary.multiYear.fcfMargin,
+                    )}
+                    value={formatPct(
+                      analysis.scorecard_summary.multiYear.fcfMargin.median,
+                    )}
+                    quality={analysis.scorecard_summary.dimensions.fcfMargin}
+                  />
+                  <ScorecardCard
+                    label="Share Count Trend"
+                    hint={shareCountHint(
+                      analysis.scorecard_summary.multiYear.shareCountTrend,
+                    )}
+                    value={formatCagr(
+                      analysis.scorecard_summary.multiYear.shareCountTrend
+                        .median,
+                    )}
+                    quality={
+                      analysis.scorecard_summary.dimensions.shareCountTrend
+                    }
+                  />
+                </>
+              ) : null}
               <ScorecardCard
                 label="Operating Margin"
+                hint="Trailing"
                 value={formatPct(fundamentals.operatingMargins)}
-                quality={scoreMetric("operatingMargins", fundamentals.operatingMargins)}
-              />
-              <ScorecardCard
-                label="Profit Margin"
-                value={formatPct(fundamentals.profitMargins)}
-                quality={scoreMetric("profitMargins", fundamentals.profitMargins)}
-              />
-            </ScorecardGroup>
-
-            <ScorecardGroup title="Cash & Balance Sheet">
-              <ScorecardCard
-                label="Free Cash Flow"
-                hint="Last 12 months"
-                value={formatLargeUSD(fundamentals.freeCashflow)}
-                quality={scoreMetric("freeCashflow", fundamentals.freeCashflow)}
+                quality={scoreMetric(
+                  "operatingMargins",
+                  fundamentals.operatingMargins,
+                )}
               />
               <ScorecardCard
                 label="Debt / Equity"
-                hint="% of equity"
+                hint="% of equity (trailing)"
                 value={formatNumber(fundamentals.debtToEquity)}
                 quality={scoreMetric("debtToEquity", fundamentals.debtToEquity)}
               />
               <ScorecardCard
-                label="Current Ratio"
-                hint="Short-term liquidity"
-                value={formatNumber(fundamentals.currentRatio)}
-                quality={scoreMetric("currentRatio", fundamentals.currentRatio)}
-              />
-            </ScorecardGroup>
-
-            <ScorecardGroup title="Growth">
-              <ScorecardCard
                 label="Revenue Growth"
                 hint="Year over year"
                 value={formatPct(fundamentals.revenueGrowth)}
-                quality={scoreMetric("revenueGrowth", fundamentals.revenueGrowth)}
-              />
-              <ScorecardCard
-                label="Earnings Growth"
-                hint="Year over year"
-                value={formatPct(fundamentals.earningsGrowth)}
-                quality={scoreMetric("earningsGrowth", fundamentals.earningsGrowth)}
+                quality={scoreMetric(
+                  "revenueGrowth",
+                  fundamentals.revenueGrowth,
+                )}
               />
             </ScorecardGroup>
+
+            <div>
+              <h4 className="mb-2 text-[10px] font-medium uppercase tracking-wider text-navy-400">
+                Additional signals
+              </h4>
+              <div className="grid gap-2 sm:grid-cols-3 lg:grid-cols-4">
+                <ScorecardCard
+                  compact
+                  label="Gross Margin"
+                  hint="Pricing power signal"
+                  value={formatPct(fundamentals.grossMargins)}
+                  quality={scoreMetric(
+                    "grossMargins",
+                    fundamentals.grossMargins,
+                  )}
+                />
+                <ScorecardCard
+                  compact
+                  label="ROE"
+                  hint="Distorted by leverage"
+                  value={formatPct(fundamentals.returnOnEquity)}
+                  quality="neutral"
+                />
+                <ScorecardCard
+                  compact
+                  label="ROA"
+                  hint="Asset productivity"
+                  value={formatPct(fundamentals.returnOnAssets)}
+                  quality={scoreMetric(
+                    "returnOnAssets",
+                    fundamentals.returnOnAssets,
+                  )}
+                />
+                <ScorecardCard
+                  compact
+                  label="Profit Margin"
+                  hint="Trailing"
+                  value={formatPct(fundamentals.profitMargins)}
+                  quality={scoreMetric(
+                    "profitMargins",
+                    fundamentals.profitMargins,
+                  )}
+                />
+                <ScorecardCard
+                  compact
+                  label="FCF (abs)"
+                  hint="Trailing 12m"
+                  value={formatLargeUSD(fundamentals.freeCashflow)}
+                  quality="neutral"
+                />
+                <ScorecardCard
+                  compact
+                  label="Current Ratio"
+                  hint="Short-term liquidity"
+                  value={formatNumber(fundamentals.currentRatio)}
+                  quality={scoreMetric(
+                    "currentRatio",
+                    fundamentals.currentRatio,
+                  )}
+                />
+                <ScorecardCard
+                  compact
+                  label="Earnings Growth"
+                  hint="Year over year"
+                  value={formatPct(fundamentals.earningsGrowth)}
+                  quality={scoreMetric(
+                    "earningsGrowth",
+                    fundamentals.earningsGrowth,
+                  )}
+                />
+              </div>
+            </div>
           </div>
         </div>
       ) : (
@@ -238,4 +318,27 @@ function formatLargeUSD(value: number | null): string {
   if (Math.abs(value) >= 1e6) return `$${(value / 1e6).toFixed(2)}M`;
   if (Math.abs(value) >= 1e3) return `$${(value / 1e3).toFixed(2)}K`;
   return `$${value.toFixed(0)}`;
+}
+
+function formatCagr(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) return "—";
+  const sign = value < 0 ? "−" : "+";
+  return `${sign}${Math.abs(value * 100).toFixed(1)}%/yr`;
+}
+
+function multiYearHint(score: MultiYearScore): string {
+  if (score.note) return score.note;
+  if (score.yearsUsed === 0) return "No annual data available";
+  const medianPart = `${score.yearsUsed}y median`;
+  if (score.worstYear !== null) {
+    const worstPct = (score.worstYear * 100).toFixed(1);
+    return `${medianPart} · worst ${worstPct}%`;
+  }
+  return medianPart;
+}
+
+function shareCountHint(score: MultiYearScore): string {
+  if (score.note) return score.note;
+  if (score.yearsUsed < 2) return "Insufficient history";
+  return `${score.yearsUsed}y CAGR · negative = buybacks`;
 }

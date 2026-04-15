@@ -1,6 +1,11 @@
 import Anthropic from "@anthropic-ai/sdk";
-import type { Quote, Fundamentals } from "@/lib/financial";
+import type {
+  Quote,
+  Fundamentals,
+  MultiYearFundamentals,
+} from "@/lib/financial";
 import type { MoatStrength, MoatArchetype } from "@/lib/verdict";
+import { computeRoicPerYear, computeFcfMarginPerYear } from "@/lib/scorecard";
 
 export type MoatEvaluation = {
   strength: MoatStrength;
@@ -31,6 +36,7 @@ function buildPrompt(
   ticker: string,
   quote: Quote | null,
   fundamentals: Fundamentals | null,
+  multiYear: MultiYearFundamentals | null,
 ): string {
   const companyInfo = quote
     ? `
@@ -43,15 +49,40 @@ Business: ${quote.longBusinessSummary ?? "No description available."}
     : `Ticker: ${ticker} (no market data available).`;
 
   const fd = fundamentals;
+
+  // Multi-year signals matter for a moat: one year of 20% ROIC is a snapshot;
+  // 5 years of sustained high ROIC is evidence the advantage actually holds.
+  const roicSeries = multiYear ? computeRoicPerYear(multiYear.years) : [];
+  const fcfMarginSeries = multiYear ? computeFcfMarginPerYear(multiYear.years) : [];
+
+  const roicLine =
+    roicSeries.length > 0
+      ? `- ROIC by year: ${roicSeries
+          .map(
+            (r) =>
+              `${r.year.slice(0, 4)} ${(r.value * 100).toFixed(1)}%`,
+          )
+          .join(" · ")}`
+      : "- ROIC: not available (insufficient history)";
+
+  const fcfMarginLine =
+    fcfMarginSeries.length > 0
+      ? `- FCF margin by year: ${fcfMarginSeries
+          .map(
+            (r) =>
+              `${r.year.slice(0, 4)} ${(r.value * 100).toFixed(1)}%`,
+          )
+          .join(" · ")}`
+      : "- FCF margin: not available";
+
   const fundamentalsInfo = fd
     ? `
-Quality signals (trailing/most recent):
-- Gross Margin: ${formatPct(fd.grossMargins)}  (sustained high gross margin suggests pricing power / brand)
-- Operating Margin: ${formatPct(fd.operatingMargins)}  (operating leverage)
-- ROE: ${formatPct(fd.returnOnEquity)}  (capital efficiency, proxies ROIC)
-- ROA: ${formatPct(fd.returnOnAssets)}  (asset productivity)
-- Revenue Growth YoY: ${formatPct(fd.revenueGrowth)}
-- Earnings Growth YoY: ${formatPct(fd.earningsGrowth)}
+Quality signals:
+- Gross Margin (trailing): ${formatPct(fd.grossMargins)}  (sustained high gross margin suggests pricing power / brand)
+- Operating Margin (trailing): ${formatPct(fd.operatingMargins)}  (operating leverage)
+${roicLine}  (capital efficiency — the real moat test is sustained high ROIC under competition)
+${fcfMarginLine}  (cash conversion quality)
+- Revenue Growth YoY (trailing): ${formatPct(fd.revenueGrowth)}
 `.trim()
     : "Fundamentals not available.";
 
@@ -88,8 +119,9 @@ export async function assessMoat(
   ticker: string,
   quote: Quote | null,
   fundamentals: Fundamentals | null,
+  multiYear: MultiYearFundamentals | null,
 ): Promise<{ evaluation: MoatEvaluation; model: string }> {
-  const prompt = buildPrompt(ticker, quote, fundamentals);
+  const prompt = buildPrompt(ticker, quote, fundamentals, multiYear);
 
   const response = await getClient().messages.create({
     model: MODEL,

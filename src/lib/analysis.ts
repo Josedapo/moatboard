@@ -7,8 +7,10 @@
 
 import {
   fetchQuoteAndFundamentals,
+  fetchMultiYearFundamentals,
   type Quote,
   type Fundamentals,
+  type MultiYearFundamentals,
 } from "@/lib/financial";
 import { getMoatAssessment, saveMoatAssessment, isMoatStale } from "@/lib/moats";
 import { assessMoat } from "@/lib/moatAi";
@@ -32,10 +34,14 @@ export type AnalysisResult = {
   // Side data also returned so callers can avoid a duplicate yfinance fetch
   quote: Quote | null;
   fundamentals: Fundamentals | null;
+  multiYear: MultiYearFundamentals | null;
 };
 
 export async function runAnalysis(ticker: string): Promise<AnalysisResult> {
-  const { quote, fundamentals } = await fetchQuoteAndFundamentals(ticker);
+  const [{ quote, fundamentals }, multiYear] = await Promise.all([
+    fetchQuoteAndFundamentals(ticker),
+    fetchMultiYearFundamentals(ticker),
+  ]);
 
   if (!fundamentals) {
     throw new Error(
@@ -46,7 +52,12 @@ export async function runAnalysis(ticker: string): Promise<AnalysisResult> {
   // Get or create moat assessment (cached, shared across users)
   let moat = await getMoatAssessment(ticker);
   if (!moat || isMoatStale(moat)) {
-    const { evaluation, model } = await assessMoat(ticker, quote, fundamentals);
+    const { evaluation, model } = await assessMoat(
+      ticker,
+      quote,
+      fundamentals,
+      multiYear,
+    );
     moat = await saveMoatAssessment({
       ticker,
       strength: evaluation.strength,
@@ -56,7 +67,7 @@ export async function runAnalysis(ticker: string): Promise<AnalysisResult> {
     });
   }
 
-  const scorecard = summarizeScorecard(fundamentals);
+  const scorecard = summarizeScorecard(fundamentals, multiYear);
   const tier = computeQualityTier(scorecard, moat.strength, fundamentals);
 
   // Try AI-composed narrative; fall back to deterministic template on failure
@@ -92,5 +103,6 @@ export async function runAnalysis(ticker: string): Promise<AnalysisResult> {
     moat_archetype: moat.archetype,
     quote,
     fundamentals,
+    multiYear,
   };
 }

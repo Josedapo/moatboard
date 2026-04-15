@@ -5,13 +5,37 @@ export default function ScorecardCard({
   value,
   hint,
   quality,
+  compact = false,
 }: {
   label: string;
   value: string;
   hint?: string;
   quality: Quality;
+  compact?: boolean;
 }) {
   const styles = qualityStyles(quality);
+
+  if (compact) {
+    return (
+      <div
+        className={`rounded-md border border-navy-100 border-l-2 bg-navy-50/40 px-3 py-2 ${styles.border}`}
+      >
+        <div className="flex items-baseline justify-between gap-2">
+          <span className="truncate text-[10px] font-medium uppercase tracking-wide text-navy-500">
+            {label}
+          </span>
+          <span className="text-sm font-semibold tabular-nums text-navy-900">
+            {value}
+          </span>
+        </div>
+        {hint && (
+          <div className="mt-0.5 text-[10px] leading-tight text-navy-400">
+            {hint}
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div

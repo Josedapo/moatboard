@@ -47,18 +47,28 @@ function buildPrompt({
 }): string {
   const dims = scorecard.dimensions;
 
+  const roicMed = scorecard.multiYear.returnOnInvestedCapital.median;
+  const roicYears = scorecard.multiYear.returnOnInvestedCapital.yearsUsed;
+  const roicWorst = scorecard.multiYear.returnOnInvestedCapital.worstYear;
+  const fcfMed = scorecard.multiYear.fcfMargin.median;
+  const fcfYears = scorecard.multiYear.fcfMargin.yearsUsed;
+  const shareCagr = scorecard.multiYear.shareCountTrend.median;
+
   const metricsLine = [
-    fundamentals.returnOnEquity !== null
-      ? `ROE ${(fundamentals.returnOnEquity * 100).toFixed(1)}%`
+    roicMed !== null && roicYears >= 3
+      ? `ROIC ${(roicMed * 100).toFixed(1)}% median (${roicYears}y, worst ${((roicWorst ?? 0) * 100).toFixed(1)}%)`
+      : null,
+    fcfMed !== null && fcfYears >= 3
+      ? `FCF margin ${(fcfMed * 100).toFixed(1)}% median (${fcfYears}y)`
       : null,
     fundamentals.operatingMargins !== null
-      ? `Operating margin ${(fundamentals.operatingMargins * 100).toFixed(1)}%`
-      : null,
-    fundamentals.freeCashflow !== null
-      ? `FCF ${formatLargeUSD(fundamentals.freeCashflow)}`
+      ? `Op margin ${(fundamentals.operatingMargins * 100).toFixed(1)}%`
       : null,
     fundamentals.debtToEquity !== null
       ? `D/E ${fundamentals.debtToEquity.toFixed(0)}%`
+      : null,
+    shareCagr !== null
+      ? `Share count ${shareCagr <= 0 ? "−" : "+"}${Math.abs(shareCagr * 100).toFixed(1)}%/yr (5y CAGR)`
       : null,
     fundamentals.revenueGrowth !== null
       ? `Revenue growth ${(fundamentals.revenueGrowth * 100).toFixed(1)}%`
@@ -118,10 +128,4 @@ export async function composeVerdictNarrative(args: {
     throw new Error("Empty narrative");
   }
   return narrative;
-}
-
-function formatLargeUSD(value: number): string {
-  if (Math.abs(value) >= 1e9) return `$${(value / 1e9).toFixed(2)}B`;
-  if (Math.abs(value) >= 1e6) return `$${(value / 1e6).toFixed(2)}M`;
-  return `$${value.toFixed(0)}`;
 }
