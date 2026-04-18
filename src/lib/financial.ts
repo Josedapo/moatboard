@@ -1,4 +1,5 @@
 import YahooFinance from "yahoo-finance2";
+import { fetchMultiYearFundamentalsSec } from "@/lib/sec";
 
 const yf = new YahooFinance({ suppressNotices: ["yahooSurvey"] });
 
@@ -10,6 +11,11 @@ export type Quote = {
   regularMarketPrice: number | null;
   marketCap: number | null;
   sharesOutstanding: number | null;
+  // 52-week range — displayed in the position header as temperature, not as
+  // a valuation input. Kept on the quote because it's price context, not
+  // business fundamentals.
+  fiftyTwoWeekLow: number | null;
+  fiftyTwoWeekHigh: number | null;
   sector: string | null;
   industry: string | null;
   website: string | null;
@@ -39,9 +45,16 @@ export type Fundamentals = {
   trailingPE: number | null;
   forwardPE: number | null;
   priceToBook: number | null;
+  // Per-share denominators behind PE / P-FCF. TTM where yfinance exposes it
+  // directly; FCF per share is derived from freeCashflow / sharesOutstanding.
+  trailingEps: number | null;
+  fcfPerShare: number | null;
   // Dividend
   dividendYield: number | null;
   payoutRatio: number | null;
+  // Beta — used by the Excess Returns Model for banks/insurers (CAPM cost
+  // of equity). yfinance exposes this in `defaultKeyStatistics.beta`.
+  beta: number | null;
 };
 
 export type QuoteAndFundamentals = {
@@ -84,12 +97,32 @@ export async function fetchQuoteAndFundamentals(
           regularMarketPrice: price.regularMarketPrice ?? null,
           marketCap: price.marketCap ?? null,
           sharesOutstanding,
+          fiftyTwoWeekLow: sd?.fiftyTwoWeekLow ?? null,
+          fiftyTwoWeekHigh: sd?.fiftyTwoWeekHigh ?? null,
           sector: profile?.sector ?? null,
           industry: profile?.industry ?? null,
           website: profile?.website ?? null,
           longBusinessSummary: profile?.longBusinessSummary ?? null,
         }
       : null;
+
+    // Trailing EPS: prefer yfinance's own trailingEps from defaultKeyStatistics.
+    // If absent but trailingPE and price are, derive it (EPS = price / PE).
+    const trailingEpsRaw = ks?.trailingEps ?? null;
+    const trailingEps =
+      typeof trailingEpsRaw === "number" && Number.isFinite(trailingEpsRaw)
+        ? trailingEpsRaw
+        : sd?.trailingPE &&
+            price?.regularMarketPrice &&
+            sd.trailingPE > 0
+          ? price.regularMarketPrice / sd.trailingPE
+          : null;
+
+    // FCF per share = trailing FCF / shares outstanding. Both already computed.
+    const fcfPerShare =
+      fd?.freeCashflow != null && sharesOutstanding && sharesOutstanding > 0
+        ? fd.freeCashflow / sharesOutstanding
+        : null;
 
     const fundamentals: Fundamentals = {
       symbol: ticker.toUpperCase(),
@@ -109,13 +142,16 @@ export async function fetchQuoteAndFundamentals(
       trailingPE: sd?.trailingPE ?? null,
       forwardPE: sd?.forwardPE ?? null,
       priceToBook: ks?.priceToBook ?? null,
+      trailingEps,
+      fcfPerShare,
       dividendYield: sd?.dividendYield ?? null,
       payoutRatio: sd?.payoutRatio ?? null,
+      beta: ks?.beta ?? null,
     };
 
     return { quote, fundamentals };
   } catch (err) {
-    console.error(`fetchQuoteAndFundamentals failed for ${ticker}:`, err);
+    console.warn(`fetchQuoteAndFundamentals failed for ${ticker}:`, err);
     return { quote: null, fundamentals: null };
   }
 }
@@ -136,6 +172,8 @@ export async function validateTicker(ticker: string): Promise<boolean> {
 export type AnnualFundamentalRow = {
   fiscalYearEnd: string; // ISO date of period end
   revenue: number | null;
+  grossProfit: number | null; // Revenue − COGS; direct if yfinance exposes it, else derived
+  operatingIncome: number | null; // kept separate from EBIT for multi-year op-margin scoring
   ebit: number | null;
   taxRate: number | null;
   netIncome: number | null;
@@ -144,6 +182,7 @@ export type AnnualFundamentalRow = {
   operatingCashFlow: number | null;
   freeCashFlow: number | null;
   investedCapital: number | null;
+  totalAssets: number | null; // ROA denominator for banks/insurers
   totalDebt: number | null;
   cash: number | null;
   stockholdersEquity: number | null;
@@ -158,7 +197,22 @@ export type MultiYearFundamentals = {
   yearsAvailable: number; // years.filter(r => r has usable data).length
 };
 
+// SEC-first, yfinance fallback. SEC XBRL gives 10–18 years of annual
+// history vs yfinance's 4–5; yfinance is retained only for tickers where
+// SEC has no CIK, the fetch fails, or the parser finds < 3 usable years
+// (see plan §3.3 fallback triggers).
 export async function fetchMultiYearFundamentals(
+  ticker: string,
+): Promise<MultiYearFundamentals | null> {
+  const fromSec = await fetchMultiYearFundamentalsSec(ticker).catch((err) => {
+    console.warn(`SEC multi-year fetch failed for ${ticker}:`, err);
+    return null;
+  });
+  if (fromSec && fromSec.yearsAvailable >= 3) return fromSec;
+  return fetchMultiYearFundamentalsYfinance(ticker);
+}
+
+export async function fetchMultiYearFundamentalsYfinance(
   ticker: string,
 ): Promise<MultiYearFundamentals | null> {
   try {
@@ -181,12 +235,20 @@ export async function fetchMultiYearFundamentals(
       Record<string, unknown> & { date?: Date | string }
     >;
 
-    const mapped: AnnualFundamentalRow[] = rows.map((r) => ({
+    const mapped: AnnualFundamentalRow[] = rows.map((r) => {
+      const revenue = nullable(r["totalRevenue"]);
+      const cogs = nullable(r["costOfRevenue"]);
+      const directGrossProfit = nullable(r["grossProfit"]);
+      const derivedGrossProfit =
+        revenue !== null && cogs !== null ? revenue - cogs : null;
+      return {
       fiscalYearEnd:
         r.date instanceof Date
           ? r.date.toISOString().slice(0, 10)
           : String(r.date ?? ""),
-      revenue: nullable(r["totalRevenue"]),
+      revenue,
+      grossProfit: directGrossProfit ?? derivedGrossProfit,
+      operatingIncome: nullable(r["operatingIncome"] ?? r["EBIT"]),
       ebit: nullable(r["EBIT"] ?? r["operatingIncome"]),
       taxRate: nullable(r["taxRateForCalcs"]),
       netIncome: nullable(r["netIncome"]),
@@ -197,6 +259,7 @@ export async function fetchMultiYearFundamentals(
       operatingCashFlow: nullable(r["operatingCashFlow"]),
       freeCashFlow: nullable(r["freeCashFlow"]),
       investedCapital: nullable(r["investedCapital"]),
+      totalAssets: nullable(r["totalAssets"]),
       totalDebt: nullable(r["totalDebt"]),
       cash: nullable(r["cashAndCashEquivalents"]),
       stockholdersEquity: nullable(
@@ -205,7 +268,8 @@ export async function fetchMultiYearFundamentals(
       sharesDiluted: nullable(r["dilutedAverageShares"]),
       repurchaseOfCapitalStock: nullable(r["repurchaseOfCapitalStock"]),
       cashDividendsPaid: nullable(r["cashDividendsPaid"]),
-    }));
+    };
+    });
 
     // Sort ascending by fiscalYearEnd
     mapped.sort((a, b) => a.fiscalYearEnd.localeCompare(b.fiscalYearEnd));
@@ -226,7 +290,7 @@ export async function fetchMultiYearFundamentals(
       yearsAvailable,
     };
   } catch (err) {
-    console.error(`fetchMultiYearFundamentals failed for ${ticker}:`, err);
+    console.warn(`fetchMultiYearFundamentals failed for ${ticker}:`, err);
     return null;
   }
 }
@@ -314,7 +378,208 @@ export async function fetchManagementSignals(
       employees: nullable(profile["fullTimeEmployees"]),
     };
   } catch (err) {
-    console.error(`fetchManagementSignals failed for ${ticker}:`, err);
+    console.warn(`fetchManagementSignals failed for ${ticker}:`, err);
+    return null;
+  }
+}
+
+// --- Relative valuation history ---
+// Drift M (improvement #6): compute the business's *own* historical valuation
+// distribution and compare today's multiple against it. This complements the
+// DCF's absolute-floor view with the relative-to-self view Buffett/Munger use
+// implicitly when judging compounders.
+//
+// Data pipeline:
+//   1. Monthly close prices for up to 7 years (yfinance historical, interval=1mo).
+//      → ~85 monthly price points.
+//   2. Annual fundamentals (from the already-fetched multi-year series).
+//      yfinance reliably returns 4-5 fiscal years of {netIncome, FCF, shares}.
+//      (Quarterly data from `fundamentalsTimeSeries` proved unusable for this
+//      — it returns only ~6 sparse rows with many null fields.)
+//   3. For each monthly price, use the most recently reported fiscal-year
+//      values as the denominator → PE = price / EPS_FY, FCF yield = FCF_FY / price.
+//
+// The denominator is therefore stepped (changes at each fiscal year-end), but
+// the price numerator moves every month — so the monthly PE series captures
+// real month-to-month variation in how the market values this specific
+// business. 85 points × 4-5 distinct denominators is sufficient for
+// median/quartile statistics of the price-to-fundamentals ratio.
+
+export type RelativeValuationPoint = {
+  date: string; // YYYY-MM-DD
+  price: number;
+  epsFy: number | null; // EPS of the most recent fiscal year ≤ date
+  fcfPerShareFy: number | null;
+  bookValuePerShareFy: number | null;
+  peRatio: number | null;
+  fcfYield: number | null; // FCF per share / price
+  pbRatio: number | null; // price / book value per share (FY)
+};
+
+export type RelativeValuationHistory = {
+  symbol: string;
+  points: RelativeValuationPoint[];
+  yearsOfData: number; // actual span in years from oldest usable point to newest
+  reason?: string; // populated when we cannot build a useful history
+};
+
+export async function fetchRelativeValuationHistory(
+  ticker: string,
+): Promise<RelativeValuationHistory | null> {
+  try {
+    const today = new Date();
+    const sevenYearsAgo = new Date(
+      today.getFullYear() - 7,
+      today.getMonth(),
+      1,
+    );
+
+    // Annual fundamentals: SEC first (10-18y), yfinance fallback (4-5y).
+    // Monthly price history always via yfinance — SEC has no price feed.
+    const [priceHistory, multiYear] = await Promise.all([
+      yf.historical(ticker, {
+        period1: sevenYearsAgo.toISOString().slice(0, 10),
+        period2: today.toISOString().slice(0, 10),
+        interval: "1mo",
+      }),
+      fetchMultiYearFundamentals(ticker),
+    ]);
+
+    if (!Array.isArray(priceHistory) || priceHistory.length === 0) {
+      return {
+        symbol: ticker.toUpperCase(),
+        points: [],
+        yearsOfData: 0,
+        reason: "No price history available",
+      };
+    }
+    if (!multiYear || multiYear.years.length === 0) {
+      return {
+        symbol: ticker.toUpperCase(),
+        points: [],
+        yearsOfData: 0,
+        reason: "No annual fundamentals available",
+      };
+    }
+
+    // Normalize annual rows into the shape the price-alignment loop needs.
+    const annual = multiYear.years
+      .map((r) => ({
+        date: r.fiscalYearEnd ? new Date(r.fiscalYearEnd) : null,
+        netIncome: r.netIncome,
+        freeCashFlow: r.freeCashFlow,
+        dilutedShares: r.sharesDiluted,
+        stockholdersEquity: r.stockholdersEquity,
+      }))
+      .filter(
+        (r): r is {
+          date: Date;
+          netIncome: number | null;
+          freeCashFlow: number | null;
+          dilutedShares: number | null;
+          stockholdersEquity: number | null;
+        } => r.date !== null && !isNaN(r.date.getTime()),
+      )
+      .sort((a, b) => a.date.getTime() - b.date.getTime());
+
+    // Precompute EPS, FCF-per-share and book-value-per-share for each fiscal
+    // year that has data.
+    type FyPoint = {
+      date: Date;
+      eps: number | null;
+      fcfPerShare: number | null;
+      bookValuePerShare: number | null;
+    };
+    const fyPoints: FyPoint[] = annual.map((r) => ({
+      date: r.date,
+      eps:
+        r.netIncome !== null && r.dilutedShares !== null && r.dilutedShares > 0
+          ? r.netIncome / r.dilutedShares
+          : null,
+      fcfPerShare:
+        r.freeCashFlow !== null && r.dilutedShares !== null && r.dilutedShares > 0
+          ? r.freeCashFlow / r.dilutedShares
+          : null,
+      // Book value per share. Nullable when equity is ≤ 0 (aggressive buybacks
+      // can push equity negative — AAPL, MCD at times), because a P/B with
+      // negative denominator is meaningless. Those months will simply not
+      // contribute to the distribution.
+      bookValuePerShare:
+        r.stockholdersEquity !== null &&
+        r.stockholdersEquity > 0 &&
+        r.dilutedShares !== null &&
+        r.dilutedShares > 0
+          ? r.stockholdersEquity / r.dilutedShares
+          : null,
+    }));
+
+    // For each monthly price, walk to the latest fiscal year whose end is
+    // ≤ price date. That year's fundamentals are the "most recently reported"
+    // values the market had when the price was observed.
+    const points: RelativeValuationPoint[] = [];
+    for (const p of priceHistory) {
+      if (
+        !(p.date instanceof Date) ||
+        typeof p.close !== "number" ||
+        !Number.isFinite(p.close) ||
+        p.close <= 0
+      ) {
+        continue;
+      }
+      const priceDate = p.date;
+      let fy: FyPoint | null = null;
+      for (const fp of fyPoints) {
+        if (fp.date.getTime() <= priceDate.getTime()) fy = fp;
+        else break;
+      }
+      if (!fy) continue;
+
+      const peRatio =
+        fy.eps !== null && fy.eps > 0 ? p.close / fy.eps : null;
+      const fcfYield =
+        fy.fcfPerShare !== null && fy.fcfPerShare > 0
+          ? fy.fcfPerShare / p.close
+          : null;
+      const pbRatio =
+        fy.bookValuePerShare !== null && fy.bookValuePerShare > 0
+          ? p.close / fy.bookValuePerShare
+          : null;
+
+      points.push({
+        date: priceDate.toISOString().slice(0, 10),
+        price: p.close,
+        epsFy: fy.eps,
+        fcfPerShareFy: fy.fcfPerShare,
+        bookValuePerShareFy: fy.bookValuePerShare,
+        peRatio,
+        fcfYield,
+        pbRatio,
+      });
+    }
+
+    if (points.length === 0) {
+      return {
+        symbol: ticker.toUpperCase(),
+        points: [],
+        yearsOfData: 0,
+        reason: "Could not align price history with annual reports",
+      };
+    }
+
+    const first = new Date(points[0].date).getTime();
+    const last = new Date(points[points.length - 1].date).getTime();
+    const yearsOfData = (last - first) / (365.25 * 24 * 3600 * 1000);
+
+    return {
+      symbol: ticker.toUpperCase(),
+      points,
+      yearsOfData,
+    };
+  } catch (err) {
+    console.error(
+      `fetchRelativeValuationHistory failed for ${ticker}:`,
+      err,
+    );
     return null;
   }
 }
@@ -378,5 +643,50 @@ export async function fetchTenYearTreasuryYieldAverage(): Promise<TreasuryYield>
       currentPct: TREASURY_FALLBACK_PCT,
       source: "fallback",
     };
+  }
+}
+
+// Fetch the monthly closing price nearest a target date. Used to anchor the
+// Buffett one-dollar retention test to a market cap 5 years ago.
+export async function fetchHistoricalPriceNear(
+  ticker: string,
+  targetDate: Date,
+): Promise<number | null> {
+  try {
+    const windowStart = new Date(
+      targetDate.getFullYear(),
+      targetDate.getMonth() - 2,
+      1,
+    );
+    const windowEnd = new Date(
+      targetDate.getFullYear(),
+      targetDate.getMonth() + 2,
+      28,
+    );
+    const history = await yf.historical(ticker, {
+      period1: windowStart.toISOString().slice(0, 10),
+      period2: windowEnd.toISOString().slice(0, 10),
+      interval: "1mo",
+    });
+    if (!Array.isArray(history) || history.length === 0) return null;
+    // Find the entry with the smallest |date − targetDate|.
+    const targetMs = targetDate.getTime();
+    let best: { close: number; diff: number } | null = null;
+    for (const h of history) {
+      const d = h.date instanceof Date ? h.date : new Date(h.date);
+      const close = typeof h.close === "number" ? h.close : null;
+      if (close === null || !Number.isFinite(close)) continue;
+      const diff = Math.abs(d.getTime() - targetMs);
+      if (!best || diff < best.diff) best = { close, diff };
+    }
+    return best?.close ?? null;
+  } catch (err) {
+    // Graceful degradation: the caller (retention multiple, among others)
+    // treats null as "market cap history unavailable" and produces a
+    // neutral signal rather than breaking the page. Warn rather than
+    // error so Next.js's dev overlay doesn't treat a handled fallback
+    // as a red-flag crash.
+    console.warn(`fetchHistoricalPriceNear failed for ${ticker}:`, err);
+    return null;
   }
 }

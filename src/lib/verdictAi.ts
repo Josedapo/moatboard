@@ -52,28 +52,50 @@ function buildPrompt({
   const roicMed = scorecard.multiYear.returnOnInvestedCapital.median;
   const roicYears = scorecard.multiYear.returnOnInvestedCapital.yearsUsed;
   const roicWorst = scorecard.multiYear.returnOnInvestedCapital.worstYear;
+  const gmMed = scorecard.multiYear.grossMargin.median;
+  const gmYears = scorecard.multiYear.grossMargin.yearsUsed;
   const fcfMed = scorecard.multiYear.fcfMargin.median;
   const fcfYears = scorecard.multiYear.fcfMargin.yearsUsed;
+  const opMed = scorecard.multiYear.operatingMargin.median;
+  const opYears = scorecard.multiYear.operatingMargin.yearsUsed;
+  const revCagr = scorecard.multiYear.revenueGrowth.median;
+  const revYears = scorecard.multiYear.revenueGrowth.yearsUsed;
   const shareCagr = scorecard.multiYear.shareCountTrend.median;
+  const fcfConvMed = scorecard.fcfConversion?.median ?? null;
+  const retention = scorecard.retentionMultiple?.ratio ?? null;
+  const retentionYears = scorecard.retentionMultiple?.yearsUsed ?? 0;
 
   const metricsLine = [
     roicMed !== null && roicYears >= 3
       ? `ROIC ${(roicMed * 100).toFixed(1)}% median (${roicYears}y, worst ${((roicWorst ?? 0) * 100).toFixed(1)}%)`
       : null,
+    gmMed !== null && gmYears >= 3
+      ? `Gross margin ${(gmMed * 100).toFixed(1)}% median (${gmYears}y)`
+      : null,
     fcfMed !== null && fcfYears >= 3
       ? `FCF margin ${(fcfMed * 100).toFixed(1)}% median (${fcfYears}y)`
       : null,
-    fundamentals.operatingMargins !== null
-      ? `Op margin ${(fundamentals.operatingMargins * 100).toFixed(1)}%`
-      : null,
+    opMed !== null && opYears >= 3
+      ? `Op margin ${(opMed * 100).toFixed(1)}% median (${opYears}y)`
+      : fundamentals.operatingMargins !== null
+        ? `Op margin ${(fundamentals.operatingMargins * 100).toFixed(1)}%`
+        : null,
     fundamentals.debtToEquity !== null
       ? `D/E ${fundamentals.debtToEquity.toFixed(0)}%`
       : null,
     shareCagr !== null
       ? `Share count ${shareCagr <= 0 ? "−" : "+"}${Math.abs(shareCagr * 100).toFixed(1)}%/yr (5y CAGR)`
       : null,
-    fundamentals.revenueGrowth !== null
-      ? `Revenue growth ${(fundamentals.revenueGrowth * 100).toFixed(1)}%`
+    revCagr !== null && revYears >= 3
+      ? `Revenue ${revCagr >= 0 ? "+" : "−"}${Math.abs(revCagr * 100).toFixed(1)}%/yr (${revYears}y CAGR)`
+      : fundamentals.revenueGrowth !== null
+        ? `Revenue growth ${(fundamentals.revenueGrowth * 100).toFixed(1)}%`
+        : null,
+    fcfConvMed !== null
+      ? `FCF conversion ${(fcfConvMed * 100).toFixed(0)}% (FCF/NI median)`
+      : null,
+    retention !== null
+      ? `Retention multiple ${retention.toFixed(2)}x (${retentionYears}y · value created per $1 retained; Buffett one-dollar test)`
       : null,
   ]
     .filter(Boolean)

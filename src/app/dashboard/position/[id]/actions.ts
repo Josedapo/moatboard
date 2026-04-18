@@ -4,8 +4,6 @@ import { auth } from "@/auth";
 import { getPositionById } from "@/lib/positions";
 import {
   fetchQuoteAndFundamentals,
-  fetchMultiYearFundamentals,
-  fetchTenYearTreasuryYieldAverage,
   fetchManagementSignals,
 } from "@/lib/financial";
 import { assessTooHard } from "@/lib/tooHard";
@@ -28,12 +26,11 @@ import {
 import {
   classifyMarginOfSafety,
   computeIntrinsicValueRange,
-  computeOwnerEarningsBase,
-  observedGrowthRate,
-  DEFAULT_HURDLE_RATES,
 } from "@/lib/valuation";
-import { estimateWithMultiples } from "@/lib/valuationAi";
-import { buildDcfReasoning } from "@/lib/positionFlow";
+import {
+  computeAndSaveValuation,
+  deriveCompoundTier,
+} from "@/lib/positionFlow";
 import {
   getValuationByPositionId,
   saveValuation,
@@ -111,6 +108,8 @@ export async function generateAiThesisAction(positionId: number) {
 
   const shareCountCagr =
     analysis.scorecard_summary.multiYear?.shareCountTrend?.median ?? null;
+  const retentionMultiple =
+    analysis.scorecard_summary.retentionMultiple ?? null;
 
   const content = await generateThesis(
     position.ticker,
@@ -119,6 +118,7 @@ export async function generateAiThesisAction(positionId: number) {
     management,
     tooHard,
     shareCountCagr,
+    retentionMultiple,
     analysis.tier,
     analysis.verdict_reason,
   );
@@ -184,11 +184,9 @@ export async function deleteThesisAction(positionId: number) {
 
 export async function runValuationAction(positionId: number) {
   const position = await assertPositionOwner(positionId);
-  const [{ quote, fundamentals }, multiYear, treasury] = await Promise.all([
-    fetchQuoteAndFundamentals(position.ticker),
-    fetchMultiYearFundamentals(position.ticker),
-    fetchTenYearTreasuryYieldAverage(),
-  ]);
+  const { quote, fundamentals } = await fetchQuoteAndFundamentals(
+    position.ticker,
+  );
 
   if (!quote || quote.regularMarketPrice == null) {
     throw new Error(
@@ -196,127 +194,16 @@ export async function runValuationAction(positionId: number) {
     );
   }
 
-  const currentPrice = quote.regularMarketPrice;
-  const sharesOutstanding = quote.sharesOutstanding;
-
-  if (sharesOutstanding === null || sharesOutstanding <= 0) {
-    await saveMultiplesFallback(
-      positionId,
-      position.ticker,
-      quote,
-      fundamentals,
-      currentPrice,
-      "shares outstanding not available",
-    );
-    revalidatePath(`/dashboard/position/${positionId}`);
-    return;
-  }
-
-  const trailingFcf = fundamentals?.freeCashflow ?? null;
-  const ownerEarnings = computeOwnerEarningsBase(multiYear, trailingFcf);
-
-  if (!ownerEarnings || ownerEarnings.value <= 0) {
-    const reason =
-      trailingFcf !== null && trailingFcf <= 0
-        ? "owner earnings / FCF is negative"
-        : "cash-flow base not available";
-    await saveMultiplesFallback(
-      positionId,
-      position.ticker,
-      quote,
-      fundamentals,
-      currentPrice,
-      reason,
-    );
-    revalidatePath(`/dashboard/position/${positionId}`);
-    return;
-  }
-
-  const stageOneGrowth = observedGrowthRate(multiYear);
-  const terminalGrowth = treasury.fiveYearAveragePct;
-  const netDebt =
-    (fundamentals?.totalDebt ?? 0) - (fundamentals?.totalCash ?? 0);
-
-  const range = computeIntrinsicValueRange({
-    ownerEarningsBase: ownerEarnings.value,
-    stageOneGrowth,
-    terminalGrowth,
-    netDebt,
-    sharesOutstanding,
-  });
-
-  const { mosPct, tier } = classifyMarginOfSafety(range.base, currentPrice);
-
-  const stored: DcfStoredAssumptions = {
-    owner_earnings_base: ownerEarnings.value,
-    net_income: ownerEarnings.netIncome,
-    depreciation_amortization: ownerEarnings.depreciationAmortization,
-    maintenance_capex_proxy: ownerEarnings.maintenanceCapexProxy,
-    stage_one_growth: stageOneGrowth,
-    terminal_growth: terminalGrowth,
-    treasury_yield_pct: treasury.fiveYearAveragePct,
-    treasury_source: treasury.source,
-    hurdle_rates: {
-      low: DEFAULT_HURDLE_RATES[2],
-      base: DEFAULT_HURDLE_RATES[1],
-      high: DEFAULT_HURDLE_RATES[0],
-    },
-    net_debt: netDebt,
-    shares_outstanding: sharesOutstanding,
-    years_of_history: ownerEarnings.yearsUsed,
-    base_note: ownerEarnings.note,
-  };
-
-  await saveValuation({
+  // Single source of truth: sector-aware dispatch lives in positionFlow.
+  // Banks → Excess Returns, REITs → AFFO, rest → Owner Earnings DCF.
+  await computeAndSaveValuation(
     positionId,
-    method: "dcf",
-    intrinsicValue: range.base,
-    intrinsicValueLow: range.low,
-    intrinsicValueHigh: range.high,
-    currentPrice,
-    marginOfSafetyPct: mosPct,
-    tier,
-    assumptions: stored,
-    reasoning: buildDcfReasoning(
-      ownerEarnings.yearsUsed,
-      stageOneGrowth,
-      terminalGrowth,
-      treasury.source,
-    ),
-  });
-
-  revalidatePath(`/dashboard/position/${positionId}`);
-}
-
-async function saveMultiplesFallback(
-  positionId: number,
-  ticker: string,
-  quote: NonNullable<Awaited<ReturnType<typeof fetchQuoteAndFundamentals>>["quote"]>,
-  fundamentals: Awaited<ReturnType<typeof fetchQuoteAndFundamentals>>["fundamentals"],
-  currentPrice: number,
-  reasonNotApplicable: string,
-) {
-  const estimate = await estimateWithMultiples(ticker, quote, fundamentals);
-  const { mosPct, tier } = classifyMarginOfSafety(
-    estimate.intrinsic_value,
-    currentPrice,
+    position.ticker,
+    quote,
+    fundamentals,
   );
 
-  await saveValuation({
-    positionId,
-    method: "ai_multiples",
-    intrinsicValue: estimate.intrinsic_value,
-    intrinsicValueLow: estimate.intrinsic_value,
-    intrinsicValueHigh: estimate.intrinsic_value,
-    currentPrice,
-    marginOfSafetyPct: mosPct,
-    tier,
-    assumptions: {
-      basis: estimate.basis,
-      sector_multiple_used: estimate.sector_multiple_used,
-    },
-    reasoning: `${estimate.reasoning} (DCF not applicable: ${reasonNotApplicable}.)`,
-  });
+  revalidatePath(`/dashboard/position/${positionId}`);
 }
 
 // User can override the derived stage-one growth and terminal growth.
@@ -336,9 +223,9 @@ export async function updateValuationAssumptionsAction({
   if (!valuation) {
     throw new Error("No valuation found for this position. Run valuation first.");
   }
-  if (valuation.method !== "dcf") {
+  if (valuation.method !== "dcf" && valuation.method !== "affo_dcf") {
     throw new Error(
-      "Editing assumptions only applies to DCF valuations. Use 'Regenerate' for multiples-based valuations.",
+      "Editing growth only applies to DCF-based valuations (owner earnings / AFFO). Use 'Regenerate' for Excess Returns or AI multiples.",
     );
   }
   if (!Number.isFinite(stageOneGrowth) || !Number.isFinite(terminalGrowth)) {
@@ -352,11 +239,6 @@ export async function updateValuationAssumptionsAction({
   }
 
   const stored = valuation.assumptions as DcfStoredAssumptions;
-  const newAssumptions: DcfStoredAssumptions = {
-    ...stored,
-    stage_one_growth: stageOneGrowth,
-    terminal_growth: terminalGrowth,
-  };
 
   const range = computeIntrinsicValueRange({
     ownerEarningsBase: stored.owner_earnings_base,
@@ -366,18 +248,75 @@ export async function updateValuationAssumptionsAction({
     sharesOutstanding: stored.shares_outstanding,
   });
 
+  const baseBreakdown = range.breakdowns.base;
+  const baseEv = baseBreakdown.enterpriseValue;
+  const pvBreakdown =
+    baseEv > 0
+      ? {
+          stage_one_pct: baseBreakdown.pvOfStageOne / baseEv,
+          stage_two_pct: baseBreakdown.pvOfStageTwo / baseEv,
+          terminal_pct: baseBreakdown.pvOfTerminal / baseEv,
+        }
+      : undefined;
+
+  const newAssumptions: DcfStoredAssumptions = {
+    ...stored,
+    stage_one_growth: stageOneGrowth,
+    terminal_growth: terminalGrowth,
+    pv_breakdown: pvBreakdown,
+  };
+
   const currentPrice = Number(valuation.current_price);
-  const { mosPct, tier } = classifyMarginOfSafety(range.base, currentPrice);
+  const { mosPct, tier: dcfTier } = classifyMarginOfSafety(
+    range.base,
+    currentPrice,
+  );
+  // Reuse the persisted relative snapshot — editing DCF assumptions doesn't
+  // change the business's own multiple history. We only recompute the
+  // compound tier because the DCF tier may have shifted.
+  const relativeTier = valuation.relative_tier;
+  const { compoundTier } = deriveCompoundTier(
+    dcfTier,
+    relativeTier !== null
+      ? {
+          relativeTier,
+          snapshot: stored.relative_valuation ?? {
+            years_of_data: 0,
+            points_count: 0,
+            pe: {
+              current: null,
+              median: null,
+              q1: null,
+              q3: null,
+              min: null,
+              max: null,
+              current_percentile: null,
+            },
+            fcf_yield: {
+              current: null,
+              median: null,
+              q1: null,
+              q3: null,
+              min: null,
+              max: null,
+              current_percentile: null,
+            },
+          },
+        }
+      : null,
+  );
 
   await saveValuation({
     positionId,
-    method: "dcf",
+    method: valuation.method, // preserve dcf vs affo_dcf
     intrinsicValue: range.base,
     intrinsicValueLow: range.low,
     intrinsicValueHigh: range.high,
     currentPrice,
     marginOfSafetyPct: mosPct,
-    tier,
+    tier: compoundTier,
+    dcfTier,
+    relativeTier,
     assumptions: newAssumptions,
     reasoning: valuation.reasoning + " (Assumptions edited by user.)",
   });

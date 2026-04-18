@@ -6,6 +6,7 @@ import type {
 } from "@/lib/financial";
 import type { Tier } from "@/lib/verdict";
 import type { TooHardAssessment } from "@/lib/tooHard";
+import type { RetentionMultiple } from "@/lib/scorecard";
 
 export type ThesisField = {
   highlight: string;
@@ -56,6 +57,7 @@ function buildPrompt(
   management: ManagementSignals | null,
   tooHard: TooHardAssessment | null,
   shareCountCagr: number | null,
+  retentionMultiple: RetentionMultiple | null,
   tier: Tier,
   verdictReason: string,
 ): string {
@@ -93,6 +95,12 @@ Current fundamentals (trailing/most recent):
     shareCountCagr !== null
       ? `- Share count 5y CAGR: ${shareCountCagr <= 0 ? "−" : "+"}${Math.abs(shareCountCagr * 100).toFixed(1)}%/yr (${shareCountCagr <= 0 ? "buybacks — shrinking" : "dilution — growing"})`
       : "- Share count 5y CAGR: n/a";
+  const retentionLine =
+    retentionMultiple?.ratio !== null && retentionMultiple?.ratio !== undefined
+      ? `- Retention multiple (${retentionMultiple.yearsUsed}y, Buffett one-dollar test): ${retentionMultiple.ratio.toFixed(2)}x — each dollar retained translated into ${retentionMultiple.ratio >= 0 ? `$${retentionMultiple.ratio.toFixed(2)}` : `−$${Math.abs(retentionMultiple.ratio).toFixed(2)}`} of market-cap change. ${retentionMultiple.ratio >= 1.0 ? "Capital allocation has been accretive." : retentionMultiple.ratio >= 0 ? "Capital retained has NOT translated 1-for-1 into market value — allocation has been sub-par." : "Capital allocation has actively destroyed market value."}`
+      : retentionMultiple?.note
+        ? `- Retention multiple (Buffett one-dollar test): n/a — ${retentionMultiple.note}`
+        : "- Retention multiple (Buffett one-dollar test): n/a";
   const managementInfo = mgmt
     ? `
 Management signals:
@@ -103,9 +111,11 @@ Management signals:
 - Insider buy / sell count (6m): ${mgmt.insiderBuyCount6m ?? "n/a"} buys · ${mgmt.insiderSellCount6m ?? "n/a"} sells
 - Employees: ${mgmt.employees !== null ? mgmt.employees.toLocaleString() : "n/a"}
 ${shareCountLine}
+${retentionLine}
 `.trim()
     : `Management signals not available.
-${shareCountLine}`;
+${shareCountLine}
+${retentionLine}`;
 
   const tooHardBanner = tooHard?.isHard
     ? `\n⚠ MUNGER'S "TOO HARD PILE" FLAG
@@ -148,7 +158,7 @@ Write the thesis as JSON with exactly these fields. Each field has TWO parts: a 
   },
   "management": {
     "highlight": "One-line take on management quality and capital-allocation record.",
-    "body": "2-3 sentences citing the management signals (CEO identity/tenure/comp, insider ownership, 6m insider transactions, 5y share-count trend). Favour evidence over flattery — note concerns (heavy dilution, dumping insiders, excessive comp vs size) where visible. If the CEO is unknown or data is sparse, say so honestly."
+    "body": "2-3 sentences citing the management signals (CEO identity/tenure/comp, insider ownership, 6m insider transactions, 5y share-count trend, retention multiple). When the retention multiple is especially strong (≥ 1.5x) or especially weak (< 1x or negative), name it explicitly as evidence of capital-allocation quality — Buffett's one-dollar test. Favour evidence over flattery; note concerns (heavy dilution, dumping insiders, excessive comp vs size, sub-par retention) where visible. If the CEO is unknown or data is sparse, say so honestly."
   },
   "what_to_watch": {
     "highlight": "One-line synthesis of the leading indicators to monitor.",
@@ -175,6 +185,7 @@ export async function generateThesis(
   management: ManagementSignals | null,
   tooHard: TooHardAssessment | null,
   shareCountCagr: number | null,
+  retentionMultiple: RetentionMultiple | null,
   tier: Tier,
   verdictReason: string,
 ): Promise<ThesisContent> {
@@ -191,6 +202,7 @@ export async function generateThesis(
     management,
     tooHard,
     shareCountCagr,
+    retentionMultiple,
     tier,
     verdictReason,
   );

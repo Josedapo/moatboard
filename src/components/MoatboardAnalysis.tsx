@@ -31,12 +31,17 @@ export default function MoatboardAnalysis({
   ticker,
   analysis,
   fundamentals,
+  cashYieldContext,
   loadError,
 }: {
   positionId: number;
   ticker: string;
   analysis: Analysis | null;
   fundamentals: Fundamentals | null;
+  // Optional context for the "Cash Yield" card in Additional Signals.
+  // Populated from the current valuation's snapshot + Treasury yield;
+  // null when either input is missing, in which case the card hides.
+  cashYieldContext?: { fcfYield: number; treasuryYield: number } | null;
   loadError?: string | null;
 }) {
   const [isPending, startTransition] = useTransition();
@@ -104,82 +109,35 @@ export default function MoatboardAnalysis({
       {/* Quality Scorecard (always visible — it's the data behind the verdict) */}
       {fundamentals ? (
         <div>
-          <h3 className="mb-1 text-base font-bold text-navy-900">
-            Quality Scorecard
-          </h3>
-          <p className="mb-4 text-xs text-navy-500">
-            Six dimensions drive the verdict. Multi-year metrics use the
-            median across available annual filings and require the worst
-            year to also clear the threshold.
-          </p>
+          <div className="mb-4 flex items-start justify-between gap-4">
+            <div>
+              <h3 className="mb-1 text-base font-bold text-navy-900">
+                Quality Scorecard
+              </h3>
+              <div className="text-xs text-navy-500">
+                {scorecardDescription(analysis?.scorecard_summary)}
+              </div>
+            </div>
+            <a
+              href="/about#dimensions"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex flex-none items-center rounded-lg border border-navy-200 bg-white px-3 py-1.5 text-xs font-medium text-navy-700 hover:border-navy-300 hover:bg-navy-50 hover:text-navy-900"
+            >
+              + Info &rarr;
+            </a>
+          </div>
           <div className="space-y-5">
             <ScorecardGroup title="Business quality — scored">
-              {analysis ? (
-                <>
-                  <ScorecardCard
-                    label="ROIC"
-                    hint={multiYearHint(
-                      analysis.scorecard_summary.multiYear
-                        .returnOnInvestedCapital,
-                    )}
-                    value={formatPct(
-                      analysis.scorecard_summary.multiYear
-                        .returnOnInvestedCapital.median,
-                    )}
-                    quality={
-                      analysis.scorecard_summary.dimensions
-                        .returnOnInvestedCapital
-                    }
-                  />
-                  <ScorecardCard
-                    label="FCF Margin"
-                    hint={multiYearHint(
-                      analysis.scorecard_summary.multiYear.fcfMargin,
-                    )}
-                    value={formatPct(
-                      analysis.scorecard_summary.multiYear.fcfMargin.median,
-                    )}
-                    quality={analysis.scorecard_summary.dimensions.fcfMargin}
-                  />
-                  <ScorecardCard
-                    label="Share Count Trend"
-                    hint={shareCountHint(
-                      analysis.scorecard_summary.multiYear.shareCountTrend,
-                    )}
-                    value={formatCagr(
-                      analysis.scorecard_summary.multiYear.shareCountTrend
-                        .median,
-                    )}
-                    quality={
-                      analysis.scorecard_summary.dimensions.shareCountTrend
-                    }
-                  />
-                </>
-              ) : null}
-              <ScorecardCard
-                label="Operating Margin"
-                hint="Trailing"
-                value={formatPct(fundamentals.operatingMargins)}
-                quality={scoreMetric(
-                  "operatingMargins",
-                  fundamentals.operatingMargins,
-                )}
-              />
-              <ScorecardCard
-                label="Debt / Equity"
-                hint="% of equity (trailing)"
-                value={formatNumber(fundamentals.debtToEquity)}
-                quality={scoreMetric("debtToEquity", fundamentals.debtToEquity)}
-              />
-              <ScorecardCard
-                label="Revenue Growth"
-                hint="Year over year"
-                value={formatPct(fundamentals.revenueGrowth)}
-                quality={scoreMetric(
-                  "revenueGrowth",
-                  fundamentals.revenueGrowth,
-                )}
-              />
+              {buildScoredCards({ analysis, fundamentals }).map((card) => (
+                <ScorecardCard
+                  key={card.label}
+                  label={card.label}
+                  hint={card.hint}
+                  value={card.value}
+                  quality={card.quality}
+                />
+              ))}
             </ScorecardGroup>
 
             <div>
@@ -187,70 +145,22 @@ export default function MoatboardAnalysis({
                 Additional signals
               </h4>
               <div className="grid gap-2 sm:grid-cols-3 lg:grid-cols-4">
-                <ScorecardCard
-                  compact
-                  label="Gross Margin"
-                  hint="Pricing power signal"
-                  value={formatPct(fundamentals.grossMargins)}
-                  quality={scoreMetric(
-                    "grossMargins",
-                    fundamentals.grossMargins,
-                  )}
-                />
-                <ScorecardCard
-                  compact
-                  label="ROE"
-                  hint="Distorted by leverage"
-                  value={formatPct(fundamentals.returnOnEquity)}
-                  quality="neutral"
-                />
-                <ScorecardCard
-                  compact
-                  label="ROA"
-                  hint="Asset productivity"
-                  value={formatPct(fundamentals.returnOnAssets)}
-                  quality={scoreMetric(
-                    "returnOnAssets",
-                    fundamentals.returnOnAssets,
-                  )}
-                />
-                <ScorecardCard
-                  compact
-                  label="Profit Margin"
-                  hint="Trailing"
-                  value={formatPct(fundamentals.profitMargins)}
-                  quality={scoreMetric(
-                    "profitMargins",
-                    fundamentals.profitMargins,
-                  )}
-                />
-                <ScorecardCard
-                  compact
-                  label="FCF (abs)"
-                  hint="Trailing 12m"
-                  value={formatLargeUSD(fundamentals.freeCashflow)}
-                  quality="neutral"
-                />
-                <ScorecardCard
-                  compact
-                  label="Current Ratio"
-                  hint="Short-term liquidity"
-                  value={formatNumber(fundamentals.currentRatio)}
-                  quality={scoreMetric(
-                    "currentRatio",
-                    fundamentals.currentRatio,
-                  )}
-                />
-                <ScorecardCard
-                  compact
-                  label="Earnings Growth"
-                  hint="Year over year"
-                  value={formatPct(fundamentals.earningsGrowth)}
-                  quality={scoreMetric(
-                    "earningsGrowth",
-                    fundamentals.earningsGrowth,
-                  )}
-                />
+                {buildAdditionalSignals({
+                  analysis,
+                  fundamentals,
+                  cashYieldContext,
+                }).map(
+                  (card) => (
+                    <ScorecardCard
+                      key={card.label}
+                      compact
+                      label={card.label}
+                      hint={card.hint}
+                      value={card.value}
+                      quality={card.quality}
+                    />
+                  ),
+                )}
               </div>
             </div>
           </div>
@@ -277,6 +187,352 @@ function verdictBoxStyles(tier: Tier): string {
   }
 }
 
+type ScoredCard = {
+  label: string;
+  hint: string;
+  value: string;
+  quality: "strong" | "acceptable" | "weak" | "neutral";
+};
+
+// Build the list of scored cards to render in Business Quality. The logic:
+// every potential dimension is attempted; only those whose quality is NOT
+// neutral end up rendered. That way banks see ROE/ROA/BV-CAGR (their three
+// applicable additions) and don't see ROIC/Gross/FCF Margin (neutralized for
+// their business type), and REITs see AFFO-specific cards, all without the
+// UI having to know the sector — the dispatch lives in scorecard.ts.
+function buildScoredCards({
+  analysis,
+  fundamentals,
+}: {
+  analysis: Analysis | null;
+  fundamentals: Fundamentals;
+}): ScoredCard[] {
+  const cards: ScoredCard[] = [];
+  const s = analysis?.scorecard_summary;
+
+  if (s) {
+    cards.push({
+      label: "ROIC",
+      hint: multiYearHint(s.multiYear.returnOnInvestedCapital),
+      value: formatPct(s.multiYear.returnOnInvestedCapital.median),
+      quality: s.dimensions.returnOnInvestedCapital,
+    });
+    cards.push({
+      label: "Gross Margin",
+      hint: multiYearHint(s.multiYear.grossMargin),
+      value: formatPct(s.multiYear.grossMargin?.median ?? null),
+      quality: s.dimensions.grossMargin ?? "neutral",
+    });
+    cards.push({
+      label: "FCF Margin",
+      hint: multiYearHint(s.multiYear.fcfMargin),
+      value: formatPct(s.multiYear.fcfMargin.median),
+      quality: s.dimensions.fcfMargin,
+    });
+    cards.push({
+      label: "Operating Margin",
+      hint: trailingFallbackHint(s.multiYear.operatingMargin),
+      value: formatPct(
+        s.multiYear.operatingMargin?.median ?? fundamentals.operatingMargins,
+      ),
+      quality: s.dimensions.operatingMargins,
+    });
+    cards.push({
+      label: "Share Count Trend",
+      hint: shareCountHint(s.multiYear.shareCountTrend),
+      value: formatCagr(s.multiYear.shareCountTrend.median),
+      quality: s.dimensions.shareCountTrend,
+    });
+    cards.push({
+      label: "Revenue Growth",
+      hint: revenueGrowthHint(
+        s.multiYear.revenueGrowth,
+        fundamentals.revenueGrowth,
+      ),
+      value: formatCagr(
+        s.multiYear.revenueGrowth?.median ?? fundamentals.revenueGrowth,
+      ),
+      quality: s.dimensions.revenueGrowth,
+    });
+    // Bank / insurer-specific dimensions — neutral on non-bank businesses.
+    if (s.multiYear.returnOnEquity) {
+      cards.push({
+        label: "ROE (multi-year)",
+        hint: multiYearHint(s.multiYear.returnOnEquity),
+        value: formatPct(s.multiYear.returnOnEquity.median),
+        quality: s.dimensions.returnOnEquity ?? "neutral",
+      });
+    }
+    if (s.multiYear.returnOnAssets) {
+      cards.push({
+        label: "ROA (multi-year)",
+        hint: multiYearHint(s.multiYear.returnOnAssets),
+        value: formatPct(s.multiYear.returnOnAssets.median),
+        quality: s.dimensions.returnOnAssets ?? "neutral",
+      });
+    }
+    if (s.multiYear.bookValuePerShareCagr) {
+      cards.push({
+        label: "BV/share 5y CAGR",
+        hint: bookValueCagrHint(s.multiYear.bookValuePerShareCagr),
+        value: formatCagr(s.multiYear.bookValuePerShareCagr.median),
+        quality: s.dimensions.bookValuePerShareCagr ?? "neutral",
+      });
+    }
+    // REIT-specific dimensions — neutral on non-real-estate businesses.
+    if (s.reit?.affoPayoutRatio) {
+      cards.push({
+        label: "AFFO Payout Ratio",
+        hint: affoPayoutHint(s.reit.affoPayoutRatio),
+        value: formatPct(s.reit.affoPayoutRatio.value),
+        quality: s.dimensions.affoPayoutRatio ?? "neutral",
+      });
+    }
+    if (s.reit?.netDebtToEbitda) {
+      cards.push({
+        label: "Net Debt / EBITDA",
+        hint: netDebtEbitdaHint(s.reit.netDebtToEbitda),
+        value: formatMultiple(s.reit.netDebtToEbitda.value),
+        quality: s.dimensions.netDebtToEbitda ?? "neutral",
+      });
+    }
+    if (s.multiYear.affoPerShareCagr) {
+      cards.push({
+        label: "AFFO/share 5y CAGR",
+        hint: bookValueCagrHint(s.multiYear.affoPerShareCagr),
+        value: formatCagr(s.multiYear.affoPerShareCagr.median),
+        quality: s.dimensions.affoPerShareCagr ?? "neutral",
+      });
+    }
+  }
+
+  // Debt / Equity — scored for product businesses, neutralized for banks
+  // and REITs. Always attempted, filtered out below if neutral.
+  cards.push({
+    label: "Debt / Equity",
+    hint:
+      analysis?.scorecard_summary.notes?.debtToEquity ??
+      "% of equity (trailing)",
+    value: formatNumber(fundamentals.debtToEquity),
+    quality:
+      analysis?.scorecard_summary.dimensions.debtToEquity ??
+      scoreMetric("debtToEquity", fundamentals.debtToEquity),
+  });
+
+  // Filter: only render dimensions that apply to THIS business type.
+  // `neutral` means the dimension isn't a quality signal here — excluded.
+  return cards.filter((c) => c.quality !== "neutral");
+}
+
+// Business-type-specific description of the scorecard. The detection uses
+// the non-neutral dimensions that are exclusive to each type — ROE is only
+// scored for balance-sheet businesses; AFFO payout is only scored for REITs.
+// Each branch ends with a link to the /about coverage section so the user
+// can read what "this type of business" means in Moatboard's framework.
+function scorecardDescription(
+  summary: Analysis["scorecard_summary"] | undefined,
+): React.ReactNode {
+  if (!summary) {
+    return <span>Analyzing this business&hellip;</span>;
+  }
+  const dims = summary.dimensions;
+  const isBankLike =
+    dims.returnOnEquity && dims.returnOnEquity !== "neutral";
+  const isReit = dims.affoPayoutRatio && dims.affoPayoutRatio !== "neutral";
+
+  const link = (
+    <a
+      href="/about#coverage"
+      target="_blank"
+      rel="noopener noreferrer"
+      className="font-medium text-navy-700 underline underline-offset-2 hover:text-navy-900"
+    >
+      How Moatboard evaluates this type of business &rarr;
+    </a>
+  );
+
+  if (isBankLike) {
+    return (
+      <>
+        <p className="mb-2">
+          This is a <strong>balance-sheet business</strong> — bank, insurer,
+          mortgage finance or asset manager. Moatboard judges it on{" "}
+          <strong>ROE</strong>, <strong>ROA</strong> and{" "}
+          <strong>book value per share growth</strong> (the Buffett /
+          Damodaran frame for financial-institution quality), alongside
+          operating efficiency, share count and revenue growth. The generic
+          ROIC, gross margin, FCF margin and debt/equity dimensions used
+          for product businesses aren&apos;t meaningful here: invested
+          capital isn&apos;t product capital, revenue is net interest or
+          net premium (no COGS), cash flow is dominated by balance-sheet
+          activity, and leverage is the business model itself.
+        </p>
+        <p>{link}</p>
+      </>
+    );
+  }
+  if (isReit) {
+    return (
+      <>
+        <p className="mb-2">
+          This is a <strong>Real Estate Investment Trust</strong>. Moatboard
+          judges it on <strong>AFFO payout ratio</strong>,{" "}
+          <strong>Net Debt / EBITDA</strong> and{" "}
+          <strong>AFFO per share growth</strong> — the industry-standard
+          signals for REIT dividend safety, leverage and compounding —
+          alongside FCF margin, operating margin, share count and revenue
+          growth. ROIC and gross margin don&apos;t apply (revenue is rent,
+          no COGS concept); generic debt/equity thresholds don&apos;t
+          either (REITs use leverage by design).
+        </p>
+        <p>{link}</p>
+      </>
+    );
+  }
+  return (
+    <>
+      <p className="mb-2">
+        This is a <strong>product business</strong>. Moatboard judges it on
+        the seven-dimension Buffett / Munger / Terry Smith quality framework:{" "}
+        <strong>ROIC</strong>, <strong>gross margin</strong>,{" "}
+        <strong>FCF margin</strong>, <strong>operating margin</strong>,{" "}
+        <strong>share count trend</strong>, <strong>debt / equity</strong>{" "}
+        and <strong>revenue growth</strong>. Multi-year metrics use the
+        median across available annual filings and require the worst year
+        to also clear the threshold, so a cyclical peak doesn&apos;t earn
+        a &ldquo;strong&rdquo; that the trough would reveal as temporary.
+      </p>
+      <p>{link}</p>
+    </>
+  );
+}
+
+// Additional Signals. Same filter principle as the scored grid: we don't
+// render a placeholder for metrics that the data source couldn't load or
+// that don't apply to this business type. A dash "—" in a bank's FCF /
+// share card would be indistinguishable from a data-load error; better
+// to hide the card entirely and let the layout reflow.
+function buildAdditionalSignals({
+  analysis,
+  fundamentals,
+  cashYieldContext,
+}: {
+  analysis: Analysis | null;
+  fundamentals: Fundamentals;
+  cashYieldContext?: { fcfYield: number; treasuryYield: number } | null;
+}): ScoredCard[] {
+  const cards: ScoredCard[] = [];
+
+  // FCF Conversion — only renders when we have a computed median.
+  const fcfConv = analysis?.scorecard_summary.fcfConversion;
+  if (fcfConv && fcfConv.median !== null) {
+    cards.push({
+      label: "FCF Conversion",
+      hint: `FCF / NI · ${fcfConv.yearsUsed}y median`,
+      value: formatPct(fcfConv.median),
+      quality: "neutral",
+    });
+  }
+
+  // Cash Yield vs Treasury — context indicator, not a valuation method.
+  // Shows FCF yield, 10y Treasury, and the spread. Retired from the
+  // valuation toolkit because the raw spread doesn't produce a cheap /
+  // expensive reading without own-history context; here it lives as a
+  // temperature check alongside Retention Multiple and FCF Conversion.
+  if (cashYieldContext) {
+    const spreadPp =
+      (cashYieldContext.fcfYield - cashYieldContext.treasuryYield) * 100;
+    cards.push({
+      label: "Cash Yield vs Treasury",
+      hint: `FCF yield ${(cashYieldContext.fcfYield * 100).toFixed(2)}% · Treasury ${(cashYieldContext.treasuryYield * 100).toFixed(2)}%`,
+      value: `${spreadPp >= 0 ? "+" : ""}${spreadPp.toFixed(2)} pp`,
+      quality: "neutral",
+    });
+  }
+
+  // Retention Multiple — renders when we could compute a ratio (needs
+  // market-cap history and positive retained capital).
+  const retention = analysis?.scorecard_summary.retentionMultiple;
+  if (retention && retention.ratio !== null) {
+    cards.push({
+      label: "Retention Multiple",
+      hint: retentionMultipleHint(retention),
+      value: formatRetention(retention.ratio),
+      quality: retention.quality ?? "neutral",
+    });
+  }
+
+  // The rest read from trailing `fundamentals` — hide any that yfinance
+  // doesn't report for this business type (banks return null FCF; REITs
+  // often return null current ratio; etc.).
+  if (fundamentals.returnOnEquity !== null) {
+    cards.push({
+      label: "ROE",
+      hint: "Net income / shareholders' equity",
+      value: formatPct(fundamentals.returnOnEquity),
+      quality: "neutral",
+    });
+  }
+  if (fundamentals.returnOnAssets !== null) {
+    cards.push({
+      label: "ROA",
+      hint: "Asset productivity",
+      value: formatPct(fundamentals.returnOnAssets),
+      quality: scoreMetric("returnOnAssets", fundamentals.returnOnAssets),
+    });
+  }
+  if (fundamentals.profitMargins !== null) {
+    cards.push({
+      label: "Profit Margin",
+      hint: "Trailing",
+      value: formatPct(fundamentals.profitMargins),
+      quality: scoreMetric("profitMargins", fundamentals.profitMargins),
+    });
+  }
+  if (fundamentals.trailingEps !== null) {
+    cards.push({
+      label: "EPS",
+      hint: "Trailing 12m · denominator behind PE",
+      value: formatUsdPerShare(fundamentals.trailingEps),
+      quality: "neutral",
+    });
+  }
+  if (fundamentals.fcfPerShare !== null) {
+    cards.push({
+      label: "FCF / share",
+      hint: "Trailing 12m · denominator behind P/FCF",
+      value: formatUsdPerShare(fundamentals.fcfPerShare),
+      quality: "neutral",
+    });
+  }
+  if (fundamentals.freeCashflow !== null) {
+    cards.push({
+      label: "FCF (abs)",
+      hint: "Trailing 12m",
+      value: formatLargeUSD(fundamentals.freeCashflow),
+      quality: "neutral",
+    });
+  }
+  if (fundamentals.currentRatio !== null) {
+    cards.push({
+      label: "Current Ratio",
+      hint: "Current assets / current liabilities",
+      value: formatNumber(fundamentals.currentRatio),
+      quality: "neutral",
+    });
+  }
+  if (fundamentals.earningsGrowth !== null) {
+    cards.push({
+      label: "Earnings Growth",
+      hint: "Year over year",
+      value: formatPct(fundamentals.earningsGrowth),
+      quality: scoreMetric("earningsGrowth", fundamentals.earningsGrowth),
+    });
+  }
+
+  return cards;
+}
+
 function ScorecardGroup({
   title,
   children,
@@ -289,7 +545,7 @@ function ScorecardGroup({
       <h4 className="mb-2 text-xs font-semibold uppercase tracking-wider text-navy-500">
         {title}
       </h4>
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">{children}</div>
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">{children}</div>
     </div>
   );
 }
@@ -320,13 +576,19 @@ function formatLargeUSD(value: number | null): string {
   return `$${value.toFixed(0)}`;
 }
 
+function formatUsdPerShare(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) return "—";
+  return `$${value.toFixed(2)}`;
+}
+
 function formatCagr(value: number | null): string {
   if (value === null || !Number.isFinite(value)) return "—";
   const sign = value < 0 ? "−" : "+";
   return `${sign}${Math.abs(value * 100).toFixed(1)}%/yr`;
 }
 
-function multiYearHint(score: MultiYearScore): string {
+function multiYearHint(score: MultiYearScore | undefined): string {
+  if (!score) return "Regenerate to populate";
   if (score.note) return score.note;
   if (score.yearsUsed === 0) return "No annual data available";
   const medianPart = `${score.yearsUsed}y median`;
@@ -337,8 +599,77 @@ function multiYearHint(score: MultiYearScore): string {
   return medianPart;
 }
 
+// Used by dimensions that fall back to a trailing value when multi-year
+// data isn't available (operating margin for banks, for example). Keeps
+// the hint honest about what the displayed value actually represents.
+function trailingFallbackHint(score: MultiYearScore | undefined): string {
+  if (!score) return "Regenerate to populate";
+  if (score.yearsUsed >= 3) return multiYearHint(score);
+  if (score.note) return score.note;
+  return "Trailing";
+}
+
 function shareCountHint(score: MultiYearScore): string {
   if (score.note) return score.note;
   if (score.yearsUsed < 2) return "Insufficient history";
   return `${score.yearsUsed}y CAGR · negative = buybacks`;
+}
+
+function formatRetention(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) return "—";
+  return `${value.toFixed(2)}x`;
+}
+
+function retentionMultipleHint(
+  rm:
+    | {
+        ratio: number | null;
+        yearsUsed: number;
+        note?: string;
+      }
+    | undefined,
+): string {
+  if (!rm) return "Buffett one-dollar test";
+  if (rm.note) return rm.note;
+  if (rm.ratio === null) return "Buffett one-dollar test";
+  return `$ created per $1 retained · ${rm.yearsUsed}y`;
+}
+
+function revenueGrowthHint(
+  score: MultiYearScore | undefined,
+  trailing: number | null,
+): string {
+  if (!score) return "Year over year";
+  if (score.note) return score.note;
+  if (score.yearsUsed >= 3) return `${score.yearsUsed}y CAGR`;
+  if (trailing !== null && Number.isFinite(trailing)) return "Year over year";
+  return "Year over year";
+}
+
+function bookValueCagrHint(score: MultiYearScore | undefined): string {
+  if (!score) return "";
+  if (score.note) return score.note;
+  if (score.yearsUsed < 2) return "Insufficient history";
+  return `${score.yearsUsed}y CAGR`;
+}
+
+function affoPayoutHint(
+  score: { value: number | null; note?: string } | undefined,
+): string {
+  if (!score) return "Dividend / AFFO (latest)";
+  if (score.note) return score.note;
+  return "Dividend / AFFO (latest)";
+}
+
+function netDebtEbitdaHint(
+  score: { value: number | null; note?: string } | undefined,
+): string {
+  if (!score) return "Net debt / EBITDA (latest)";
+  if (score.note) return score.note;
+  return "Net debt / EBITDA (latest)";
+}
+
+function formatMultiple(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) return "—";
+  return `${value.toFixed(2)}x`;
 }

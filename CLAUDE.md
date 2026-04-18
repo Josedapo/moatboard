@@ -17,7 +17,7 @@
 src/
 ├── app/
 │   ├── page.tsx                       # Public homepage
-│   ├── about/page.tsx                 # Methodology (placeholder)
+│   ├── about/page.tsx                 # Methodology — 8 sections (philosophy, investors, dimensions, tiers, what's NOT scored, coverage, further reading)
 │   ├── pricing/page.tsx               # Free vs Pro
 │   ├── auth/signin/page.tsx           # Google sign-in
 │   ├── api/auth/[...nextauth]/route.ts # NextAuth handlers (runtime: nodejs)
@@ -31,19 +31,23 @@ src/
 ├── lib/                               # Domain logic, DB, AI, pure functions
 │   ├── db.ts                          # Neon serverless client
 │   ├── schema.sql                     # Source of truth for DB schema
-│   ├── financial.ts                   # yahoo-finance2 wrapper (Quote, Fundamentals types)
-│   ├── scorecard.ts                   # Per-metric quality scoring (pure)
+│   ├── financial.ts                   # yahoo-finance2 wrapper (Quote, Fundamentals, RelativeValuationPoint)
+│   ├── scorecard.ts                   # Per-metric quality scoring (pure) + business-type helpers (isBalanceSheetBusiness, isRealEstate, isCommodityCyclical) + multi-year scorers (median + worst-year)
 │   ├── verdict.ts                     # Formulaic tier computation + reason templates (pure)
 │   ├── moats.ts                       # CRUD for moat_assessments
 │   ├── moatAi.ts                      # AI moat assessment (lazy client)
 │   ├── verdictAi.ts                   # AI prose composition for verdict_reason
 │   ├── analysis.ts                    # Orchestrator: runAnalysis() ties scorecard + moat + tier + prose
 │   ├── moatboardAnalyses.ts           # CRUD for moatboard_analyses
-│   ├── valuation.ts                   # Pure DCF + Margin of Safety classifier
-│   ├── valuationAi.ts                 # AI DCF assumptions + multiples fallback
-│   ├── valuations.ts                  # CRUD for valuations
-│   ├── positionFlow.ts                # ensureAnalysis / ensureValuation (get-or-create)
-│   ├── thesis.ts                      # AI thesis generation (5 structured fields, gated by tier)
+│   ├── valuation.ts                   # Pure DCF (two-stage owner earnings) + tier types
+│   ├── valuationAi.ts                 # AI multiples fallback only (DCF inputs are deterministic)
+│   ├── valuations.ts                  # CRUD for valuations; RelativeValuationSnapshot type
+│   ├── relativeValuation.ts           # Pure distribution stats (median/Q1/Q3/IQR) and classifier
+│   ├── valuationGuideAi.ts            # AI valuation guide — which tools matter most for this business
+│   ├── valuationGuides.ts             # CRUD for valuation_guides (per-ticker cache, TTL 365d)
+│   ├── positionFlow.ts                # ensureAnalysis / ensureValuation / computeRelativeValuationContext
+│   ├── tooHard.ts                     # Sector/industry too-hard gate (Buffett circle-of-competence)
+│   ├── thesis.ts                      # AI thesis generation (6 structured fields, gated by tier)
 │   ├── theses.ts                      # CRUD for theses (user vs ai source)
 │   └── positions.ts                   # CRUD for positions
 ├── proxy.ts                           # Auth gating (Next.js 16 — was middleware.ts)
@@ -65,8 +69,9 @@ Tables:
 - `users`, `accounts`, `sessions`, `verification_token` — NextAuth (Neon adapter)
 - `positions` — user portfolio entries (ticker, purchase_price, purchase_date)
 - `moat_assessments` — **per-ticker, shared across users**, AI-evaluated, TTL 365 days
+- `valuation_guides` — **per-ticker, shared across users**, AI-generated advice on which valuation tools matter most for a business type (primary/secondary/cautious + reasoning), TTL 365 days
 - `moatboard_analyses` — per-position verdict (tier, verdict_reason, scorecard_summary, moat snapshot)
-- `valuations` — per-position MoS (method, intrinsic_value, current_price, tier, assumptions, reasoning)
+- `valuations` — per-position IV + MoS (method, intrinsic_value range, current_price, dcf_tier, relative_tier, compound tier, assumptions JSONB including RelativeValuationSnapshot). `method` CHECK constraint allows `'dcf' | 'affo_dcf' | 'excess_returns' | 'ai_multiples'`. Note: the compound `tier`, `dcf_tier` and `relative_tier` columns are legacy — still persisted but no longer read by the UI (see philosophy-review drift M correction, 2026-04-16). The per-method `assumptions` shape differs (owner-earnings DCF, AFFO DCF, Excess Returns, AI multiples)
 - `theses` — per-position user thesis (source: 'user' | 'ai', raw_text, structured_content JSONB)
 - `monthly_reviews` — placeholder for future Phase 1 monthly review feature
 
@@ -79,11 +84,18 @@ Tables:
 ### Quality verdict pipeline (formulaic + minimal AI)
 
 ```
-fundamentals (yfinance, free/fast)
-  → scorecard.ts: scoreMetric() per dimension
+fundamentals (yfinance, free/fast) + sector/industry from Quote
+  → scorecard.ts: scoreMetric() per dimension; business-type routing
+      · product businesses → 7 dimensions (ROIC, gross margin, FCF margin, op margin, share count, D/E, revenue growth)
+      · balance-sheet businesses (banks / insurers / health insurers / mortgage REITs)
+        → 6 dimensions (op margin, share count, revenue growth, ROE multi-year, ROA multi-year, BV/share 5y CAGR)
+      · equity REITs → 7 dimensions (FCF margin, op margin, share count, revenue growth, AFFO payout, Net Debt/EBITDA, AFFO/share 5y CAGR)
+      · dimensions that don't apply return `neutral` (hidden in UI, not counted in proportional tier)
   → moats.ts: cached moat for ticker
     └─ if missing/stale → moatAi.ts: assessMoat() → save + return
-  → verdict.ts: computeQualityTier() (pure, deterministic)
+  → verdict.ts: computeQualityTier() (pure, deterministic, proportional on applicable dims)
+      · too-hard sector modifier downgrades one level
+      · moat archetype "none" hard-caps at Mediocre
   → verdictAi.ts: composeVerdictNarrative() (one short Claude call for prose)
     └─ on failure → verdict.ts: renderVerdictReason() (deterministic fallback)
   → save to moatboard_analyses
@@ -91,35 +103,58 @@ fundamentals (yfinance, free/fast)
 
 The tier itself is **never** AI-driven — only the prose. Reason: reproducibility, cost, and the philosophical principle that the verdict is a measurable judgment.
 
+The position detail page wraps this in an **"unsupported business" gate** (`isOutsideFramework` in `src/app/dashboard/position/[id]/page.tsx`): when the scorecard has fewer than 5 applicable dimensions, OR when valuation falls to `ai_multiples` with op-margin worst-year below −50%, the page replaces Business Analysis / Valuation / Thesis with a single explanatory notice linking to `/about#coverage`.
+
 ### Valuation pipeline
 
 ```
-quote + fundamentals (yfinance)
-  → if FCF > 0 AND sharesOutstanding > 0 → DCF path
-      → valuationAi.ts: suggestDcfAssumptions() (1 Claude call)
-      → valuation.ts: computeDcfIntrinsicValue() (pure)
-  → else → AI multiples fallback
-      → valuationAi.ts: estimateWithMultiples() (1 Claude call)
-  → valuation.ts: classifyMarginOfSafety() (pure, IV/Price ratio + tier)
-  → save to valuations
+quote + fundamentals + multi-year + treasury + relative-history (yfinance, parallel)
+  → Business-type dispatch (positionFlow.ts: computeAndSaveValuation):
+      · isBalanceSheetBusiness(sector, industry) (banks, insurers, asset mgrs, health insurers, mortgage REITs)
+          → valuation.ts: computeExcessReturnsBase / computeCostOfEquity (CAPM rf + β × 5% ERP)
+          → valuation.ts: computeExcessReturnsValuation / computeExcessReturnsRange
+          → method: "excess_returns"   (fallback: ai_multiples if ROE unstable / BV ≤ 0)
+      · isRealEstate(sector) (excluding mortgage REITs — they go via balance-sheet)
+          → same owner-earnings math, relabeled as AFFO proxy (NI + D&A − 5y avg capex)
+          → method: "affo_dcf"
+      · else (product businesses):
+          → valuation.ts: computeOwnerEarningsBase(), observedGrowthRate()
+          → valuation.ts: computeIntrinsicValueRange() (pure, 10%/12%/14% hurdle rates)
+          → method: "dcf"
+      · AI multiples fallback (when the absolute method is not computable):
+          → valuationAi.ts: estimateWithMultiples() (1 Claude call) → method: "ai_multiples"
+  → positionFlow.ts: computeRelativeValuationContext() (pure)
+      → relativeValuation.ts: computeDistributionStats() for PE, P/FCF, P/B
+      → current percentile vs own-history distribution (IQR outlier trimmed)
+  → valuationGuides.ts: ensureValuationGuide() (get-or-create, cached per ticker)
+      → on miss → valuationGuideAi.ts: assessValuationGuide() (1 Claude call)
+  → save to valuations (valuation row per position + guide row per ticker)
 ```
 
-User-edited assumptions (`updateValuationAssumptionsAction`) go through pure recompute only — **no AI re-call**.
+Both `ensureValuation` (first render) and `runValuationAction` (user-triggered regenerate) go through the same `computeAndSaveValuation` helper — dispatch logic lives in one place.
+
+**No compound verdict on valuation.** The UI renders 4-5 independent tools side by side (DCF range, PE-own-history, P/FCF-own-history, P/B-own-history when book value positive, Cash yield vs 10y Treasury) + the AI guide at the top indicating which tools matter most for the business type. See philosophy-review drift M and its 2026-04-16 correction.
+
+User-edited DCF assumptions (`updateValuationAssumptionsAction`) go through pure recompute only — **no AI re-call**. The relative snapshot and the guide are preserved as-is.
 
 ### Cache philosophy
 
-- **Per-ticker, shared across users:** `moat_assessments`. Refreshed yearly via TTL. Future Quality Universe (next session) will batch-populate this.
+- **Per-ticker, shared across users:** `moat_assessments`, `valuation_guides`. Refreshed yearly via TTL. Future Quality Universe will batch-populate `moat_assessments`.
 - **Per-position, per-user:** `moatboard_analyses`, `valuations`, `theses`. Overwritten on regenerate.
 - **Always fresh:** fundamentals from yfinance (no cache — fast and free enough).
 
-### Margin of Safety formula
+### Valuation toolkit (replaces the old "Margin of Safety" verdict)
 
-```
-IV/Price ratio = IntrinsicValue / CurrentPrice
-MoS%           = (IV/Price - 1) × 100
-```
+The Valuation section renders **four independent tools**, navy-neutral, no red/green semantics on the bars, no single verdict. The user weighs them by the kind of business (the AI Valuation Guide at the top suggests the weighting, but never hides a tool):
 
-Both are recomputed on display (in `Valuation.tsx` and `page.tsx`) from the stored `intrinsic_value` and `current_price` so legacy rows or formula changes always render correctly. Tier thresholds: ≥1.20x = Margin of Safety (emerald), 0.85-1.20x = Fair Price (blue), 0.65-0.85x = Premium (amber), <0.65x = Overvalued (red). **Note:** the philosophy review (`../Context/buffett-munger-philosophy-review.md`) flags these thresholds as too lenient vs real Buffett standards (he wanted 33-50%+).
+1. **Intrinsic value · {method-specific label}** — the absolute-valuation tool. Method adapts to the business type: **Owner earnings two-stage DCF** (product businesses) · **AFFO-based DCF** (REITs, same math relabeled) · **Excess Returns Model** (banks / insurers: book value + PV of (ROE − Ke) × BV over 10y, Ke via CAPM) · **AI multiples fallback** (when no absolute method applies). All four render the same Bear / Base / Bull range bar + price marker for visual consistency.
+2. **PE ratio · vs own history** — current PE vs the business's own 5-7y distribution. Blue mini-bar with Min / Q1 / Median / Q3 / Max + current marker.
+3. **P/FCF ratio · vs own history** — same layout. Inverted from FCF-yield snapshot at display time.
+4. **P/B ratio · vs own history** — only shown if book value has been positive across the history. Primary tool for financials and asset-heavy businesses.
+
+Cash yield vs Treasury was **retired from the valuation toolkit** (2026-04-18) — it's an indicator of price attractiveness, not a valuation method, so it lives as a context card under "Additional Signals" instead of alongside DCF / PE / P/FCF / P/B.
+
+The `IV/Price` ratio and `MoS%` are still computed internally (`valuation.ts`) and persisted, but they're no longer surfaced as a colored tier. The `dcf_tier`, `relative_tier`, `tier` (compound) columns remain for legacy DB rows — not read by the UI. Philosophy rationale: see drift M and its 2026-04-16 correction in `../Context/buffett-munger-philosophy-review.md`.
 
 ## Conventions
 
@@ -144,8 +179,11 @@ function getClient(): Anthropic {
 
 ### TypeScript types
 
-- `Tier = 'exceptional' | 'good' | 'average' | 'poor'` exported from `lib/verdict.ts`
-- `MosTier = 'margin' | 'fair' | 'premium' | 'overvalued'` exported from `lib/valuation.ts`
+- `Tier = 'exceptional' | 'good' | 'mediocre' | 'poor'` exported from `lib/verdict.ts` (note: `mediocre` replaced the old `average` after drift L fix)
+- `ValuationMethod = 'dcf' | 'affo_dcf' | 'excess_returns' | 'ai_multiples'` exported from `lib/valuations.ts`. The stored `assumptions` JSONB shape depends on `method` (`DcfStoredAssumptions`, `ExcessReturnsStoredAssumptions`, `MultiplesStoredAssumptions`).
+- `DcfTier = MosTier = 'margin' | 'acceptable' | 'fair' | 'premium'` exported from `lib/valuation.ts` — kept for the internal DCF classifier only. Not surfaced in UI.
+- `RelativeTier`, `CompoundTier` also in `lib/valuation.ts` — legacy, still persisted but not shown
+- `ToolId = 'dcf' | 'pe' | 'pfcf' | 'pb' | 'cash_yield'` exported from `lib/valuationGuideAi.ts`. The type still carries `cash_yield` for backwards compatibility with historical `valuation_guides` rows, but the AI prompt no longer recommends it and the UI never renders a `cash_yield` tool in the valuation section (it moved to Additional Signals).
 - `MoatStrength`, `MoatArchetype` exported from `lib/verdict.ts`
 - `ThesisContent`, `ThesisField` exported from `lib/thesis.ts`
 - Database row types use snake_case field names (matching Postgres columns); business logic types use camelCase
@@ -154,12 +192,18 @@ function getClient(): Anthropic {
 
 Custom navy scale defined in `src/app/globals.css` (`--color-navy-50` through `--color-navy-950`). Use `text-navy-900`, `bg-navy-50`, etc. — not arbitrary hex codes.
 
-Tier color vocabulary (kept consistent across QualityBadge, MarginOfSafetyBadge, verdict box, scorecard cards):
-- emerald = strong / margin / exceptional
-- teal = good
-- blue = fair price (only used in valuation)
-- amber = acceptable / mixed / premium / average
-- red = weak / overvalued / poor
+**Color vocabulary:**
+- **Quality Scorecard (tier color is intentional — quality is defensibly binarizable in Buffett's own vocabulary):**
+  - emerald = exceptional
+  - teal = good
+  - amber = mediocre
+  - red = poor
+- **Valuation section (no tier color on the bars — four independent tools, user weighs):**
+  - blue = neutral bars across all valuation widgets (DCF range bar, PE/P-FCF/P-B distribution bars, current markers)
+  - navy = containers, text, labels
+  - emerald = AI Valuation Guide "Primary" and "Secondary" tool labels (trust signal)
+  - red = AI Valuation Guide "Interpret with care" tool label (warning signal) — wording was deliberately chosen over "Use with caution" because the former makes clear it's still useful data, just needs context, not that the tool is dangerous
+- **Per-metric quality badges in the scorecard** (emerald/teal/amber/red) — strong/good/mixed/weak on individual metrics like ROIC, FCF margin.
 
 ## Development Commands
 
@@ -181,15 +225,22 @@ AUTH_SECRET=...                  # openssl rand -base64 32
 AUTH_URL=http://localhost:3000   # production: https://www.moatboard.com
 DATABASE_URL=postgresql://...    # Neon pooled connection string
 ANTHROPIC_API_KEY=sk-ant-...
+SEC_USER_AGENT=Name Email            # SEC EDGAR requires a declarative UA
 ```
 
 ## Sanity-check Tickers
 
+Dogfood portfolio (loaded 2026-04-18 via `scripts/reset-portfolio-fundsmith-us.mjs`): 11 US-listed Fundsmith holdings (MAR, SYK, WAT, V, PM, IDXX, GOOGL, ZTS, INTU, FTNT, META). Framework should classify most as Good or Exceptional — outliers are signal, not noise (either a framework gap or a Terry Smith view the framework doesn't capture).
+
 When testing the verdict + valuation pipeline:
-- **AAPL** — should be Exceptional or Good with strong moat (brand/switching_costs); valuation likely Premium or Overvalued at current prices
-- **CVNA** — should be Poor (high debt, history of negative FCF)
-- **GME** — should be Poor (no moat, weak fundamentals)
-- A growth pre-profit ticker (e.g., a recent IPO) — Valuation should fall back to AI multiples, not DCF
+- **AAPL / MSFT** — Exceptional compounders. Method = `"dcf"`. AI guide should flag pfcf primary and pe/dcf secondary (SBC noise on PE).
+- **V / MA** — Credit Services. Scored as product businesses (not balance-sheet), method = `"dcf"`.
+- **JPM** — bank. `isBalanceSheetBusiness` true. Method should be `"excess_returns"` (Damodaran model). AI guide should flag P/B primary. Useful stress test of the CAPM + ROE dispatch.
+- **O / AMT / VICI** — REIT (equity). `isRealEstate` true, `isBalanceSheetBusiness` false. Method = `"affo_dcf"` with reasoning text calling out the AFFO approximation.
+- **RITM / AGNC** — mortgage REIT. `isBalanceSheetBusiness` true (balance-sheet wins over real-estate for mREITs). Method = `"excess_returns"`.
+- **UNH / HUM** — health insurer ("Healthcare Plans"). `isBalanceSheetBusiness` true. Method = `"excess_returns"`.
+- **CVNA / GME** — should be Poor (high debt / no moat).
+- **RDDT / ASTS** — recent IPO / pre-commercial. Should hit the "Moatboard can't analyze" gate (fewer than 5 applicable scorecard dimensions, or AI multiples + op margin worst < −50%).
 
 ## Important Rules
 

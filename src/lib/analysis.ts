@@ -8,6 +8,7 @@
 import {
   fetchQuoteAndFundamentals,
   fetchMultiYearFundamentals,
+  fetchHistoricalPriceNear,
   type Quote,
   type Fundamentals,
   type MultiYearFundamentals,
@@ -23,6 +24,7 @@ import {
   type MoatStrength,
   type MoatArchetype,
 } from "@/lib/verdict";
+import { computeRetentionMultiple } from "@/lib/scorecard";
 import { composeVerdictNarrative } from "@/lib/verdictAi";
 import { assessTooHard } from "@/lib/tooHard";
 
@@ -68,8 +70,67 @@ export async function runAnalysis(ticker: string): Promise<AnalysisResult> {
     });
   }
 
-  const scorecard = summarizeScorecard(fundamentals, multiYear);
-  let tier = computeQualityTier(scorecard, moat.strength, fundamentals);
+  // Buffett's one-dollar test — reference signal, shown in Additional
+  // Signals. Anchor the "then" market cap to the earliest fiscal year with
+  // usable share-count data. yfinance occasionally returns the oldest row
+  // with most fields null; if so, walk forward to the first row where we
+  // can price a market cap. Retained earnings are summed from the SAME
+  // anchor year, so retained capital and value-created cover the same
+  // window (a 4y retained vs 3y value-created comparison would be biased).
+  // Cap the retention-multiple window at 12 years back even when SEC gives
+  // us 18y of fundamentals. Rationale: yfinance's historical price feed is
+  // reliable out to ~15 years; anchoring the retention-multiple market cap
+  // further back produces a null "then" market cap and the one-dollar test
+  // becomes unavailable for the strongest compounders (plan §6.5).
+  // Twelve years is long enough to span a full cycle and short enough to
+  // stay well within yfinance's price horizon.
+  const RETENTION_MAX_YEARS = 12;
+  const anchorCutoff = new Date();
+  anchorCutoff.setFullYear(anchorCutoff.getFullYear() - RETENTION_MAX_YEARS);
+  const anchorIndex =
+    multiYear?.years.findIndex(
+      (r) =>
+        r.sharesDiluted !== null &&
+        r.sharesDiluted > 0 &&
+        !!r.fiscalYearEnd &&
+        new Date(r.fiscalYearEnd).getTime() >= anchorCutoff.getTime(),
+    ) ?? -1;
+  let retentionMultiple;
+  if (!multiYear || anchorIndex < 0) {
+    retentionMultiple = computeRetentionMultiple({
+      mya: multiYear,
+      currentMarketCap: quote?.marketCap ?? null,
+      oldestMarketCap: null,
+    });
+  } else {
+    const anchorRow = multiYear.years[anchorIndex];
+    const anchorDate = new Date(anchorRow.fiscalYearEnd);
+    const anchorPrice = !Number.isNaN(anchorDate.getTime())
+      ? await fetchHistoricalPriceNear(ticker, anchorDate)
+      : null;
+    const anchorMarketCap =
+      anchorPrice !== null && anchorRow.sharesDiluted
+        ? anchorPrice * anchorRow.sharesDiluted
+        : null;
+    const partialMya: MultiYearFundamentals = {
+      ...multiYear,
+      years: multiYear.years.slice(anchorIndex),
+    };
+    retentionMultiple = computeRetentionMultiple({
+      mya: partialMya,
+      currentMarketCap: quote?.marketCap ?? null,
+      oldestMarketCap: anchorMarketCap,
+    });
+  }
+
+  const scorecard = summarizeScorecard(
+    fundamentals,
+    multiYear,
+    quote?.sector ?? null,
+    quote?.industry ?? null,
+    retentionMultiple,
+  );
+  let tier = computeQualityTier(scorecard, moat.strength, moat.archetype, fundamentals);
 
   // "Too hard" downgrade: if the business combines a hard-to-predict sector
   // with a weak or absent moat, Moatboard's own philosophy says it doesn't
