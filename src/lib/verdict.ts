@@ -20,6 +20,7 @@ import {
   scoreAffoPerShareCagr,
   isBalanceSheetBusiness,
   isRealEstate,
+  capMultiYearForScoring,
   type Quality,
   type MultiYearScore,
   type SingleYearScore,
@@ -122,6 +123,12 @@ export function summarizeScorecard(
   industry: string | null,
   retentionMultiple: RetentionMultiple,
 ): ScorecardSummary {
+  // Cap the scoring window at 10 years (Buffett's 1987 screen; Smith's
+  // 10-year margin-consistency filter). The full EDGAR history stays in
+  // `multiYear` for moat narrative + retention multiple anchoring, but
+  // medians and worst-year scoring run on the recent decade only so
+  // pre-regime-change economics don't distort the signal.
+  multiYear = capMultiYearForScoring(multiYear);
   // Product-universal scores (applicability is sector-aware inside each).
   const roicScore = scoreRoic(multiYear, sector, industry);
   const fcfMarginScore = scoreFcfMargin(multiYear, sector, industry);

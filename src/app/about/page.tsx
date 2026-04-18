@@ -624,7 +624,7 @@ export default function About() {
           <h3 className="mb-3 text-base font-bold text-navy-900">
             How far back the history goes
           </h3>
-          <p className="text-base leading-relaxed text-navy-800">
+          <p className="mb-4 text-base leading-relaxed text-navy-800">
             For US-listed businesses, Moatboard reads fundamentals from SEC
             EDGAR&apos;s XBRL archive, typically 10–18 years back depending
             on when the filer became subject to XBRL reporting (the 2009
@@ -636,6 +636,19 @@ export default function About() {
             sector / industry, analyst snapshots and dividend yield remain
             sourced outside SEC in every case, since XBRL does not cover
             market data.
+          </p>
+          <p className="text-base leading-relaxed text-navy-800">
+            Even with longer data available, the scorecard medians and
+            worst-year cuts are computed on the most recent 10 years only.
+            Buffett&apos;s 1987 letter endorsed exactly that screen
+            (&ldquo;average ROE above 20% with no single year below 15%&rdquo;
+            over 1977-1986), and Terry Smith&apos;s quality criteria use a
+            10-year margin-consistency filter. Fifteen- or twenty-year
+            medians would cross regime changes (pre/post-GFC, pre/post-cloud,
+            management turnovers, transformative M&amp;A) that distort the
+            signal rather than strengthen it. The full EDGAR history still
+            informs the moat narrative and the Buffett retention-multiple
+            test — it&apos;s only the quality scorecard that caps at ten.
           </p>
         </section>
 

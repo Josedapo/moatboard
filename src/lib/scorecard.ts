@@ -9,6 +9,41 @@ import type {
 
 export type Quality = "strong" | "acceptable" | "weak" | "neutral";
 
+// Scoring window cap. SEC EDGAR delivers 10–18 years of annual data, but
+// the quality literature is explicit about using a 10-year lookback for
+// median + worst-year scoring:
+//   - Buffett, 1987 shareholder letter: endorsed a Fortune screen of
+//     "average ROE > 20% AND no year below 15% over 10 years" (1977-1986).
+//   - Pat Dorsey, *The Little Book That Builds Wealth* (2008), ch. 8: a
+//     wide moat requires ~15 years of returns above cost of capital — but
+//     that's for moat-durability judgement, not median scoring.
+//   - Terry Smith, *Investing for Growth* (2020): quality selection uses
+//     5-year average cash conversion + 10-year average margins; the
+//     portfolio scorecard itself is TTM.
+//   - Aswath Damodaran, *Valuation* ch. 11: historical CAGR beyond 5
+//     years is a poor predictor; ventanas largas cruzan regime changes.
+// Windows longer than 10y cross regime changes (pre/post-iPhone,
+// pre/post-cloud, pre/post-GFC, management turnovers, transformative
+// M&A) that distort medians. Keep the full EDGAR window in `mya.years`
+// for context and narrative, but cap what feeds the scorers.
+export const SCORING_WINDOW_YEARS = 10;
+
+export function capMultiYearForScoring(
+  mya: MultiYearFundamentals | null,
+): MultiYearFundamentals | null {
+  if (!mya) return null;
+  if (mya.years.length <= SCORING_WINDOW_YEARS) return mya;
+  const capped = mya.years.slice(-SCORING_WINDOW_YEARS);
+  const yearsAvailable = capped.filter(
+    (r) =>
+      r.revenue !== null &&
+      r.ebit !== null &&
+      r.investedCapital !== null &&
+      r.freeCashFlow !== null,
+  ).length;
+  return { ...mya, years: capped, yearsAvailable };
+}
+
 // D/E scoring with sector awareness. Banks, insurers and REITs operate
 // at high leverage by design — the 50%/100% thresholds used for product
 // businesses would misclassify them. Neutralize instead.
