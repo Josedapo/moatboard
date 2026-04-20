@@ -10,6 +10,10 @@ import {
   computeDecisionContext,
   hasAnyDecisionContext,
 } from "@/lib/positionContext";
+import {
+  listSignalsForTicker,
+  inferNextReportType,
+} from "@/lib/reviewSignals";
 import { ensureAnalysis, ensureValuation } from "@/lib/positionFlow";
 import { ensureValuationGuide } from "@/lib/valuationGuides";
 import { ensureQuarterlySnapshots } from "@/lib/snapshotFlow";
@@ -40,6 +44,8 @@ import RedFlagsList, {
   summarizeFlagsBySeverity,
 } from "@/components/shared/RedFlagsList";
 import DecisionContextStrip from "@/components/position/DecisionContextStrip";
+import NextEarningsCard from "@/components/position/NextEarningsCard";
+import PresentationsPanel from "@/components/position/PresentationsPanel";
 import PositionTabs, {
   type PositionTabId,
 } from "@/components/position/PositionTabs";
@@ -79,6 +85,26 @@ export default async function PositionDetail({
     getRedFlags(position.ticker),
     computeDecisionContext({ userId: session.user.id, ticker: position.ticker }),
   ]);
+
+  // All signals for this ticker (new + reviewed) for the Presentaciones
+  // tab. Fetched separately from the Promise.all above so a slow query
+  // here doesn't block the critical-path data; the position page still
+  // renders even if this fails.
+  const tickerSignals = await listSignalsForTicker({
+    userId: session.user.id,
+    ticker: position.ticker,
+  }).catch(() => []);
+
+  // Infer the next report type (10-K vs 10-Q) from filing history so
+  // the "Próxima presentación" card can label it. Null when the cron
+  // hasn't recorded a 10-K yet for this ticker.
+  const nextReportType = quote?.nextEarningsDate
+    ? await inferNextReportType({
+        userId: session.user.id,
+        ticker: position.ticker,
+        nextEarningsDate: quote.nextEarningsDate,
+      }).catch(() => null)
+    : null;
   const firstBuyDate = transactions[0]?.transaction_date ?? null;
 
   // Auto-run analysis and valuation in parallel if not already cached.
@@ -157,6 +183,12 @@ export default async function PositionDetail({
   }
 
   const currentPrice = quote?.regularMarketPrice ?? null;
+  // Signed offset for the next earnings release; positive = future,
+  // negative = past (yfinance estimate not yet updated). Null propagates
+  // when yfinance doesn't publish a date.
+  const nextEarningsDaysAway = quote?.nextEarningsDate
+    ? signedDaysOffset(quote.nextEarningsDate)
+    : null;
 
   return (
     <div className="flex min-h-screen flex-col bg-navy-50/40">
@@ -174,7 +206,7 @@ export default async function PositionDetail({
             href={`/dashboard/position/${positionId}/trajectory`}
             className="inline-flex items-center gap-1.5 rounded-lg border border-navy-200 bg-white px-3 py-1.5 text-sm font-medium text-navy-700 shadow-sm hover:border-navy-300 hover:bg-navy-50 hover:text-navy-900"
           >
-            Ver trayectoria &rarr;
+            Ver evolución &rarr;
           </Link>
         </div>
 
@@ -242,6 +274,10 @@ export default async function PositionDetail({
         )}
 
         <PositionTabs
+          badges={{
+            presentaciones: tickerSignals.filter((s) => s.status === "new")
+              .length,
+          }}
           panels={buildPanels({
             ticker: position.ticker,
             positionId,
@@ -270,6 +306,10 @@ export default async function PositionDetail({
             valuationError,
             guide,
             outsideFramework: isOutsideFramework({ analysis, valuation }),
+            nextEarningsDate: quote?.nextEarningsDate ?? null,
+            nextEarningsDaysAway,
+            nextReportType,
+            tickerSignals,
           })}
         />
       </main>
@@ -300,6 +340,10 @@ function buildPanels(args: {
   valuationError: string | null;
   guide: ValuationGuide | null;
   outsideFramework: boolean;
+  nextEarningsDate: string | null;
+  nextEarningsDaysAway: number | null;
+  nextReportType: "10-K" | "10-Q" | null;
+  tickerSignals: import("@/lib/reviewSignals").ReviewSignal[];
 }): Record<PositionTabId, React.ReactNode> {
   const {
     ticker,
@@ -322,10 +366,24 @@ function buildPanels(args: {
     valuationError,
     guide,
     outsideFramework,
+    nextEarningsDate,
+    nextEarningsDaysAway,
+    nextReportType,
+    tickerSignals,
   } = args;
 
   const razonamiento = (
     <section className="rounded-2xl border border-navy-100 bg-white p-6 shadow-sm">
+      {nextEarningsDate && nextEarningsDaysAway !== null && (
+        <div className="mb-6">
+          <NextEarningsCard
+            earningsDate={nextEarningsDate}
+            daysAway={nextEarningsDaysAway}
+            reportType={nextReportType}
+          />
+        </div>
+      )}
+
       <PositionPreCommitment
         positionId={positionId}
         text={preCommitment}
@@ -456,7 +514,17 @@ function buildPanels(args: {
     />
   );
 
-  return { razonamiento, negocio, calidad, valoracion };
+  const presentaciones = (
+    <PresentationsPanel
+      positionId={positionId}
+      signals={tickerSignals}
+      nextEarningsDate={nextEarningsDate}
+      nextEarningsDaysAway={nextEarningsDaysAway}
+      nextReportType={nextReportType}
+    />
+  );
+
+  return { razonamiento, negocio, calidad, valoracion, presentaciones };
 }
 
 // A business falls outside Moatboard's framework when the scorecard
@@ -535,6 +603,15 @@ function extractCashYieldContext(
   }
   if (treasuryYield === null) return null;
   return { fcfYield, treasuryYield };
+}
+
+// Signed day offset from now to the given date. Positive = future,
+// negative = past. Used for the next earnings card which needs both
+// directions (yfinance estimates sometimes land in the past when the
+// release date is reshuffled and the cached estimate lags).
+function signedDaysOffset(value: string | Date): number {
+  const t = value instanceof Date ? value.getTime() : new Date(value).getTime();
+  return Math.round((t - Date.now()) / (1000 * 60 * 60 * 24));
 }
 
 function formatLongDateEs(value: string | Date): string {

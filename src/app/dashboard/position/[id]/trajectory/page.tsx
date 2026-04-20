@@ -132,7 +132,7 @@ export default async function TrajectoryPage({
 
         <header className="mb-6">
           <h1 className="text-2xl font-bold text-navy-950">
-            Trayectoria · {position.ticker}
+            Evolución · {position.ticker}
           </h1>
           <p className="mt-1 text-sm text-navy-600">
             Cada snapshot es una foto inmutable del momento. Compara dos para

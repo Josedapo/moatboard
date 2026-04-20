@@ -38,10 +38,13 @@ export default async function WatchlistPage() {
             {items.map((item) => (
               <div
                 key={item.id}
-                className="rounded-xl border border-navy-200 bg-white p-5"
+                className="rounded-xl border border-navy-200 bg-white hover:border-navy-400"
               >
-                <div className="flex items-start justify-between gap-4">
-                  <div className="flex-1">
+                <div className="flex items-start justify-between gap-4 p-5">
+                  <Link
+                    href={`/dashboard/watchlist/${item.ticker}`}
+                    className="flex-1"
+                  >
                     <div className="flex items-baseline gap-3">
                       <span className="text-lg font-semibold text-navy-900">
                         {item.ticker}
@@ -61,7 +64,7 @@ export default async function WatchlistPage() {
                         {item.reason_md}
                       </p>
                     )}
-                  </div>
+                  </Link>
                   <form action={reanalyzeTickerAction}>
                     <input type="hidden" name="ticker" value={item.ticker} />
                     <button

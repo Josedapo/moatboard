@@ -123,3 +123,109 @@ export async function deletePositionAction(formData: FormData) {
   await deletePosition(positionId, session.user.id);
   revalidatePath("/dashboard");
 }
+
+// ---------------------------------------------------------------------------
+// Review signals actions
+// ---------------------------------------------------------------------------
+
+// Mark a signal as reviewed. Optional note is free-text — today there's
+// no enforced "artefact minimum" so `reviewed` is honour-based. If the
+// inbox grows noisy we'll tighten it (e.g. floor signals require the
+// trajectory moat validation, material signals require note ≥ 20 chars).
+export async function markSignalReviewedAction(formData: FormData) {
+  const session = await auth();
+  if (!session?.user?.id) return;
+
+  const signalId = Number(formData.get("signalId"));
+  if (!Number.isFinite(signalId)) return;
+
+  const note = ((formData.get("note") as string) ?? "").trim() || null;
+
+  const { markSignalReviewed } = await import("@/lib/reviewSignals");
+  await markSignalReviewed({ signalId, userId: session.user.id, note });
+  revalidatePath("/dashboard");
+}
+
+// Restore a signal back to `new`. Typical uses: user clicked "Marcar
+// revisada" by mistake, or new context warrants revisiting a dismissed
+// signal. Revalidates the inbox path so the tab counts refresh.
+export async function reopenSignalAction(formData: FormData) {
+  const session = await auth();
+  if (!session?.user?.id) return;
+
+  const signalId = Number(formData.get("signalId"));
+  if (!Number.isFinite(signalId)) return;
+
+  const { reopenSignal } = await import("@/lib/reviewSignals");
+  await reopenSignal({ signalId, userId: session.user.id });
+  revalidatePath("/dashboard/inbox");
+  revalidatePath("/dashboard");
+}
+
+// Generate (or regenerate) the plain-language AI summary for a signal.
+// Explicitly user-triggered so the LLM spend is always a deliberate
+// decision. Result is cached on review_signals.summary_md and served
+// from DB on subsequent visits until the user clicks "Regenerar".
+//
+// Returns an object the client can use to update its local state
+// without a full page reload — cheaper feedback loop than revalidating
+// the whole dashboard or inbox.
+export async function summarizeSignalAction(formData: FormData): Promise<
+  | { ok: true; summaryMd: string; summarizedAt: string; model: string }
+  | { ok: false; error: string }
+> {
+  const session = await auth();
+  if (!session?.user?.id) {
+    return { ok: false, error: "No autenticado" };
+  }
+
+  const signalId = Number(formData.get("signalId"));
+  if (!Number.isFinite(signalId)) {
+    return { ok: false, error: "signalId inválido" };
+  }
+
+  try {
+    const { getSignalById, saveSignalSummary } = await import(
+      "@/lib/reviewSignals"
+    );
+    const signal = await getSignalById({
+      signalId,
+      userId: session.user.id,
+    });
+    if (!signal) {
+      return { ok: false, error: "Señal no encontrada" };
+    }
+    if (!signal.source_url) {
+      return {
+        ok: false,
+        error: "Esta señal no tiene un documento asociado.",
+      };
+    }
+
+    const { summariseFiling } = await import("@/lib/signalSummaryAi");
+    const { summary_md, model } = await summariseFiling({
+      ticker: signal.ticker,
+      source: signal.source,
+      eventType: signal.event_type,
+      sourceUrl: signal.source_url,
+    });
+
+    await saveSignalSummary({
+      signalId,
+      userId: session.user.id,
+      summaryMd: summary_md,
+      model,
+    });
+
+    revalidatePath("/dashboard/inbox");
+    return {
+      ok: true,
+      summaryMd: summary_md,
+      summarizedAt: new Date().toISOString(),
+      model,
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Error desconocido";
+    return { ok: false, error: msg };
+  }
+}

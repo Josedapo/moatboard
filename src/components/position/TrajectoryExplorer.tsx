@@ -408,7 +408,7 @@ export default function TrajectoryExplorer({
         <section className="rounded-2xl border border-navy-100 bg-white p-6 shadow-sm">
           <h2 className="text-sm font-semibold text-navy-900">Comparación</h2>
           <p className="mt-2 text-sm text-navy-600">
-            La trayectoria aparecerá con el próximo snapshot trimestral o la
+            La evolución aparecerá con el próximo snapshot trimestral o la
             próxima operación.
           </p>
         </section>
@@ -1687,7 +1687,7 @@ function CompromiseCard({
         <p className="text-sm text-navy-500">
           Aún no has definido un compromiso de salida para esta posición.
           Edítalo desde la ficha para tenerlo a la vista cuando revises la
-          trayectoria.
+          evolución.
         </p>
       </section>
     );

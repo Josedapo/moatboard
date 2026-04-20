@@ -20,6 +20,11 @@ export type Quote = {
   industry: string | null;
   website: string | null;
   longBusinessSummary: string | null;
+  // Next expected earnings date — extracted from yfinance calendarEvents.
+  // Returned as ISO string so it survives RSC serialization predictably.
+  // Null when yfinance doesn't publish it (some tickers / foreign
+  // companies). Shown in the dashboard "Próximas presentaciones" block.
+  nextEarningsDate: string | null;
 };
 
 export type Fundamentals = {
@@ -74,6 +79,7 @@ export async function fetchQuoteAndFundamentals(
         "financialData",
         "defaultKeyStatistics",
         "summaryDetail",
+        "calendarEvents",
       ],
     });
 
@@ -82,6 +88,16 @@ export async function fetchQuoteAndFundamentals(
     const fd = result.financialData;
     const ks = result.defaultKeyStatistics;
     const sd = result.summaryDetail;
+    // calendarEvents.earnings.earningsDate is an array of Dates (yfinance
+    // sometimes gives a single date, sometimes a range). First element is
+    // the next expected release. ISO string for predictable RSC
+    // serialisation. Null when yfinance doesn't surface it.
+    const ce = result.calendarEvents;
+    const earningsDates = ce?.earnings?.earningsDate;
+    const nextEarningsDate =
+      Array.isArray(earningsDates) && earningsDates.length > 0
+        ? new Date(earningsDates[0]).toISOString()
+        : null;
 
     const sharesOutstanding =
       price?.marketCap && price?.regularMarketPrice
@@ -103,6 +119,7 @@ export async function fetchQuoteAndFundamentals(
           industry: profile?.industry ?? null,
           website: profile?.website ?? null,
           longBusinessSummary: profile?.longBusinessSummary ?? null,
+          nextEarningsDate,
         }
       : null;
 

@@ -6,22 +6,30 @@ export type PositionTabId =
   | "razonamiento"
   | "negocio"
   | "calidad"
-  | "valoracion";
+  | "valoracion"
+  | "presentaciones";
 
+// The "razonamiento" id stays as-is internally to avoid rippling the
+// rename through callers; only the user-facing label changes.
 const TABS: Array<{ id: PositionTabId; label: string }> = [
-  { id: "razonamiento", label: "Razonamiento" },
+  { id: "razonamiento", label: "Overview" },
   { id: "negocio", label: "Negocio" },
   { id: "calidad", label: "Calidad" },
   { id: "valoracion", label: "Valoración" },
+  { id: "presentaciones", label: "Presentaciones" },
 ];
 
-// Client tab shell. The four panels are server-rendered upstream and passed
-// as a record; only the active panel is mounted in the DOM. Default active
-// tab is "razonamiento" (anti-trading: re-anchor before re-litigating).
+// Client tab shell. The five panels are server-rendered upstream and
+// passed as a record; only the active panel is mounted in the DOM.
+// Default active tab is "razonamiento" (anti-trading: re-anchor before
+// re-litigating). Optional per-tab badge prop carries an integer badge
+// (e.g. count of new signals for Presentaciones).
 export default function PositionTabs({
   panels,
+  badges,
 }: {
   panels: Record<PositionTabId, React.ReactNode>;
+  badges?: Partial<Record<PositionTabId, number>>;
 }) {
   const [active, setActive] = useState<PositionTabId>("razonamiento");
 
@@ -34,6 +42,7 @@ export default function PositionTabs({
       >
         {TABS.map((tab) => {
           const isActive = active === tab.id;
+          const badge = badges?.[tab.id];
           return (
             <button
               key={tab.id}
@@ -43,11 +52,22 @@ export default function PositionTabs({
               onClick={() => setActive(tab.id)}
               className={
                 isActive
-                  ? "-mb-px border-b-2 border-navy-900 px-4 py-2.5 text-sm font-semibold text-navy-900"
-                  : "-mb-px border-b-2 border-transparent px-4 py-2.5 text-sm font-medium text-navy-500 hover:text-navy-900"
+                  ? "-mb-px inline-flex items-center gap-1.5 border-b-2 border-navy-900 px-4 py-2.5 text-sm font-semibold text-navy-900"
+                  : "-mb-px inline-flex items-center gap-1.5 border-b-2 border-transparent px-4 py-2.5 text-sm font-medium text-navy-500 hover:text-navy-900"
               }
             >
-              {tab.label}
+              <span>{tab.label}</span>
+              {badge !== undefined && badge > 0 && (
+                <span
+                  className={
+                    isActive
+                      ? "inline-flex min-w-[18px] items-center justify-center rounded-full bg-amber-500 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white"
+                      : "inline-flex min-w-[18px] items-center justify-center rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-amber-800"
+                  }
+                >
+                  {badge > 99 ? "99+" : badge}
+                </span>
+              )}
             </button>
           );
         })}

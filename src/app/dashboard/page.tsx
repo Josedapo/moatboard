@@ -4,9 +4,13 @@ import { getPositionsByUserId } from "@/lib/positions";
 import { getCostBasis } from "@/lib/positionTransactions";
 import { fetchQuoteAndFundamentals } from "@/lib/financial";
 import { listTickerStates } from "@/lib/tickerStates";
+import { countNewSignalsByTicker } from "@/lib/reviewSignals";
 import { deletePositionAction } from "./actions";
 import DashboardNav from "@/components/DashboardNav";
 import AnalyzeEntryForm from "@/components/AnalyzeEntryForm";
+import UpcomingEarnings, {
+  type UpcomingEarning,
+} from "@/components/UpcomingEarnings";
 
 export const metadata = {
   title: "Dashboard",
@@ -18,11 +22,18 @@ export default async function Dashboard() {
     return null; // proxy will redirect
   }
 
-  const [positions, watchlist, discarded, outsideCircle] = await Promise.all([
+  const [
+    positions,
+    watchlist,
+    discarded,
+    outsideCircle,
+    signalCountsByTicker,
+  ] = await Promise.all([
     getPositionsByUserId(session.user.id),
     listTickerStates({ userId: session.user.id, status: "watchlist" }),
     listTickerStates({ userId: session.user.id, status: "discarded" }),
     listTickerStates({ userId: session.user.id, status: "outside_circle" }),
+    countNewSignalsByTicker(session.user.id),
   ]);
   const parkedCount = discarded.length + outsideCircle.length;
 
@@ -42,6 +53,36 @@ export default async function Dashboard() {
       };
     }),
   );
+
+  // Watchlist quotes — needed only for the earnings date; no cost basis,
+  // no fundamentals panel. Same upstream module so the extra request is
+  // identical in shape to the ones we already do.
+  const watchlistQuotes = await Promise.all(
+    watchlist.map(async (w) => {
+      const { quote } = await fetchQuoteAndFundamentals(w.ticker);
+      return { ticker: w.ticker, quote };
+    }),
+  );
+
+  // Build the "Próximas presentaciones" list — portfolio + watchlist,
+  // dropping tickers without a known earningsDate, ordered by date asc.
+  // Past dates still appear (negative daysAway) because the reported
+  // estimate hasn't been updated yet; the confirmation 8-K Item 2.02
+  // will promote them to a floor signal in the inbox when it lands.
+  const upcomingEarnings: UpcomingEarning[] = buildUpcomingEarnings({
+    portfolio: enriched.map(({ position, quote }) => ({
+      ticker: position.ticker,
+      positionId: position.id,
+      earningsDateIso: quote?.nextEarningsDate ?? null,
+      companyName: quote?.longName ?? quote?.shortName ?? null,
+    })),
+    watchlist: watchlistQuotes.map(({ ticker, quote }) => ({
+      ticker,
+      positionId: null,
+      earningsDateIso: quote?.nextEarningsDate ?? null,
+      companyName: quote?.longName ?? quote?.shortName ?? null,
+    })),
+  });
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -81,8 +122,14 @@ export default async function Dashboard() {
 
         <AnalyzeEntryForm />
 
+        <UpcomingEarnings entries={upcomingEarnings} />
+
         {enriched.length > 0 && (
-          <div className="space-y-3">
+          <>
+            <h2 className="mb-3 text-xs font-semibold uppercase tracking-widest text-navy-500">
+              Empresas en cartera
+            </h2>
+            <div className="space-y-3">
             {enriched.map(({ position: p, quote, costBasis }) => {
               const avgCost = costBasis.avg_cost_per_share;
               const currentPrice = quote?.regularMarketPrice ?? null;
@@ -115,6 +162,15 @@ export default async function Dashboard() {
                           {quote.longName}
                         </span>
                       )}
+                      {signalCountsByTicker[p.ticker] ? (
+                        <span
+                          className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-800 ring-1 ring-amber-300"
+                          title={`${signalCountsByTicker[p.ticker]} señales nuevas`}
+                        >
+                          {signalCountsByTicker[p.ticker]} nueva
+                          {signalCountsByTicker[p.ticker] === 1 ? "" : "s"}
+                        </span>
+                      ) : null}
                     </div>
                     <div className="mt-1 text-sm text-navy-500">
                       {avgCost !== null
@@ -148,7 +204,8 @@ export default async function Dashboard() {
                 </div>
               );
             })}
-          </div>
+            </div>
+          </>
         )}
       </main>
     </div>
@@ -161,4 +218,50 @@ function formatShares(shares: number): string {
   return shares
     .toFixed(4)
     .replace(/\.?0+$/, "");
+}
+
+// Builds the "Próximas presentaciones" list from portfolio + watchlist
+// entries. Drops tickers without a known earningsDate. Sorts by date
+// ascending (nearest first) so the next release is always at the top.
+// Lives as a top-level helper so `Date.now()` doesn't trip React 19's
+// purity rule from inside the server component render.
+type RawEarningsEntry = {
+  ticker: string;
+  positionId: number | null;
+  earningsDateIso: string | null;
+  companyName: string | null;
+};
+
+function buildUpcomingEarnings(input: {
+  portfolio: RawEarningsEntry[];
+  watchlist: RawEarningsEntry[];
+}): UpcomingEarning[] {
+  const now = Date.now();
+  const dayMs = 1000 * 60 * 60 * 24;
+  const result: UpcomingEarning[] = [];
+  const seen = new Set<string>();
+
+  for (const e of [...input.portfolio, ...input.watchlist]) {
+    if (!e.earningsDateIso) continue;
+    if (seen.has(e.ticker)) continue; // portfolio wins over watchlist
+    seen.add(e.ticker);
+
+    const ms = new Date(e.earningsDateIso).getTime();
+    if (!Number.isFinite(ms)) continue;
+    const daysAway = Math.round((ms - now) / dayMs);
+
+    result.push({
+      ticker: e.ticker,
+      companyName: e.companyName,
+      positionId: e.positionId,
+      earningsDate: e.earningsDateIso,
+      daysAway,
+    });
+  }
+
+  result.sort(
+    (a, b) =>
+      new Date(a.earningsDate).getTime() - new Date(b.earningsDate).getTime(),
+  );
+  return result;
 }
