@@ -24,7 +24,7 @@ export default function ScorecardCard({
           <span className="truncate text-[10px] font-medium uppercase tracking-wide text-navy-500">
             {label}
           </span>
-          <span className="text-sm font-semibold tabular-nums text-navy-900">
+          <span className="whitespace-nowrap text-sm font-semibold tabular-nums text-navy-900">
             {value}
           </span>
         </div>

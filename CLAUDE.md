@@ -22,28 +22,49 @@ src/
 │   ├── auth/signin/page.tsx           # Google sign-in
 │   ├── api/auth/[...nextauth]/route.ts # NextAuth handlers (runtime: nodejs)
 │   └── dashboard/
-│       ├── page.tsx                   # Portfolio list (filters out draft positions; avg cost + shares from transaction log)
-│       ├── actions.ts                 # startAnalysisAction, deletePositionAction
+│       ├── page.tsx                   # Portfolio list (filters by net shares > 0; counters for watchlist/parked)
+│       ├── actions.ts                 # startAnalysisAction (with prior-state reminder), reanalyzeTickerAction, deletePositionAction
+│       ├── watchlist/page.tsx         # Tickers parked in watchlist + Re-analyze per row
+│       ├── history/page.tsx           # Discarded + Outside circle tickers; "Was held" badge → "Open ficha →" for closed positions
 │       ├── analyze/[ticker]/
-│       │   ├── page.tsx               # Wizard dispatch (reads analysis_sessions.current_step, renders corresponding Step*)
+│       │   ├── page.tsx               # Wizard dispatch (reads analysis_sessions.current_step, renders corresponding Step*) — 5 steps after business_type was consolidated into Quality
 │       │   └── actions.ts             # advanceStepAction, navigateToStepAction, decide{Invest,Watchlist,Discard}, markOutsideCircleAction, askFollowupAction, regenerate{Understanding,RedFlags}Action, exit/restart
 │       └── position/[id]/
-│           ├── page.tsx               # Position detail (auto-runs analysis + valuation + quarterly snapshot check)
-│           └── actions.ts             # runAnalysisAction, runValuationAction, thesis actions, etc.
+│           ├── page.tsx               # Tabbed position detail (Razonamiento / Negocio / Calidad / Valoración) + chrome (header w/ 52w mini-bar, Decision context strip, "Ver trayectoria" outline button)
+│           ├── actions.ts             # runAnalysisAction, runValuationAction, thesis actions, updatePositionPreCommitmentAction, addOperationAction
+│           └── trajectory/
+│               ├── page.tsx           # Full trajectory view — builds synthetic "hoy" pseudo-snapshot (id=-1), loads preloaded moat validations, renders TrajectoryExplorer
+│               └── actions.ts         # revalidateMoatAction — writes to moat_validations table, does NOT touch moat_assessments cache
 ├── components/                        # All UI components (mix of Server + Client)
-│   ├── AnalyzeEntryForm.tsx           # Dashboard entry: ticker input → startAnalysisAction → wizard
+│   ├── AnalyzeEntryForm.tsx           # Dashboard entry: ticker input → startAnalysisAction → wizard. Renders prior-state reminder + Re-analyze anyway button when re-introducing a parked ticker.
+│   ├── DashboardNav.tsx               # Server nav frame
+│   ├── DashboardNavLinks.tsx          # Client links (Portfolio · Watchlist · History) with active state via usePathname
 │   ├── MoatboardAnalysis.tsx          # Scorecard UI (accepts `hideRegenerate` for wizard use)
-│   ├── Valuation.tsx                  # Valuation toolkit UI (accepts `hideRegenerate` for wizard use)
-│   ├── Thesis.tsx                     # AI/user thesis UI
-│   └── analysis/                      # Wizard-specific components
-│       ├── WizardShell.tsx            # Step indicator (past steps clickable via furthest_step tracking) + exit/restart
-│       ├── StepUnderstanding.tsx      # AI Spanish summary + Q&A + FollowupChat + checkpoint
-│       ├── StepRedFlags.tsx           # AI Spanish red flags grouped by severity
-│       ├── StepBusinessType.tsx       # Eagerly runs scorecard; lists scored + not-applicable dimensions
-│       ├── StepQuality.tsx            # Reuses MoatboardAnalysis; gates <5 dims
-│       ├── StepValuation.tsx          # Reuses ValuationSection with the guide
-│       ├── StepDecision.tsx           # Three terminal forms (Invest / Watchlist / Discard)
-│       └── FollowupChat.tsx           # Client-only chat input for understanding follow-ups
+│   ├── Valuation.tsx                  # Valuation toolkit UI (recommended tools visible by default; rest in <details>; Reading Signal filtered to recommended)
+│   ├── Thesis.tsx                     # AI/user thesis UI (still in repo; not currently rendered on the position page after the 2026-04-20 redesign)
+│   ├── BusinessDescription.tsx        # Stateless paragraph splitter for Yahoo summary
+│   ├── analysis/                      # Wizard-specific components
+│   │   ├── WizardShell.tsx            # Step indicator (5 steps; past steps clickable via furthest_step tracking) + exit/restart
+│   │   ├── StepUnderstanding.tsx      # Wraps shared/BusinessUnderstandingView; checkpoint (Sí entiendo / Con dudas / No lo entiendo)
+│   │   ├── StepRedFlags.tsx           # Wraps shared/RedFlagsList; "Continuar al análisis de calidad" + "Saltar a la decisión"
+│   │   ├── BusinessTypeHeader.tsx     # Compact pill + chips renderered at the top of StepQuality (no longer its own step)
+│   │   ├── StepQuality.tsx            # Renders BusinessTypeHeader + MoatboardAnalysis; "Continue to valuation" + "Skip to decision"; gates <5 dims
+│   │   ├── StepValuation.tsx          # Reuses ValuationSection with the guide
+│   │   ├── StepDecision.tsx           # Invest form captures position_pre_commitment (optional) + operation_note (optional) + price/shares/date; Watchlist + Discard
+│   │   └── FollowupChat.tsx           # Client-only chat input for understanding follow-ups
+│   ├── position/                      # Position-page-specific components
+│   │   ├── PositionTabs.tsx           # Client tab shell (Razonamiento / Negocio / Calidad / Valoración) — useState, panels rendered server-side
+│   │   ├── PositionPreCommitment.tsx  # Client. Compromiso de salida block with inline edit; navy left-border accent + blockquote body
+│   │   ├── PositionSummary.tsx        # KPI strip: Shares · Avg cost · Invested · Now · Unrealized (only P&L is colored)
+│   │   ├── AddOperationForm.tsx       # Client. Inline expand form for Add/Sell on live positions; calls addOperationAction
+│   │   ├── DecisionContextStrip.tsx   # Server. Conditional banner (re-bought after discard / invested with doubts / understanding regenerated since buy)
+│   │   ├── TrajectoryExplorer.tsx     # Client. Full /trajectory surface — vertical selector (HOY + COMPRA + intermediates), Compromiso card, Calidad (TierInline + MoatValidationPanel + DimensionComparison), Valoración (RangeBar per primary/secondary tool)
+│   │   ├── MoatValidationPanel.tsx    # Client. Runs comparative moat validation via IA, hydrates from preloaded moat_validations, 4 verdict states (intact/expanding/compressing/dissolved)
+│   │   └── FiftyTwoWeekBar.tsx        # Compact 52w min/max bar with current marker — replaces the text line in the header
+│   └── shared/                        # Pure presentational components reused across wizard + position page
+│       ├── BusinessUnderstandingView.tsx  # Spanish 5-section summary + pre-Q&A accordions + user follow-ups
+│       ├── RedFlagsList.tsx               # Severity-grouped flag cards + summarizeFlagsBySeverity helper
+│       └── TransactionOperationNotesList.tsx  # Operation log: type + date + shares @ price + per-tx note (the column was historically pre_commitment_md; semantics now = operation note)
 ├── lib/                               # Domain logic, DB, AI, pure functions
 │   ├── db.ts                          # Neon serverless client
 │   ├── schema.sql                     # Source of truth for DB schema
@@ -52,6 +73,9 @@ src/
 │   ├── verdict.ts                     # Formulaic tier computation + reason templates (pure)
 │   ├── moats.ts                       # CRUD for moat_assessments
 │   ├── moatAi.ts                      # AI moat assessment (Spanish reasoning)
+│   ├── moatValidations.ts             # CRUD for moat_validations (per-snapshot history written from /trajectory)
+│   ├── moatValidationAi.ts            # AI comparative moat validation (intact/expanding/compressing/dissolved verdict)
+│   ├── snapshotDiff.ts                # Pure types + diffSnapshots() — extracted from snapshots.ts so Client Components can import without bundling the Neon driver
 │   ├── verdictAi.ts                   # AI prose composition for verdict_reason (Spanish)
 │   ├── analysis.ts                    # Orchestrator: runAnalysis() ties scorecard + moat + tier + prose
 │   ├── moatboardAnalyses.ts           # CRUD for moatboard_analyses
@@ -94,14 +118,15 @@ The script DROPs legacy tables (`theses`, `moatboard_analyses` when their CHECK 
 
 Tables:
 - `users`, `accounts`, `sessions`, `verification_token` — NextAuth (Neon adapter)
-- `positions` — user portfolio entries (just `user_id`, `ticker`, `created_at`). Purchase price / date live in `position_transactions`. Dashboard filters by `EXISTS transactions` to hide draft positions created by the wizard.
-- `position_transactions` — log of `buy`/`add`/`trim`/`sell` per position. Each row has `transaction_date`, `price`, `shares`, and optional `pre_commitment_md` (the "what would make me change my mind" string captured at that specific transaction). Cost basis is derived (`getCostBasis`).
+- `positions` — user portfolio entries (`user_id`, `ticker`, `pre_commitment_md`, `pre_commitment_edited_at`, `created_at`). `pre_commitment_md` is the position-level "compromiso de salida" — what would make Joseda lose confidence in this investment. Editable, optional. Cost basis lives in `position_transactions`. Dashboard filters by **net shares > 0** (sum of buys+adds − trims−sells) so closed positions and drafts both disappear from Portfolio automatically.
+- `position_transactions` — log of `buy`/`add`/`trim`/`sell` per position (Trim retired from UI 2026-04-20; CHECK still allows it for legacy rows). Each row has `transaction_date`, `price`, `shares`, and optional `pre_commitment_md`. **Semantics shifted 2026-04-20:** the column is now the **operation note** ("why this op"), not a per-transaction pre-commitment. Column name kept for back-compat. Cost basis derived (`getCostBasis`).
 - `fundamentals_snapshots` — immutable frozen frames, per-user per-ticker. `trigger` ∈ `transaction` / `quarterly_10q` / `annual_10k`. Stores tier, scorecard_summary, multi_year, moat JSONB, valuation method + IVs + assumptions + guide, business_understanding_version, thesis_snapshot, current_price, sec_filing_accession. Partial unique index on `(user_id, ticker, sec_filing_accession) WHERE sec_filing_accession IS NOT NULL` prevents duplicating a filing's snapshot.
 - `business_understanding` — AI-generated plain-language summary per ticker, versioned. PK `(ticker, version)`. Regeneration archives the previous row (`archived_at`). Stores `summary_md` (JSON-serialized section list), `questions_and_answers` (pregenerated + user follow-ups), `sources`.
 - `qualitative_red_flags` — per-ticker AI-extracted red flags (`flags` JSONB by category + severity). Tracks `last_10k_accession` for invalidation.
-- `ticker_states` — per-user ticker lifecycle: `in_portfolio` / `watchlist` / `discarded` / `outside_circle`. Carries `reason_md` + `review_when`.
-- `analysis_sessions` — wizard state per `(user_id, ticker)`. `current_step` (viewing now) + `furthest_step` (deepest reached — drives backward navigation in the step indicator). `outcome` + `completed_at` on terminal decisions. Partial unique index enforces one active session per ticker.
-- `moat_assessments` — **per-ticker, shared across users**, AI-evaluated, TTL 365 days. Reasoning now in Spanish.
+- `ticker_states` — per-user ticker lifecycle: `in_portfolio` / `watchlist` / `discarded` / `outside_circle`. Carries `reason_md` + `review_when` + `prior_reason_on_invest_md` (preserves the previous reason when a ticker that was discarded/watchlisted is re-bought, surfaced by `DecisionContextStrip`). Sell-to-zero auto-flips to `discarded`; Add on a closed position auto-resurrects to `in_portfolio`.
+- `analysis_sessions` — wizard state per `(user_id, ticker)`. `current_step` ∈ `understanding`/`red_flags`/`quality`/`valuation`/`decision`/`completed` (5 active steps; `business_type` was removed 2026-04-20 when it consolidated into `quality`). `furthest_step` drives backward navigation. `outcome` + `completed_at` on terminal decisions. Partial unique index enforces one active session per ticker.
+- `moat_assessments` — **per-ticker, shared across users**, AI-evaluated, TTL 365 days. Reasoning now in Spanish. **Never written from the trajectory view** — that path uses `moat_validations` to avoid invisible side-effects on the main ficha + other users + future snapshots.
+- `moat_validations` — **per-user, per-snapshot** comparative moat validations (the output of the trajectory "Validar con IA" button). Each row is immutable; multiple validations against the same `from_snapshot_id` are allowed so the table doubles as a revalidation history. Carries the verdict (`intact` / `expanding` / `compressing` / `dissolved`), the original moat at the moment of validation, and the fresh moat read. Created 2026-04-20 via additive migration `scripts/add-moat-validations-table.mjs`.
 - `valuation_guides` — **per-ticker, shared across users**, AI-generated advice on which valuation tools matter most (primary/secondary/cautious + reasoning). Reasoning in Spanish. TTL 365 days.
 - `moatboard_analyses` — per-position verdict (tier, verdict_reason, scorecard_summary, moat snapshot). Verdict prose now in Spanish.
 - `valuations` — per-position IV + MoS (method, intrinsic_value range, current_price, dcf_tier, relative_tier, compound tier, assumptions JSONB including RelativeValuationSnapshot). `method` CHECK constraint allows `'dcf' | 'affo_dcf' | 'excess_returns' | 'ai_multiples'`. Note: the compound `tier`, `dcf_tier` and `relative_tier` columns are legacy — still persisted but no longer read by the UI (see philosophy-review drift M correction, 2026-04-16). The per-method `assumptions` shape differs (owner-earnings DCF, AFFO DCF, Excess Returns, AI multiples)

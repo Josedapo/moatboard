@@ -114,6 +114,43 @@ CREATE TABLE IF NOT EXISTS moat_assessments (
   evaluated_with_model VARCHAR(50) NOT NULL DEFAULT 'claude-sonnet-4-6'
 );
 
+-- Per-user, per-snapshot comparative moat validations. Each row answers
+-- "is the moat registered in this snapshot still in force?" and is the
+-- output of the trajectory-screen "Validar con IA" button. Deliberately
+-- kept OUT of moat_assessments so exploratory revalidations from the
+-- trajectory don't silently mutate the ticker-wide cache that the main
+-- position card and future quarterly snapshots read from. Multiple rows
+-- per (user, snapshot) are allowed — the log doubles as revalidation
+-- history.
+CREATE TABLE IF NOT EXISTS moat_validations (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  position_id INTEGER NOT NULL REFERENCES positions(id) ON DELETE CASCADE,
+  ticker VARCHAR(10) NOT NULL,
+  -- The snapshot supplying the "original" moat being revalidated.
+  from_snapshot_id INTEGER NOT NULL REFERENCES fundamentals_snapshots(id) ON DELETE CASCADE,
+  -- Copy of the original moat for immutability. If moat_assessments ever
+  -- gets overwritten elsewhere, this row still shows what the validation
+  -- was comparing against.
+  original_archetype VARCHAR(30) NOT NULL,
+  original_strength VARCHAR(10) NOT NULL,
+  original_reasoning TEXT NOT NULL,
+  original_recorded_at TIMESTAMPTZ NOT NULL,
+  -- The AI's verdict and fresh moat read.
+  verdict VARCHAR(15) NOT NULL CHECK (verdict IN ('intact', 'expanding', 'compressing', 'dissolved')),
+  new_archetype VARCHAR(30) NOT NULL CHECK (new_archetype IN (
+    'brand', 'network_effects', 'switching_costs', 'scale',
+    'ip', 'regulatory', 'cost_advantage', 'none'
+  )),
+  new_strength VARCHAR(10) NOT NULL CHECK (new_strength IN ('strong', 'weak', 'unclear')),
+  reasoning TEXT NOT NULL,
+  validated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  validated_with_model VARCHAR(50) NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS moat_validations_from_snapshot_idx ON moat_validations(from_snapshot_id);
+CREATE INDEX IF NOT EXISTS moat_validations_position_idx ON moat_validations(position_id);
+
 -- Moatboard's verdict on the business (one row per position, overwritten on regeneration)
 CREATE TABLE IF NOT EXISTS moatboard_analyses (
   id SERIAL PRIMARY KEY,

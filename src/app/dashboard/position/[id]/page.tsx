@@ -13,7 +13,6 @@ import {
 import { ensureAnalysis, ensureValuation } from "@/lib/positionFlow";
 import { ensureValuationGuide } from "@/lib/valuationGuides";
 import { ensureQuarterlySnapshots } from "@/lib/snapshotFlow";
-import { listSnapshotsForPosition } from "@/lib/snapshots";
 import {
   regenerateUnderstandingAction,
   regenerateRedFlagsAction,
@@ -41,7 +40,6 @@ import RedFlagsList, {
   summarizeFlagsBySeverity,
 } from "@/components/shared/RedFlagsList";
 import DecisionContextStrip from "@/components/position/DecisionContextStrip";
-import SnapshotTrajectoryRail from "@/components/position/SnapshotTrajectoryRail";
 import PositionTabs, {
   type PositionTabId,
 } from "@/components/position/PositionTabs";
@@ -122,11 +120,6 @@ export default async function PositionDetail({
     : null;
   const valuationError = valuationResult.ok ? null : valuationResult.error;
 
-  // Fetch snapshots AFTER ensureQuarterlySnapshots so the list reflects any
-  // freshly-created quarterly frame. listSnapshotsForPosition returns ascending
-  // (oldest → newest); the trajectory rail picks the latest from the array.
-  const snapshots = await listSnapshotsForPosition(positionId);
-
   // Fetch the AI-generated valuation guide AFTER the valuation is known —
   // we need the relative snapshot to tell the guide whether P/B is available
   // for this ticker. The call is cached per ticker (TTL 365d), so only the
@@ -163,7 +156,6 @@ export default async function PositionDetail({
     );
   }
 
-  const avgCost = costBasis.avg_cost_per_share;
   const currentPrice = quote?.regularMarketPrice ?? null;
 
   return (
@@ -171,12 +163,20 @@ export default async function PositionDetail({
       <DashboardNav />
 
       <main className="mx-auto w-full max-w-5xl flex-1 px-6 py-8">
-        <Link
-          href="/dashboard"
-          className="mb-6 inline-block text-sm text-navy-600 hover:text-navy-900"
-        >
-          &larr; Back to portfolio
-        </Link>
+        <div className="mb-6 flex items-center justify-between gap-3">
+          <Link
+            href="/dashboard"
+            className="text-sm text-navy-600 hover:text-navy-900"
+          >
+            &larr; Back to portfolio
+          </Link>
+          <Link
+            href={`/dashboard/position/${positionId}/trajectory`}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-navy-200 bg-white px-3 py-1.5 text-sm font-medium text-navy-700 shadow-sm hover:border-navy-300 hover:bg-navy-50 hover:text-navy-900"
+          >
+            Ver trayectoria &rarr;
+          </Link>
+        </div>
 
         {/* Header */}
         <header className="mb-6 rounded-2xl border border-navy-100 bg-white p-6 shadow-sm">
@@ -240,16 +240,6 @@ export default async function PositionDetail({
             context={decisionContext}
           />
         )}
-
-        {/* Snapshot trajectory rail — page-level "since last snapshot" pulse.
-            Lives above the tabs because it crosses Quality + Valuation +
-            Price — pertenece al chrome, no a una pestaña. */}
-        <SnapshotTrajectoryRail
-          positionId={positionId}
-          snapshots={snapshots}
-          avgCost={avgCost}
-          currentPrice={currentPrice}
-        />
 
         <PositionTabs
           panels={buildPanels({
