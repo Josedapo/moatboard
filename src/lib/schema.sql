@@ -48,17 +48,38 @@ CREATE TABLE IF NOT EXISTS users (
 );
 
 -- Moatboard domain tables
+--
+-- A `position` is the user's ownership of a ticker (0-to-many transactions below).
+-- Purchase price/date moved to `position_transactions` on 2026-04-19 to support
+-- multiple buys/adds/trims/sells per ticker. Cost basis is derived from the
+-- transaction log, not stored here.
 CREATE TABLE IF NOT EXISTS positions (
   id SERIAL PRIMARY KEY,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   ticker VARCHAR(10) NOT NULL,
-  purchase_price NUMERIC(12, 4) NOT NULL,
-  purchase_date DATE NOT NULL,
+  -- "What would have to happen for me to lose confidence in this investment?"
+  -- Position-level commitment, not per-transaction. Optional at first buy
+  -- (can be added later from the position page). Anchors anti-trading
+  -- behaviour during price drama. See position_transactions.pre_commitment_md
+  -- for the per-operation note (different concept).
+  pre_commitment_md TEXT,
+  pre_commitment_edited_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (user_id, ticker)
 );
 
 CREATE INDEX IF NOT EXISTS idx_positions_user_id ON positions(user_id);
+
+-- Legacy columns removed 2026-04-19. The ALTERs are kept idempotent so existing
+-- DBs migrate safely; new DBs never see these columns (they're excluded from
+-- the CREATE TABLE above).
+ALTER TABLE positions DROP COLUMN IF EXISTS purchase_price;
+ALTER TABLE positions DROP COLUMN IF EXISTS purchase_date;
+
+-- Backfill on existing DBs (additive — no migration risk).
+ALTER TABLE positions ADD COLUMN IF NOT EXISTS pre_commitment_md TEXT;
+ALTER TABLE positions ADD COLUMN IF NOT EXISTS pre_commitment_edited_at TIMESTAMPTZ;
 
 -- Valuation guide: AI-generated suggestion of which valuation tools matter
 -- most for a given business type (bank → P/B primary; SaaS → P/FCF primary;
@@ -138,16 +159,23 @@ CREATE TABLE IF NOT EXISTS valuations (
   generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- User's thesis (one row per position; either user-written free-form or AI-generated structured)
+-- User's thesis (one row per position; either user-written free-form or AI-generated structured).
+-- `pre_commitment_md` is the user's own answer to "what would make me change my mind about owning this?".
+-- It's set at decision time (invest / watchlist) and persists across the life of the position. Individual
+-- transactions have their own `pre_commitment_md` (per-buy context); this one is the enduring thesis-level
+-- commitment that anchors behavior when price moves.
 CREATE TABLE IF NOT EXISTS theses (
   id SERIAL PRIMARY KEY,
   position_id INTEGER NOT NULL UNIQUE REFERENCES positions(id) ON DELETE CASCADE,
   source VARCHAR(10) NOT NULL CHECK (source IN ('user', 'ai')),
   raw_text TEXT NOT NULL,
   structured_content JSONB,
+  pre_commitment_md TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   edited_at TIMESTAMPTZ
 );
+
+ALTER TABLE theses ADD COLUMN IF NOT EXISTS pre_commitment_md TEXT;
 
 CREATE TABLE IF NOT EXISTS monthly_reviews (
   id SERIAL PRIMARY KEY,
@@ -177,7 +205,9 @@ CREATE TABLE IF NOT EXISTS sec_ticker_cik (
 --
 -- raw_facts holds the unmodified companyfacts payload so we can re-parse
 -- with an updated mapping rule without re-hitting SEC.
--- parsed_annual will be populated in Session 2 (parser); left nullable here.
+-- parsed_annual is the 10-K / 20-F annual history (10-18 years typical).
+-- parsed_quarterly (added 2026-04-19) is the 10-Q trail needed to detect new
+-- quarterly filings and drive automatic quarterly snapshots of fundamentals.
 -- parse_notes traces which tag each field came from (debug aid).
 CREATE TABLE IF NOT EXISTS sec_fundamentals_cache (
   ticker TEXT PRIMARY KEY,
@@ -187,10 +217,252 @@ CREATE TABLE IF NOT EXISTS sec_fundamentals_cache (
   status TEXT NOT NULL CHECK (status IN ('ok', 'no_cik', 'fetch_error', 'parse_error')),
   raw_facts JSONB,
   parsed_annual JSONB,
+  parsed_quarterly JSONB,
   years_available INT,
+  quarters_available INT,
   earliest_year INT,
   latest_year INT,
+  latest_quarter_accession TEXT,
+  latest_quarter_period_end DATE,
+  latest_quarter_form TEXT,
+  latest_quarter_filed DATE,
   parse_notes JSONB
 );
 
 CREATE INDEX IF NOT EXISTS idx_sec_fundamentals_cik ON sec_fundamentals_cache(cik);
+
+-- Backfill columns on existing DBs.
+ALTER TABLE sec_fundamentals_cache ADD COLUMN IF NOT EXISTS parsed_quarterly JSONB;
+ALTER TABLE sec_fundamentals_cache ADD COLUMN IF NOT EXISTS quarters_available INT;
+ALTER TABLE sec_fundamentals_cache ADD COLUMN IF NOT EXISTS latest_quarter_accession TEXT;
+ALTER TABLE sec_fundamentals_cache ADD COLUMN IF NOT EXISTS latest_quarter_period_end DATE;
+ALTER TABLE sec_fundamentals_cache ADD COLUMN IF NOT EXISTS latest_quarter_form TEXT;
+ALTER TABLE sec_fundamentals_cache ADD COLUMN IF NOT EXISTS latest_quarter_filed DATE;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- Analysis flow redesign (Phase 1, 2026-04-19)
+--
+-- The original UI was "add ticker → auto-analyze everything → render three
+-- sections on one page". The redesign turns the analysis into a stepped flow:
+--   understanding → red_flags → quality → valuation → decision
+-- with three final outcomes (invest / watchlist / discarded) plus an exit ramp
+-- at the understanding step (outside_circle). Every step persists state so the
+-- user can resume a session and never re-analyzes a ticker blindly.
+--
+-- At the moment of deciding "invest" (or adding to an existing position) the
+-- system stores an immutable snapshot of the quality scorecard + valuation +
+-- thesis. Automatic quarterly snapshots fire when a new 10-Q/10-K is detected.
+-- Together these form the trajectory that makes monthly review possible and
+-- that anchors decisions to the state of the business, not to price moves.
+-- ─────────────────────────────────────────────────────────────────────────────
+
+-- Business understanding: plain-language explanation of what the company does,
+-- how it makes money, who pays, how it reinvests, etc. Generated by Claude
+-- from the 10-K (Item 1: Business) + the latest earnings call. Each ticker
+-- accumulates versions over time; regeneration archives the previous version
+-- and creates a new row (version = old_version + 1). The "current" version
+-- is simply the row with the highest version for that ticker.
+--
+-- Per-ticker, shared across users (the nature of a business does not depend
+-- on the user looking at it). `questions_and_answers` stores the 5-7 AI-
+-- pregenerated Q&A plus any user follow-up answers kept for later review.
+-- `sources` is an array of {url, label, type: '10k'|'10q'|'earnings_call'|'other'}.
+CREATE TABLE IF NOT EXISTS business_understanding (
+  ticker VARCHAR(10) NOT NULL,
+  version INTEGER NOT NULL,
+  summary_md TEXT NOT NULL,
+  questions_and_answers JSONB NOT NULL DEFAULT '[]'::jsonb,
+  sources JSONB NOT NULL DEFAULT '[]'::jsonb,
+  generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  generated_with_model VARCHAR(50) NOT NULL DEFAULT 'claude-sonnet-4-6',
+  archived_at TIMESTAMPTZ,
+  PRIMARY KEY (ticker, version)
+);
+
+CREATE INDEX IF NOT EXISTS idx_business_understanding_ticker_version
+  ON business_understanding(ticker, version DESC);
+
+-- Qualitative red flags extracted from the latest 10-K: changes of auditor,
+-- CEO/CFO turnover, material litigation, restructuring, going-concern doubts.
+-- Per-ticker, shared across users, single row (latest 10-K only).
+-- `last_10k_accession` is the SEC accession number of the 10-K the flags
+-- were extracted from. When a new 10-K is detected we regenerate.
+CREATE TABLE IF NOT EXISTS qualitative_red_flags (
+  ticker VARCHAR(10) PRIMARY KEY,
+  flags JSONB NOT NULL,
+  last_10k_accession TEXT,
+  last_10k_period_end DATE,
+  generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  generated_with_model VARCHAR(50) NOT NULL DEFAULT 'claude-sonnet-4-6'
+);
+
+-- Ticker state, per-user: where does this ticker sit in the user's workflow?
+-- Status values:
+--   · 'in_portfolio'    — user owns at least one share (has a positions row + buy transaction)
+--   · 'watchlist'       — user wants to revisit later; `review_when` captures the trigger
+--   · 'discarded'       — user looked at it and decided against investing; `reason_md` explains why
+--   · 'outside_circle'  — user admitted they don't understand the business well enough to evaluate
+--                         (exit ramp at the understanding step); `reason_md` captures the gap
+--
+-- When a ticker is re-introduced to the analysis flow, an existing row here
+-- surfaces context ("you analyzed this on 2026-03-10 and discarded because X")
+-- so the user doesn't re-analyze blindly.
+CREATE TABLE IF NOT EXISTS ticker_states (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  ticker VARCHAR(10) NOT NULL,
+  status VARCHAR(20) NOT NULL CHECK (status IN (
+    'in_portfolio', 'watchlist', 'discarded', 'outside_circle'
+  )),
+  reason_md TEXT,
+  review_when TEXT,
+  -- When a ticker that was previously discarded / on watchlist / outside
+  -- circle gets bought, the prior reason_md is preserved here so the position
+  -- page can surface "you had discarded this on YYYY-MM-DD because X before
+  -- changing your mind". Otherwise NULL.
+  prior_reason_on_invest_md TEXT,
+  last_touched_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (user_id, ticker)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ticker_states_user_id ON ticker_states(user_id);
+CREATE INDEX IF NOT EXISTS idx_ticker_states_user_status ON ticker_states(user_id, status);
+
+-- Backfill on existing DBs (additive — no migration risk).
+ALTER TABLE ticker_states ADD COLUMN IF NOT EXISTS prior_reason_on_invest_md TEXT;
+
+-- Analysis session: persisted state of a walk through the stepped flow so the
+-- user can resume. At most one active session per (user, ticker) — enforced
+-- by the partial unique index below. When the session completes, `completed_at`
+-- and `outcome` are populated; the row stays for history.
+-- `current_step` is where the user is viewing now. `furthest_step` is the
+-- deepest step they've reached — needed because the step indicator lets the
+-- user click back to review prior steps without losing access to the ones
+-- they'd already completed further down the line.
+CREATE TABLE IF NOT EXISTS analysis_sessions (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  ticker VARCHAR(10) NOT NULL,
+  current_step VARCHAR(20) NOT NULL CHECK (current_step IN (
+    'understanding', 'red_flags', 'quality', 'valuation',
+    'decision', 'completed'
+  )),
+  furthest_step VARCHAR(20) NOT NULL DEFAULT 'understanding' CHECK (furthest_step IN (
+    'understanding', 'red_flags', 'quality', 'valuation',
+    'decision', 'completed'
+  )),
+  started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  last_active_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  completed_at TIMESTAMPTZ,
+  outcome VARCHAR(20) CHECK (outcome IS NULL OR outcome IN (
+    'invested', 'watchlist', 'discarded', 'outside_circle', 'abandoned'
+  )),
+  business_understanding_version INTEGER,
+  understood_flag VARCHAR(15) CHECK (understood_flag IS NULL OR understood_flag IN (
+    'understood', 'doubts_resolved', 'not_understood'
+  ))
+);
+
+-- Backfill on existing DBs.
+ALTER TABLE analysis_sessions ADD COLUMN IF NOT EXISTS furthest_step VARCHAR(20)
+  NOT NULL DEFAULT 'understanding';
+
+CREATE INDEX IF NOT EXISTS idx_analysis_sessions_user_ticker
+  ON analysis_sessions(user_id, ticker);
+
+-- Only one active session per (user, ticker) — completed sessions are free to coexist.
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_active_analysis_session
+  ON analysis_sessions(user_id, ticker)
+  WHERE completed_at IS NULL;
+
+-- Position transactions: log of every buy / add / trim / sell on a position.
+-- Replaces the single purchase_price + purchase_date that used to live on the
+-- positions row. Cost basis and current shares are derived by aggregating this
+-- log (at most ~dozens of rows per ticker, trivial to sum). `pre_commitment_md`
+-- captures the "what would make me change my mind" at the moment of the
+-- specific transaction — separate from the enduring thesis-level commitment
+-- (which lives on theses.pre_commitment_md).
+CREATE TABLE IF NOT EXISTS position_transactions (
+  id SERIAL PRIMARY KEY,
+  position_id INTEGER NOT NULL REFERENCES positions(id) ON DELETE CASCADE,
+  type VARCHAR(10) NOT NULL CHECK (type IN ('buy', 'add', 'trim', 'sell')),
+  transaction_date DATE NOT NULL,
+  price NUMERIC(14, 4) NOT NULL,
+  shares NUMERIC(16, 6) NOT NULL,
+  pre_commitment_md TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_position_transactions_position_id
+  ON position_transactions(position_id);
+CREATE INDEX IF NOT EXISTS idx_position_transactions_date
+  ON position_transactions(position_id, transaction_date);
+
+-- Fundamentals snapshots: immutable frozen frames of quality + valuation for a
+-- specific (user, ticker) at a specific moment. Per-user because each snapshot
+-- binds to a transaction (purchase price, thesis in force) or to a user's
+-- position. Snapshots are never updated — if a calculation bug is fixed later,
+-- old snapshots keep reflecting what the user saw at the time of decision.
+--
+-- `trigger` distinguishes:
+--   · 'transaction'    — fired by a buy/add/trim/sell (transaction_id set)
+--   · 'quarterly_10q'  — fired by the detection of a new 10-Q filing
+--   · 'annual_10k'     — fired by the detection of a new 10-K filing
+--
+-- For 'transaction' snapshots, `sec_filing_accession` is NULL (they're anchored
+-- to the transaction, not a filing). For quarterly/annual, it's the SEC
+-- accession number of the filing that triggered it. The partial unique index
+-- below prevents generating the same quarterly snapshot twice for the same
+-- filing — NULL accessions are not enforced by this constraint, which is what
+-- we want (transactions can coexist freely).
+--
+-- Most scorecard/valuation inputs are persisted as JSONB for flexibility:
+-- scoring thresholds may evolve over time, but the snapshot should keep the
+-- numbers as they were scored on that day.
+CREATE TABLE IF NOT EXISTS fundamentals_snapshots (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  ticker VARCHAR(10) NOT NULL,
+  position_id INTEGER REFERENCES positions(id) ON DELETE SET NULL,
+  transaction_id INTEGER REFERENCES position_transactions(id) ON DELETE SET NULL,
+  trigger VARCHAR(20) NOT NULL CHECK (trigger IN (
+    'transaction', 'quarterly_10q', 'annual_10k'
+  )),
+  sec_filing_accession TEXT,
+  taken_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  current_price NUMERIC(14, 4),
+  -- Quality snapshot
+  tier VARCHAR(20) CHECK (tier IS NULL OR tier IN (
+    'exceptional', 'good', 'mediocre', 'poor'
+  )),
+  scorecard_summary JSONB NOT NULL,
+  multi_year JSONB,
+  moat JSONB,
+  -- Valuation snapshot (structure mirrors the `valuations` table but frozen)
+  valuation_method VARCHAR(20) CHECK (valuation_method IS NULL OR valuation_method IN (
+    'dcf', 'affo_dcf', 'excess_returns', 'ai_multiples'
+  )),
+  valuation_intrinsic_value NUMERIC(14, 4),
+  valuation_intrinsic_value_low NUMERIC(14, 4),
+  valuation_intrinsic_value_high NUMERIC(14, 4),
+  valuation_margin_of_safety_pct NUMERIC(7, 2),
+  valuation_assumptions JSONB,
+  valuation_guide JSONB,
+  -- Understanding + thesis context (only populated for transaction snapshots at buy time)
+  business_understanding_version INTEGER,
+  thesis_snapshot JSONB,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_fundamentals_snapshots_user_ticker
+  ON fundamentals_snapshots(user_id, ticker, taken_at DESC);
+CREATE INDEX IF NOT EXISTS idx_fundamentals_snapshots_position
+  ON fundamentals_snapshots(position_id, taken_at DESC);
+
+-- Prevent duplicating the same quarterly/annual snapshot for the same filing.
+-- Partial index: only enforces when sec_filing_accession is not NULL, so
+-- transaction snapshots (which always have NULL accession) never collide.
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_filing_snapshot
+  ON fundamentals_snapshots(user_id, ticker, sec_filing_accession)
+  WHERE sec_filing_accession IS NOT NULL;

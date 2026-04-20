@@ -40,12 +40,24 @@ for (const ticker of TICKERS) {
       continue;
     }
     const rows = await sql`
-      INSERT INTO positions (user_id, ticker, purchase_price, purchase_date)
-      VALUES (${userId}, ${ticker}, ${price}, ${today})
-      RETURNING id, ticker, purchase_price
+      WITH new_position AS (
+        INSERT INTO positions (user_id, ticker)
+        VALUES (${userId}, ${ticker})
+        RETURNING id, ticker
+      ),
+      new_txn AS (
+        INSERT INTO position_transactions
+          (position_id, type, transaction_date, price, shares)
+        SELECT id, 'buy', ${today}, ${price}, 1
+        FROM new_position
+        RETURNING id, position_id, price
+      )
+      SELECT np.id, np.ticker, nt.price
+      FROM new_position np
+      JOIN new_txn nt ON nt.position_id = np.id
     `;
     console.log(
-      `  ${ticker}: inserted position #${rows[0].id} at $${Number(rows[0].purchase_price).toFixed(2)}`,
+      `  ${ticker}: inserted position #${rows[0].id} at $${Number(rows[0].price).toFixed(2)}`,
     );
   } catch (err) {
     console.error(`  ${ticker}: ${err.message}`);

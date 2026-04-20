@@ -285,7 +285,11 @@ async function writeParsed(
            parse_notes = ${JSON.stringify(parsed.parseNotes)},
            years_available = ${parsed.yearsAvailable},
            earliest_year = ${parsed.earliestYear},
-           latest_year = ${parsed.latestYear}
+           latest_year = ${parsed.latestYear},
+           latest_quarter_accession = ${parsed.latestFiling?.accession ?? null},
+           latest_quarter_period_end = ${parsed.latestFiling?.period_end ?? null},
+           latest_quarter_form = ${parsed.latestFiling?.form ?? null},
+           latest_quarter_filed = ${parsed.latestFiling?.filed ?? null}
      WHERE ticker = ${ticker} AND cik = ${cik}
   `;
 }
@@ -298,7 +302,11 @@ async function markParseError(ticker: string): Promise<void> {
            parse_notes = NULL,
            years_available = NULL,
            earliest_year = NULL,
-           latest_year = NULL
+           latest_year = NULL,
+           latest_quarter_accession = NULL,
+           latest_quarter_period_end = NULL,
+           latest_quarter_form = NULL,
+           latest_quarter_filed = NULL
      WHERE ticker = ${ticker}
   `;
 }
@@ -318,7 +326,11 @@ export async function ensureSecFundamentals(
 
   // Read the existing row to see if parsed_annual is still fresh.
   const cachedRows = (await sql`
-    SELECT parsed_annual, parse_notes, years_available, earliest_year, latest_year
+    SELECT parsed_annual, parse_notes, years_available, earliest_year, latest_year,
+           latest_quarter_accession,
+           TO_CHAR(latest_quarter_period_end, 'YYYY-MM-DD') AS latest_quarter_period_end,
+           latest_quarter_form,
+           TO_CHAR(latest_quarter_filed, 'YYYY-MM-DD') AS latest_quarter_filed
     FROM sec_fundamentals_cache
     WHERE ticker = ${key}
     LIMIT 1
@@ -328,6 +340,10 @@ export async function ensureSecFundamentals(
     years_available: number | null;
     earliest_year: number | null;
     latest_year: number | null;
+    latest_quarter_accession: string | null;
+    latest_quarter_period_end: string | null;
+    latest_quarter_form: string | null;
+    latest_quarter_filed: string | null;
   }[];
 
   const cached = cachedRows[0];
@@ -336,6 +352,15 @@ export async function ensureSecFundamentals(
     Array.isArray(cached.parsed_annual) &&
     cached.years_available !== null
   ) {
+    const latestFiling =
+      cached.latest_quarter_accession && cached.latest_quarter_period_end
+        ? {
+            accession: cached.latest_quarter_accession,
+            period_end: cached.latest_quarter_period_end,
+            form: cached.latest_quarter_form ?? "",
+            filed: cached.latest_quarter_filed ?? "",
+          }
+        : null;
     return {
       status: "ok",
       cik: raw.cik,
@@ -345,6 +370,7 @@ export async function ensureSecFundamentals(
         yearsAvailable: cached.years_available,
         earliestYear: cached.earliest_year,
         latestYear: cached.latest_year,
+        latestFiling,
       },
     };
   }

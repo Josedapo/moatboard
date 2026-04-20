@@ -107,7 +107,7 @@ Output strict JSON, no preamble. CRITICAL: primary, secondary, and cautious must
   "primary": "<one of: ${availableToolsStr}>",
   "secondary": "<one of the remaining tools> | null (null if no other tool merits secondary)",
   "cautious": "<one of the remaining tools> | null (null if no other tool merits cautious)",
-  "reasoning": "2-3 sentences explaining WHY these priorities apply to THIS business specifically. Cite the business's economics (e.g., 'high-margin services mask capex needs', 'provisions distort reported earnings quarter-to-quarter', 'asset-light model makes book value meaningless'). Use conditional language: 'more informative', 'typically primary', 'less reliable for'. NEVER write 'use X', 'you should', 'buy', 'sell', 'hold', 'overvalued', 'undervalued'."
+  "reasoning": "2-3 frases en ESPAÑOL explicando por qué estas prioridades aplican a ESTE negocio en concreto. Cita la economía del negocio (ej: 'los márgenes altos de servicios enmascaran las necesidades de capex', 'las provisiones distorsionan los earnings reported trimestre a trimestre', 'el modelo asset-light hace que book value sea poco informativo'). Usa lenguaje condicional: 'suele ser más informativo', 'typically primary', 'menos fiable para'. NUNCA escribas 'usa X', 'deberías', 'comprar', 'vender', 'hold', 'overvalued', 'undervalued'. Tono cercano, directo. Jerga financiera (DCF, PE, P/FCF, P/B, capex, book value, SBC, FCF, ROIC) en inglés; el resto en español natural."
 }`;
 
   const response = await getClient().messages.create({

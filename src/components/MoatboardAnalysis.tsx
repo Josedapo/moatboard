@@ -33,6 +33,7 @@ export default function MoatboardAnalysis({
   fundamentals,
   cashYieldContext,
   loadError,
+  hideRegenerate = false,
 }: {
   positionId: number;
   ticker: string;
@@ -43,6 +44,10 @@ export default function MoatboardAnalysis({
   // null when either input is missing, in which case the card hides.
   cashYieldContext?: { fcfYield: number; treasuryYield: number } | null;
   loadError?: string | null;
+  // Set true inside the analysis wizard where the user is walking through
+  // the analysis once. Regeneration is available later from the position
+  // page after investing.
+  hideRegenerate?: boolean;
 }) {
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(loadError ?? null);
@@ -72,7 +77,7 @@ export default function MoatboardAnalysis({
         </div>
         <div className="flex items-center gap-3">
           {analysis && <QualityBadge tier={analysis.tier} size="lg" />}
-          {analysis && (
+          {analysis && !hideRegenerate && (
             <button
               onClick={handleRegenerate}
               disabled={isPending}

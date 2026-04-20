@@ -22,34 +22,61 @@ src/
 │   ├── auth/signin/page.tsx           # Google sign-in
 │   ├── api/auth/[...nextauth]/route.ts # NextAuth handlers (runtime: nodejs)
 │   └── dashboard/
-│       ├── page.tsx                   # Portfolio list with current prices + change %
-│       ├── actions.ts                 # addPositionAction, deletePositionAction
+│       ├── page.tsx                   # Portfolio list (filters out draft positions; avg cost + shares from transaction log)
+│       ├── actions.ts                 # startAnalysisAction, deletePositionAction
+│       ├── analyze/[ticker]/
+│       │   ├── page.tsx               # Wizard dispatch (reads analysis_sessions.current_step, renders corresponding Step*)
+│       │   └── actions.ts             # advanceStepAction, navigateToStepAction, decide{Invest,Watchlist,Discard}, markOutsideCircleAction, askFollowupAction, regenerate{Understanding,RedFlags}Action, exit/restart
 │       └── position/[id]/
-│           ├── page.tsx               # Position detail (auto-runs analysis + valuation)
+│           ├── page.tsx               # Position detail (auto-runs analysis + valuation + quarterly snapshot check)
 │           └── actions.ts             # runAnalysisAction, runValuationAction, thesis actions, etc.
 ├── components/                        # All UI components (mix of Server + Client)
+│   ├── AnalyzeEntryForm.tsx           # Dashboard entry: ticker input → startAnalysisAction → wizard
+│   ├── MoatboardAnalysis.tsx          # Scorecard UI (accepts `hideRegenerate` for wizard use)
+│   ├── Valuation.tsx                  # Valuation toolkit UI (accepts `hideRegenerate` for wizard use)
+│   ├── Thesis.tsx                     # AI/user thesis UI
+│   └── analysis/                      # Wizard-specific components
+│       ├── WizardShell.tsx            # Step indicator (past steps clickable via furthest_step tracking) + exit/restart
+│       ├── StepUnderstanding.tsx      # AI Spanish summary + Q&A + FollowupChat + checkpoint
+│       ├── StepRedFlags.tsx           # AI Spanish red flags grouped by severity
+│       ├── StepBusinessType.tsx       # Eagerly runs scorecard; lists scored + not-applicable dimensions
+│       ├── StepQuality.tsx            # Reuses MoatboardAnalysis; gates <5 dims
+│       ├── StepValuation.tsx          # Reuses ValuationSection with the guide
+│       ├── StepDecision.tsx           # Three terminal forms (Invest / Watchlist / Discard)
+│       └── FollowupChat.tsx           # Client-only chat input for understanding follow-ups
 ├── lib/                               # Domain logic, DB, AI, pure functions
 │   ├── db.ts                          # Neon serverless client
 │   ├── schema.sql                     # Source of truth for DB schema
-│   ├── financial.ts                   # yahoo-finance2 wrapper (Quote, Fundamentals, RelativeValuationPoint)
+│   ├── financial.ts                   # yahoo-finance2 wrapper; fetchMultiYearFundamentals merges SEC with yfinance for sharesDiluted when SEC leaves it all-null
 │   ├── scorecard.ts                   # Per-metric quality scoring (pure) + business-type helpers (isBalanceSheetBusiness, isRealEstate, isCommodityCyclical) + multi-year scorers (median + worst-year)
 │   ├── verdict.ts                     # Formulaic tier computation + reason templates (pure)
 │   ├── moats.ts                       # CRUD for moat_assessments
-│   ├── moatAi.ts                      # AI moat assessment (lazy client)
-│   ├── verdictAi.ts                   # AI prose composition for verdict_reason
+│   ├── moatAi.ts                      # AI moat assessment (Spanish reasoning)
+│   ├── verdictAi.ts                   # AI prose composition for verdict_reason (Spanish)
 │   ├── analysis.ts                    # Orchestrator: runAnalysis() ties scorecard + moat + tier + prose
 │   ├── moatboardAnalyses.ts           # CRUD for moatboard_analyses
 │   ├── valuation.ts                   # Pure DCF (two-stage owner earnings) + tier types
-│   ├── valuationAi.ts                 # AI multiples fallback only (DCF inputs are deterministic)
+│   ├── valuationAi.ts                 # AI multiples fallback (Spanish reasoning)
 │   ├── valuations.ts                  # CRUD for valuations; RelativeValuationSnapshot type
 │   ├── relativeValuation.ts           # Pure distribution stats (median/Q1/Q3/IQR) and classifier
-│   ├── valuationGuideAi.ts            # AI valuation guide — which tools matter most for this business
+│   ├── valuationGuideAi.ts            # AI valuation guide (Spanish reasoning)
 │   ├── valuationGuides.ts             # CRUD for valuation_guides (per-ticker cache, TTL 365d)
 │   ├── positionFlow.ts                # ensureAnalysis / ensureValuation / computeRelativeValuationContext
+│   ├── snapshotFlow.ts                # createTransactionalSnapshot + ensureQuarterlySnapshots orchestrators
 │   ├── tooHard.ts                     # Sector/industry too-hard gate (Buffett circle-of-competence)
-│   ├── thesis.ts                      # AI thesis generation (6 structured fields, gated by tier)
+│   ├── thesis.ts                      # AI thesis generation (6 structured fields, Spanish, gated by tier; not auto-invoked — manual generate from position page)
 │   ├── theses.ts                      # CRUD for theses (user vs ai source)
-│   └── positions.ts                   # CRUD for positions
+│   ├── positions.ts                   # CRUD for positions; getCostBasis derives from transactions
+│   ├── positionTransactions.ts        # Log of buy/add/trim/sell + getCostBasis aggregate
+│   ├── businessUnderstanding.ts       # CRUD for business_understanding (versioned per ticker)
+│   ├── businessUnderstandingAi.ts     # Spanish AI generator + follow-up Q&A
+│   ├── redFlags.ts                    # CRUD for qualitative_red_flags
+│   ├── redFlagsAi.ts                  # Spanish AI generator for red flags by category + severity
+│   ├── tickerStates.ts                # CRUD for ticker_states (in_portfolio / watchlist / discarded / outside_circle)
+│   ├── analysisSessions.ts            # CRUD for analysis_sessions (current_step + furthest_step + outcome)
+│   ├── snapshots.ts                   # CRUD for fundamentals_snapshots + diffSnapshots
+│   ├── sec.ts                         # SEC EDGAR integration; persists latestFiling (accession/period/form/filed) for quarterly snapshot triggering
+│   └── secParser.ts                   # XBRL parser; extractLatestFiling walks raw_facts to find most recent 10-Q/10-K
 ├── proxy.ts                           # Auth gating (Next.js 16 — was middleware.ts)
 ├── auth.ts                            # NextAuth config (Neon adapter)
 └── types/next-auth.d.ts               # session.user.id augmentation
@@ -67,13 +94,20 @@ The script DROPs legacy tables (`theses`, `moatboard_analyses` when their CHECK 
 
 Tables:
 - `users`, `accounts`, `sessions`, `verification_token` — NextAuth (Neon adapter)
-- `positions` — user portfolio entries (ticker, purchase_price, purchase_date)
-- `moat_assessments` — **per-ticker, shared across users**, AI-evaluated, TTL 365 days
-- `valuation_guides` — **per-ticker, shared across users**, AI-generated advice on which valuation tools matter most for a business type (primary/secondary/cautious + reasoning), TTL 365 days
-- `moatboard_analyses` — per-position verdict (tier, verdict_reason, scorecard_summary, moat snapshot)
+- `positions` — user portfolio entries (just `user_id`, `ticker`, `created_at`). Purchase price / date live in `position_transactions`. Dashboard filters by `EXISTS transactions` to hide draft positions created by the wizard.
+- `position_transactions` — log of `buy`/`add`/`trim`/`sell` per position. Each row has `transaction_date`, `price`, `shares`, and optional `pre_commitment_md` (the "what would make me change my mind" string captured at that specific transaction). Cost basis is derived (`getCostBasis`).
+- `fundamentals_snapshots` — immutable frozen frames, per-user per-ticker. `trigger` ∈ `transaction` / `quarterly_10q` / `annual_10k`. Stores tier, scorecard_summary, multi_year, moat JSONB, valuation method + IVs + assumptions + guide, business_understanding_version, thesis_snapshot, current_price, sec_filing_accession. Partial unique index on `(user_id, ticker, sec_filing_accession) WHERE sec_filing_accession IS NOT NULL` prevents duplicating a filing's snapshot.
+- `business_understanding` — AI-generated plain-language summary per ticker, versioned. PK `(ticker, version)`. Regeneration archives the previous row (`archived_at`). Stores `summary_md` (JSON-serialized section list), `questions_and_answers` (pregenerated + user follow-ups), `sources`.
+- `qualitative_red_flags` — per-ticker AI-extracted red flags (`flags` JSONB by category + severity). Tracks `last_10k_accession` for invalidation.
+- `ticker_states` — per-user ticker lifecycle: `in_portfolio` / `watchlist` / `discarded` / `outside_circle`. Carries `reason_md` + `review_when`.
+- `analysis_sessions` — wizard state per `(user_id, ticker)`. `current_step` (viewing now) + `furthest_step` (deepest reached — drives backward navigation in the step indicator). `outcome` + `completed_at` on terminal decisions. Partial unique index enforces one active session per ticker.
+- `moat_assessments` — **per-ticker, shared across users**, AI-evaluated, TTL 365 days. Reasoning now in Spanish.
+- `valuation_guides` — **per-ticker, shared across users**, AI-generated advice on which valuation tools matter most (primary/secondary/cautious + reasoning). Reasoning in Spanish. TTL 365 days.
+- `moatboard_analyses` — per-position verdict (tier, verdict_reason, scorecard_summary, moat snapshot). Verdict prose now in Spanish.
 - `valuations` — per-position IV + MoS (method, intrinsic_value range, current_price, dcf_tier, relative_tier, compound tier, assumptions JSONB including RelativeValuationSnapshot). `method` CHECK constraint allows `'dcf' | 'affo_dcf' | 'excess_returns' | 'ai_multiples'`. Note: the compound `tier`, `dcf_tier` and `relative_tier` columns are legacy — still persisted but no longer read by the UI (see philosophy-review drift M correction, 2026-04-16). The per-method `assumptions` shape differs (owner-earnings DCF, AFFO DCF, Excess Returns, AI multiples)
-- `theses` — per-position user thesis (source: 'user' | 'ai', raw_text, structured_content JSONB)
-- `monthly_reviews` — placeholder for future Phase 1 monthly review feature
+- `theses` — per-position user thesis (source: 'user' | 'ai', raw_text, structured_content JSONB, `pre_commitment_md`). AI generation is in Spanish; not auto-invoked from the wizard today (decision deferred — see Pending Decisions).
+- `sec_fundamentals_cache` — raw XBRL + parsed_annual + `latest_quarter_{accession,period_end,form,filed}` for quarterly snapshot triggering. `parsed_quarterly` column exists but not yet populated.
+- `monthly_reviews` — placeholder for the monthly review workflow (Phase 6).
 
 ## Architectural Patterns
 
@@ -242,11 +276,19 @@ When testing the verdict + valuation pipeline:
 - **CVNA / GME** — should be Poor (high debt / no moat).
 - **RDDT / ASTS** — recent IPO / pre-commercial. Should hit the "Moatboard can't analyze" gate (fewer than 5 applicable scorecard dimensions, or AI multiples + op margin worst < −50%).
 
+## Known Limitations (tech debt to address)
+
+- **Business understanding (Step 1) is not anchored in the real 10-K.** The AI generator uses yfinance's short business summary plus Claude's general knowledge of the company. For well-known tickers (V, AAPL, MSFT) this produces accurate summaries; for obscure or recent tickers Claude may hallucinate. Real fix: fetch the 10-K Item 1 (Business) and the latest earnings-call transcript from SEC EDGAR, pass them into the prompt, and cite the source. **Same gap applies to Step 2 (Red Flags)** — the AI works off training data, not the real filing.
+
+## Pending Decisions
+
+- **AI thesis on Invest (deferred, 2026-04-19).** The plan had the Decision step auto-generate a structured AI thesis when the user clicks Invest. Postponed: the combination of `fundamentals_snapshots` (frozen quantitative picture) + `position_transactions.pre_commitment_md` (the "what would make me change my mind" text) may already cover what an AI thesis would add. Decide once the full wizard + monthly review flow is in use. If kept, the existing `generateAiThesisAction` from the position page can be wired into `decideInvestAction`.
+
 ## Important Rules
 
 - **Do not change scorecard / verdict / valuation logic without first re-reading `../Context/buffett-munger-philosophy-review.md`.** That document defines the philosophical north star and lists 12 specific drifts the product needs to evolve toward closing.
-- All pages and copy in English (the SEO universe is 100% English).
+- **Language split**: UI chrome (nav, labels, homepage, /about, /pricing) stays in English — full i18n is deferred. AI-generated content (business understanding, red flags, verdict prose, moat reasoning, valuation guide, AI thesis, multiples fallback reasoning) runs in Spanish from day 1. Financial jargon (ROIC, FCF, DCF, moat, PE, P/FCF, P/B, capex, SBC, etc.) stays in English inside Spanish prose.
 - Calm, deliberate UX. Every change passes the anti-trading test: "does this incentivize trading or compulsive checking?" If yes, discard.
-- Fundamentals are always fetched fresh from yfinance — never cached.
-- Moat assessments are cached per ticker, shared across users (not per-position).
-- AI is used for: moat strength + archetype, verdict prose, DCF assumptions, multiples fallback, AI thesis generation. Everything else is deterministic.
+- Fundamentals are fetched through `fetchMultiYearFundamentals` which is SEC-first with a per-field yfinance merge for `sharesDiluted` (Visa-class tickers don't XBRL-tag share counts). Quote + trailing fundamentals still come directly from yfinance each call.
+- Moat assessments and valuation guides are cached per ticker, shared across users. Invalidate after significant prompt changes.
+- AI is used for: business understanding + follow-up Q&A, qualitative red flags, moat strength + archetype + reasoning, verdict prose, DCF assumptions, multiples fallback, AI thesis. Everything else is deterministic.

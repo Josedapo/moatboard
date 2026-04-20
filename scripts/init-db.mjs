@@ -20,6 +20,7 @@ console.log("Running pre-migration: dropping legacy tables...");
 await sql.query("DROP TABLE IF EXISTS theses CASCADE");
 await sql.query("DROP TABLE IF EXISTS moatboard_analyses CASCADE");
 await sql.query("DROP TABLE IF EXISTS valuations CASCADE");
+await sql.query("DROP TABLE IF EXISTS analysis_sessions CASCADE");
 
 const rawSchema = readFileSync("src/lib/schema.sql", "utf-8");
 

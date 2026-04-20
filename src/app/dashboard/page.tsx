@@ -1,10 +1,12 @@
 import Link from "next/link";
 import { auth } from "@/auth";
 import { getPositionsByUserId } from "@/lib/positions";
+import { getCostBasis } from "@/lib/positionTransactions";
 import { fetchQuoteAndFundamentals } from "@/lib/financial";
+import { listTickerStates } from "@/lib/tickerStates";
 import { deletePositionAction } from "./actions";
 import DashboardNav from "@/components/DashboardNav";
-import AddPositionForm from "@/components/AddPositionForm";
+import AnalyzeEntryForm from "@/components/AnalyzeEntryForm";
 
 export const metadata = {
   title: "Dashboard",
@@ -16,17 +18,30 @@ export default async function Dashboard() {
     return null; // proxy will redirect
   }
 
-  const positions = await getPositionsByUserId(session.user.id);
-  const today = new Date().toISOString().slice(0, 10);
+  const [positions, watchlist, discarded, outsideCircle] = await Promise.all([
+    getPositionsByUserId(session.user.id),
+    listTickerStates({ userId: session.user.id, status: "watchlist" }),
+    listTickerStates({ userId: session.user.id, status: "discarded" }),
+    listTickerStates({ userId: session.user.id, status: "outside_circle" }),
+  ]);
+  const parkedCount = discarded.length + outsideCircle.length;
 
-  // Fetch current quotes in parallel
-  const quotes = await Promise.all(
-    positions.map(async (p) => ({
-      positionId: p.id,
-      quote: (await fetchQuoteAndFundamentals(p.ticker)).quote,
-    })),
+  // Fetch quote + cost basis per position in parallel. Cost basis is a DB
+  // round-trip per position (listTransactions); at 5-15 positions it's
+  // trivial. If it ever matters, batch it into one aggregate query.
+  const enriched = await Promise.all(
+    positions.map(async (p) => {
+      const [quoteAndFundamentals, costBasis] = await Promise.all([
+        fetchQuoteAndFundamentals(p.ticker),
+        getCostBasis(p.id),
+      ]);
+      return {
+        position: p,
+        quote: quoteAndFundamentals.quote,
+        costBasis,
+      };
+    }),
   );
-  const quoteMap = new Map(quotes.map((q) => [q.positionId, q.quote]));
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -39,20 +54,41 @@ export default async function Dashboard() {
             {positions.length === 0
               ? "No positions yet. Add the first business you want to track."
               : `${positions.length} ${positions.length === 1 ? "position" : "positions"} tracked.`}
+            {watchlist.length > 0 && (
+              <>
+                {" · "}
+                <Link
+                  href="/dashboard/watchlist"
+                  className="underline decoration-navy-300 underline-offset-2 hover:text-navy-900 hover:decoration-navy-700"
+                >
+                  {watchlist.length} on watchlist
+                </Link>
+              </>
+            )}
+            {parkedCount > 0 && (
+              <>
+                {" · "}
+                <Link
+                  href="/dashboard/history"
+                  className="underline decoration-navy-300 underline-offset-2 hover:text-navy-900 hover:decoration-navy-700"
+                >
+                  {parkedCount} parked
+                </Link>
+              </>
+            )}
           </p>
         </header>
 
-        <AddPositionForm today={today} />
+        <AnalyzeEntryForm />
 
-        {positions.length > 0 && (
+        {enriched.length > 0 && (
           <div className="space-y-3">
-            {positions.map((p) => {
-              const quote = quoteMap.get(p.id);
-              const purchasePrice = Number(p.purchase_price);
+            {enriched.map(({ position: p, quote, costBasis }) => {
+              const avgCost = costBasis.avg_cost_per_share;
               const currentPrice = quote?.regularMarketPrice ?? null;
               const changePct =
-                currentPrice !== null
-                  ? ((currentPrice - purchasePrice) / purchasePrice) * 100
+                currentPrice !== null && avgCost !== null && avgCost > 0
+                  ? ((currentPrice - avgCost) / avgCost) * 100
                   : null;
               const changeColor =
                 changePct === null
@@ -81,7 +117,9 @@ export default async function Dashboard() {
                       )}
                     </div>
                     <div className="mt-1 text-sm text-navy-500">
-                      Bought at ${purchasePrice.toFixed(2)} on {p.purchase_date}
+                      {avgCost !== null
+                        ? `Avg cost $${avgCost.toFixed(2)} · ${formatShares(costBasis.shares)} shares`
+                        : "No transactions yet"}
                     </div>
                   </Link>
                   <div className="flex items-center gap-6">
@@ -115,4 +153,12 @@ export default async function Dashboard() {
       </main>
     </div>
   );
+}
+
+// Share counts can be fractional (most brokers support partial shares).
+// Show up to 4 decimals but trim trailing zeros so whole numbers render clean.
+function formatShares(shares: number): string {
+  return shares
+    .toFixed(4)
+    .replace(/\.?0+$/, "");
 }

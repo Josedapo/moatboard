@@ -2,10 +2,22 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { auth } from "@/auth";
 import { getPositionById } from "@/lib/positions";
+import { getCostBasis, listTransactions } from "@/lib/positionTransactions";
 import { fetchQuoteAndFundamentals } from "@/lib/financial";
-import { getThesisByPositionId } from "@/lib/theses";
+import { getCurrentUnderstanding } from "@/lib/businessUnderstanding";
+import { getRedFlags } from "@/lib/redFlags";
+import {
+  computeDecisionContext,
+  hasAnyDecisionContext,
+} from "@/lib/positionContext";
 import { ensureAnalysis, ensureValuation } from "@/lib/positionFlow";
 import { ensureValuationGuide } from "@/lib/valuationGuides";
+import { ensureQuarterlySnapshots } from "@/lib/snapshotFlow";
+import { listSnapshotsForPosition } from "@/lib/snapshots";
+import {
+  regenerateUnderstandingAction,
+  regenerateRedFlagsAction,
+} from "@/app/dashboard/analyze/[ticker]/actions";
 import type { MoatboardAnalysis as Analysis } from "@/lib/moatboardAnalyses";
 import type {
   Valuation,
@@ -18,8 +30,22 @@ import DashboardNav from "@/components/DashboardNav";
 import BusinessDescription from "@/components/BusinessDescription";
 import MoatboardAnalysis from "@/components/MoatboardAnalysis";
 import ValuationSection from "@/components/Valuation";
-import ThesisSection from "@/components/Thesis";
 import QualityBadge from "@/components/QualityBadge";
+import FollowupChat from "@/components/analysis/FollowupChat";
+import TransactionOperationNotesList from "@/components/shared/TransactionOperationNotesList";
+import PositionPreCommitment from "@/components/position/PositionPreCommitment";
+import AddOperationForm from "@/components/position/AddOperationForm";
+import FiftyTwoWeekBar from "@/components/position/FiftyTwoWeekBar";
+import BusinessUnderstandingView from "@/components/shared/BusinessUnderstandingView";
+import RedFlagsList, {
+  summarizeFlagsBySeverity,
+} from "@/components/shared/RedFlagsList";
+import DecisionContextStrip from "@/components/position/DecisionContextStrip";
+import SnapshotTrajectoryRail from "@/components/position/SnapshotTrajectoryRail";
+import PositionTabs, {
+  type PositionTabId,
+} from "@/components/position/PositionTabs";
+import PositionSummary from "@/components/position/PositionSummary";
 
 export const metadata = {
   title: "Position",
@@ -40,11 +66,30 @@ export default async function PositionDetail({
   const position = await getPositionById(positionId, session.user.id);
   if (!position) notFound();
 
-  const { quote, fundamentals } = await fetchQuoteAndFundamentals(position.ticker);
+  const [
+    { quote, fundamentals },
+    costBasis,
+    transactions,
+    understanding,
+    redFlags,
+    decisionContext,
+  ] = await Promise.all([
+    fetchQuoteAndFundamentals(position.ticker),
+    getCostBasis(positionId),
+    listTransactions(positionId),
+    getCurrentUnderstanding(position.ticker),
+    getRedFlags(position.ticker),
+    computeDecisionContext({ userId: session.user.id, ticker: position.ticker }),
+  ]);
+  const firstBuyDate = transactions[0]?.transaction_date ?? null;
 
   // Auto-run analysis and valuation in parallel if not already cached.
-  // Errors are isolated per section so one failure doesn't break the page.
-  const [analysisResult, valuationResult, thesis] = await Promise.all([
+  // ensureQuarterlySnapshots also runs here — it checks whether SEC has
+  // published a 10-Q/10-K newer than any snapshot we already have for this
+  // (user, ticker) and freezes one if so. Silent on failure: the page still
+  // renders if SEC is unreachable. Errors are isolated per section so one
+  // failure doesn't break the page.
+  const [analysisResult, valuationResult] = await Promise.all([
     ensureAnalysis(positionId, position.ticker)
       .then((a) => ({ ok: true as const, data: a }))
       .catch((err: unknown) => ({
@@ -57,7 +102,17 @@ export default async function PositionDetail({
         ok: false as const,
         error: err instanceof Error ? err.message : "Failed to compute valuation",
       })),
-    getThesisByPositionId(positionId),
+    ensureQuarterlySnapshots({
+      userId: session.user.id,
+      positionId,
+      ticker: position.ticker,
+    }).catch((err: unknown) => {
+      console.warn(
+        `Quarterly snapshot check failed for ${position.ticker}:`,
+        err,
+      );
+      return null;
+    }),
   ]);
 
   const analysis: Analysis | null = analysisResult.ok ? analysisResult.data : null;
@@ -66,6 +121,11 @@ export default async function PositionDetail({
     ? valuationResult.data
     : null;
   const valuationError = valuationResult.ok ? null : valuationResult.error;
+
+  // Fetch snapshots AFTER ensureQuarterlySnapshots so the list reflects any
+  // freshly-created quarterly frame. listSnapshotsForPosition returns ascending
+  // (oldest → newest); the trajectory rail picks the latest from the array.
+  const snapshots = await listSnapshotsForPosition(positionId);
 
   // Fetch the AI-generated valuation guide AFTER the valuation is known —
   // we need the relative snapshot to tell the guide whether P/B is available
@@ -103,12 +163,8 @@ export default async function PositionDetail({
     );
   }
 
-  const purchasePrice = Number(position.purchase_price);
+  const avgCost = costBasis.avg_cost_per_share;
   const currentPrice = quote?.regularMarketPrice ?? null;
-  const changePct =
-    currentPrice !== null
-      ? ((currentPrice - purchasePrice) / purchasePrice) * 100
-      : null;
 
   return (
     <div className="flex min-h-screen flex-col bg-navy-50/40">
@@ -162,97 +218,255 @@ export default async function PositionDetail({
               <div className="text-4xl font-bold tracking-tight text-navy-950">
                 {currentPrice !== null ? `$${currentPrice.toFixed(2)}` : "—"}
               </div>
-              {changePct !== null && (
-                <div
-                  className={`mt-1 text-sm font-semibold ${
-                    changePct >= 0 ? "text-emerald-600" : "text-red-600"
-                  }`}
-                >
-                  {changePct >= 0 ? "▲" : "▼"} {Math.abs(changePct).toFixed(2)}% since purchase
-                </div>
-              )}
-              <div className="mt-2 text-xs text-navy-500">
-                Bought at ${purchasePrice.toFixed(2)} · {position.purchase_date}
-              </div>
-              {/* 52-week range as a single discreet line — temperature, not
-                  valuation. Deliberately text-only to avoid giving it more
-                  visual weight than it deserves. */}
+              {/* 52-week range as a visual mini-bar — same navy-neutral
+                  language as the valuation distribution bars. Temperature,
+                  not a call to action. */}
               {currentPrice !== null &&
                 quote?.fiftyTwoWeekLow != null &&
                 quote?.fiftyTwoWeekHigh != null && (
-                  <div className="mt-1 text-xs text-navy-500">
-                    52w ${quote.fiftyTwoWeekLow.toFixed(2)} – $
-                    {quote.fiftyTwoWeekHigh.toFixed(2)} ·{" "}
-                    {formatRangePosition(
-                      currentPrice,
-                      quote.fiftyTwoWeekLow,
-                      quote.fiftyTwoWeekHigh,
-                    )}
-                  </div>
+                  <FiftyTwoWeekBar
+                    current={currentPrice}
+                    low={quote.fiftyTwoWeekLow}
+                    high={quote.fiftyTwoWeekHigh}
+                  />
                 )}
             </div>
           </div>
         </header>
 
-        {/* About the business — separate card so the long-form description
-            gets its own horizontal real estate instead of squeezing the
-            header. */}
-        {quote?.longBusinessSummary && (
-          <section className="mb-6 rounded-2xl border border-navy-100 bg-white p-6 shadow-sm">
-            <h2 className="mb-3 text-xs font-semibold uppercase tracking-wider text-navy-500">
-              About the business
-            </h2>
-            <BusinessDescription text={quote.longBusinessSummary} />
-          </section>
+        {hasAnyDecisionContext(decisionContext) && (
+          <DecisionContextStrip
+            ticker={position.ticker}
+            context={decisionContext}
+          />
         )}
 
-        {isOutsideFramework({ analysis, valuation }) ? (
-          <UnsupportedBusinessNotice />
-        ) : (
-          <>
-            {/* Moatboard Business Analysis */}
-            <MoatboardAnalysis
-              positionId={positionId}
-              ticker={position.ticker}
-              analysis={analysis}
-              fundamentals={fundamentals}
-              cashYieldContext={extractCashYieldContext(valuation)}
-              loadError={analysisError}
-            />
+        {/* Snapshot trajectory rail — page-level "since last snapshot" pulse.
+            Lives above the tabs because it crosses Quality + Valuation +
+            Price — pertenece al chrome, no a una pestaña. */}
+        <SnapshotTrajectoryRail
+          positionId={positionId}
+          snapshots={snapshots}
+          avgCost={avgCost}
+          currentPrice={currentPrice}
+        />
 
-            {/* Valuation */}
-            <ValuationSection
-              positionId={positionId}
-              valuation={valuation}
-              guide={guide}
-              loadError={valuationError}
-            />
-
-            {/* Your Thesis */}
-            <ThesisSection
-              positionId={positionId}
-              verdict={analysis?.tier ?? null}
-              thesis={thesis}
-            />
-          </>
-        )}
+        <PositionTabs
+          panels={buildPanels({
+            ticker: position.ticker,
+            positionId,
+            transactions,
+            costBasis,
+            currentPrice,
+            firstBuyDate,
+            preCommitment: position.pre_commitment_md,
+            // Format date labels server-side and hand strings to the client
+            // component — locale formatting on the client would diverge from
+            // the server (UTC vs Madrid TZ) and trigger a hydration mismatch.
+            preCommitmentEditedLabel: position.pre_commitment_edited_at
+              ? formatLongDateEs(position.pre_commitment_edited_at)
+              : null,
+            positionCreatedLabel: position.created_at
+              ? formatLongDateEs(position.created_at)
+              : null,
+            understanding,
+            quote,
+            redFlags,
+            analysis,
+            analysisError,
+            fundamentals,
+            cashYieldContext: extractCashYieldContext(valuation),
+            valuation,
+            valuationError,
+            guide,
+            outsideFramework: isOutsideFramework({ analysis, valuation }),
+          })}
+        />
       </main>
     </div>
   );
 }
 
-// Where today's price sits inside the 52-week range, phrased as a single
-// descriptive clause. No color, no bar, no verdict — just the plain fact.
-function formatRangePosition(
-  current: number,
-  low: number,
-  high: number,
-): string {
-  if (current >= high) return "at 52w high";
-  if (current <= low) return "at 52w low";
-  const pctBelowHigh = ((high - current) / high) * 100;
-  if (pctBelowHigh < 1) return "near 52w high";
-  return `${pctBelowHigh.toFixed(0)}% below high`;
+// Build the four tab panels server-side. Pre-rendered JSX is passed to the
+// client tab shell; only the active panel mounts in the DOM at a time.
+function buildPanels(args: {
+  ticker: string;
+  positionId: number;
+  transactions: import("@/lib/positionTransactions").PositionTransaction[];
+  costBasis: import("@/lib/positionTransactions").CostBasis;
+  currentPrice: number | null;
+  firstBuyDate: string | null;
+  preCommitment: string | null;
+  preCommitmentEditedLabel: string | null;
+  positionCreatedLabel: string | null;
+  understanding: import("@/lib/businessUnderstanding").BusinessUnderstanding | null;
+  quote: import("@/lib/financial").Quote | null;
+  redFlags: import("@/lib/redFlags").QualitativeRedFlags | null;
+  analysis: Analysis | null;
+  analysisError: string | null;
+  fundamentals: import("@/lib/financial").Fundamentals | null;
+  cashYieldContext: { fcfYield: number; treasuryYield: number } | null;
+  valuation: Valuation | null;
+  valuationError: string | null;
+  guide: ValuationGuide | null;
+  outsideFramework: boolean;
+}): Record<PositionTabId, React.ReactNode> {
+  const {
+    ticker,
+    positionId,
+    transactions,
+    costBasis,
+    currentPrice,
+    firstBuyDate,
+    preCommitment,
+    preCommitmentEditedLabel,
+    positionCreatedLabel,
+    understanding,
+    quote,
+    redFlags,
+    analysis,
+    analysisError,
+    fundamentals,
+    cashYieldContext,
+    valuation,
+    valuationError,
+    guide,
+    outsideFramework,
+  } = args;
+
+  const razonamiento = (
+    <section className="rounded-2xl border border-navy-100 bg-white p-6 shadow-sm">
+      <PositionPreCommitment
+        positionId={positionId}
+        text={preCommitment}
+        editedLabel={preCommitmentEditedLabel}
+        createdLabel={positionCreatedLabel}
+      />
+
+      <div className="mt-6 border-t border-navy-100 pt-5">
+        <PositionSummary
+          shares={costBasis.shares}
+          avgCost={costBasis.avg_cost_per_share}
+          invested={costBasis.invested}
+          currentPrice={currentPrice}
+          ownedSince={firstBuyDate}
+        />
+      </div>
+
+      <div className="mt-6 border-t border-navy-100 pt-5">
+        <h3 className="mb-1 text-sm font-semibold uppercase tracking-wider text-navy-500">
+          Operations &amp; notes
+        </h3>
+        <p className="mb-4 text-xs text-navy-500">
+          Each operation carries a short note explaining why.
+        </p>
+        <div className="mb-4">
+          <AddOperationForm
+            positionId={positionId}
+            currentPrice={currentPrice}
+          />
+        </div>
+        {/* Reverse for display only — newest first reads better in a log
+            view. listTransactions stays chronological because getCostBasis
+            and any future running-total logic depend on that order. */}
+        <TransactionOperationNotesList
+          transactions={[...transactions].reverse()}
+        />
+      </div>
+    </section>
+  );
+
+  const negocio = (
+    <div className="space-y-6">
+      {(understanding || quote?.longBusinessSummary) && (
+        <section className="rounded-2xl border border-navy-100 bg-white p-6 shadow-sm">
+          {understanding ? (
+            <>
+              <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h2 className="text-xl font-bold text-navy-950">
+                    Entender el negocio
+                  </h2>
+                  <p className="mt-1 text-xs text-navy-500">
+                    Versión {understanding.version} · generada el{" "}
+                    {formatLongDateEs(understanding.generated_at)}
+                  </p>
+                </div>
+                <form
+                  action={regenerateUnderstandingAction.bind(null, ticker)}
+                >
+                  <button
+                    type="submit"
+                    className="text-sm font-medium text-navy-600 hover:text-navy-900"
+                  >
+                    Regenerar
+                  </button>
+                </form>
+              </div>
+              <BusinessUnderstandingView understanding={understanding} />
+              <div className="mt-6">
+                <FollowupChat ticker={ticker} />
+              </div>
+            </>
+          ) : (
+            <>
+              <h2 className="mb-3 text-xs font-semibold uppercase tracking-wider text-navy-500">
+                About the business
+              </h2>
+              <p className="mb-4 text-sm text-navy-600">
+                No hay resumen propio para este ticker todavía.
+              </p>
+            </>
+          )}
+
+          {quote?.longBusinessSummary && (
+            <details className="mt-6 rounded-lg border border-navy-100 bg-navy-50/30">
+              <summary className="cursor-pointer px-4 py-3 text-xs font-semibold uppercase tracking-wider text-navy-500 hover:text-navy-700">
+                Resumen de Yahoo (referencia)
+              </summary>
+              <div className="border-t border-navy-100 px-4 py-3">
+                <BusinessDescription text={quote.longBusinessSummary} />
+              </div>
+            </details>
+          )}
+        </section>
+      )}
+
+      {redFlags && (
+        <RedFlagsAccordion
+          ticker={ticker}
+          flags={redFlags.flags}
+          generatedAt={redFlags.generated_at}
+        />
+      )}
+    </div>
+  );
+
+  const calidad = outsideFramework ? (
+    <UnsupportedBusinessNotice />
+  ) : (
+    <MoatboardAnalysis
+      positionId={positionId}
+      ticker={ticker}
+      analysis={analysis}
+      fundamentals={fundamentals}
+      cashYieldContext={cashYieldContext}
+      loadError={analysisError}
+    />
+  );
+
+  const valoracion = outsideFramework ? (
+    <UnsupportedBusinessNotice />
+  ) : (
+    <ValuationSection
+      positionId={positionId}
+      valuation={valuation}
+      guide={guide}
+      loadError={valuationError}
+    />
+  );
+
+  return { razonamiento, negocio, calidad, valoracion };
 }
 
 // A business falls outside Moatboard's framework when the scorecard
@@ -331,6 +545,76 @@ function extractCashYieldContext(
   }
   if (treasuryYield === null) return null;
   return { fcfYield, treasuryYield };
+}
+
+function formatLongDateEs(value: string | Date): string {
+  try {
+    const d = value instanceof Date ? value : new Date(value);
+    return d.toLocaleDateString("es-ES", {
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    });
+  } catch {
+    return typeof value === "string" ? value.slice(0, 10) : String(value);
+  }
+}
+
+// Red flags accordion. Expanded by default when any serious/watch flag is
+// present; collapsed when only info or empty so the page stays calm.
+function RedFlagsAccordion({
+  ticker,
+  flags,
+  generatedAt,
+}: {
+  ticker: string;
+  flags: import("@/lib/redFlags").RedFlag[];
+  generatedAt: string;
+}) {
+  const counts = summarizeFlagsBySeverity(flags);
+  const hasUrgent = counts.serious > 0 || counts.watch > 0;
+  const summaryParts: string[] = [];
+  if (counts.serious > 0) summaryParts.push(`${counts.serious} grave`);
+  if (counts.watch > 0) summaryParts.push(`${counts.watch} vigilar`);
+  if (counts.info > 0) summaryParts.push(`${counts.info} info`);
+  const summaryLabel =
+    summaryParts.length > 0
+      ? `Red flags · ${summaryParts.join(", ")}`
+      : "Red flags · sin alertas conocidas";
+
+  return (
+    <section className="mb-6 rounded-2xl border border-navy-100 bg-white shadow-sm">
+      <details open={hasUrgent} className="group">
+        <summary className="flex cursor-pointer items-center justify-between gap-3 px-6 py-4 text-sm font-semibold text-navy-900 hover:text-navy-700">
+          <span>{summaryLabel}</span>
+          <span className="text-navy-400 transition-transform group-open:rotate-90">
+            ▸
+          </span>
+        </summary>
+        <div className="border-t border-navy-100 px-6 py-4">
+          <div className="mb-3 flex items-start justify-between gap-3">
+            <p className="flex-1 rounded-lg bg-navy-50 p-3 text-xs text-navy-600">
+              Basado en conocimiento general del modelo. Aún no lee el 10-K
+              real — verifica en la última memoria anual antes de tomar
+              decisiones serias.
+            </p>
+            <form action={regenerateRedFlagsAction.bind(null, ticker)}>
+              <button
+                type="submit"
+                className="text-sm font-medium text-navy-600 hover:text-navy-900"
+              >
+                Regenerar
+              </button>
+            </form>
+          </div>
+          <RedFlagsList flags={flags} />
+          <p className="mt-4 text-xs text-navy-500">
+            Generadas el {formatLongDateEs(generatedAt)}
+          </p>
+        </div>
+      </details>
+    </section>
+  );
 }
 
 function UnsupportedBusinessNotice() {

@@ -121,11 +121,12 @@ ${dimSnapshot}
 Key fundamentals: ${metricsLine}
 
 Write the paragraph now. Rules:
+- Write in SPANISH, close conversational tone — as if explaining to a fellow investor over coffee. Financial acronyms and jargon (ROIC, FCF, moat, gross margin, op margin, DCF, PE, etc.) stay in English; everything else in natural Spanish prose.
 - Calm, observational, written in flowing prose. NOT a checklist. NOT a list of "X of Y dimensions strong".
 - Integrate the strengths and weaknesses naturally — name 1-2 specific metrics that best illustrate the verdict.
 - Reference the moat with substance (what kind, why it matters here), not just the label.
 - No hype, no superlatives without evidence, no "buy/sell/hold" language, no price talk.
-- Output ONLY the paragraph. No preamble, no JSON, no quotes around it.`;
+- Output ONLY the paragraph in Spanish. No preamble, no JSON, no quotes around it.`;
 }
 
 export async function composeVerdictNarrative(args: {

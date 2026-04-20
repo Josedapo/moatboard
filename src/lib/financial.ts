@@ -201,6 +201,18 @@ export type MultiYearFundamentals = {
 // history vs yfinance's 4–5; yfinance is retained only for tickers where
 // SEC has no CIK, the fetch fails, or the parser finds < 3 usable years
 // (see plan §3.3 fallback triggers).
+//
+// Per-field enrichment: some filers (Visa is the canonical case) simply
+// don't XBRL-tag shares outstanding — neither us-gaap nor dei carries a
+// `WeightedAverageNumber...Shares...` or `CommonStockSharesOutstanding`
+// value. The SEC parse still succeeds (revenue, netIncome, FCF all there)
+// but `sharesDiluted` is null across every year, which neutralizes the
+// Share Count Trend scorecard dimension and any per-share metric. To
+// recover that signal we fetch yfinance in parallel and merge its
+// `sharesDiluted` into matching fiscal year-ends. Scope is deliberately
+// narrow: only shares are enriched, and only when SEC has it null across
+// the board — matching years win, older SEC-only years stay null but at
+// least the recent ones are now scorable.
 export async function fetchMultiYearFundamentals(
   ticker: string,
 ): Promise<MultiYearFundamentals | null> {
@@ -208,7 +220,27 @@ export async function fetchMultiYearFundamentals(
     console.warn(`SEC multi-year fetch failed for ${ticker}:`, err);
     return null;
   });
-  if (fromSec && fromSec.yearsAvailable >= 3) return fromSec;
+  if (fromSec && fromSec.yearsAvailable >= 3) {
+    const allSharesNull = fromSec.years.every((y) => y.sharesDiluted === null);
+    if (allSharesNull) {
+      const fromYf = await fetchMultiYearFundamentalsYfinance(ticker).catch(
+        () => null,
+      );
+      if (fromYf) {
+        const yfByMonth = new Map<string, number>();
+        for (const y of fromYf.years) {
+          if (y.sharesDiluted !== null && y.fiscalYearEnd) {
+            yfByMonth.set(y.fiscalYearEnd.slice(0, 7), y.sharesDiluted);
+          }
+        }
+        fromSec.years = fromSec.years.map((y) => {
+          const match = yfByMonth.get(y.fiscalYearEnd.slice(0, 7));
+          return match !== undefined ? { ...y, sharesDiluted: match } : y;
+        });
+      }
+    }
+    return fromSec;
+  }
   return fetchMultiYearFundamentalsYfinance(ticker);
 }
 

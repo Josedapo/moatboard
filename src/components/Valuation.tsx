@@ -35,11 +35,15 @@ export default function ValuationSection({
   valuation,
   guide,
   loadError,
+  hideRegenerate = false,
 }: {
   positionId: number;
   valuation: Valuation | null;
   guide: ValuationGuide | null;
   loadError?: string | null;
+  // Set true inside the analysis wizard — see MoatboardAnalysis.tsx for
+  // rationale. Regeneration comes back on the live position page.
+  hideRegenerate?: boolean;
 }) {
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(loadError ?? null);
@@ -65,7 +69,7 @@ export default function ValuationSection({
             kind of business and your own judgment.
           </p>
         </div>
-        {valuation && (
+        {valuation && !hideRegenerate && (
           <button
             onClick={handleRegenerate}
             disabled={isPending}
@@ -99,6 +103,20 @@ export default function ValuationSection({
   );
 }
 
+// Canonical render order across visible + hidden sections.
+const TOOL_RENDER_ORDER: ToolId[] = ["dcf", "pe", "pfcf", "pb"];
+const RELATIVE_TOOLS: ReadonlySet<ToolId> = new Set(["pe", "pfcf", "pb"]);
+
+function getRecommendedTools(guide: ValuationGuide | null): Set<ToolId> {
+  // No guide → fall back to surfacing every renderable tool. Rare but keeps
+  // the UI honest when the cache row is missing.
+  if (!guide) return new Set(TOOL_RENDER_ORDER);
+  const tools = new Set<ToolId>();
+  tools.add(guide.primary_tool);
+  if (guide.secondary_tool) tools.add(guide.secondary_tool);
+  return tools;
+}
+
 function ValuationToolkit({
   positionId,
   valuation,
@@ -128,6 +146,69 @@ function ValuationToolkit({
   const treasuryCurrent =
     assumptionsAny.treasury_current_pct ?? assumptionsAny.risk_free_rate ?? null;
 
+  const recommendedTools = getRecommendedTools(guide);
+
+  // Build every renderable tool node up front, keyed by ToolId. A null entry
+  // means the tool can't be rendered (no data) and is silently dropped.
+  const toolNodes: Partial<Record<ToolId, React.ReactNode>> = {
+    dcf: (
+      <DcfTool
+        positionId={positionId}
+        valuation={valuation}
+        intrinsicBase={intrinsicBase}
+        intrinsicLow={intrinsicLow}
+        intrinsicHigh={intrinsicHigh}
+        currentPrice={currentPrice}
+      />
+    ),
+  };
+  if (relativeSnapshot) {
+    const subtitle = `${formatYears(relativeSnapshot.years_of_data)} · ${relativeSnapshot.points_count} points`;
+    toolNodes.pe = (
+      <DistributionTool
+        title="PE ratio · vs own history"
+        subtitle={subtitle}
+        snapshot={relativeSnapshot.pe}
+        formatValue={(v) => `${v.toFixed(1)}x`}
+      />
+    );
+    toolNodes.pfcf = (
+      <DistributionTool
+        title="P/FCF ratio · vs own history"
+        subtitle={subtitle}
+        snapshot={invertYieldToMultipleSnapshot(relativeSnapshot.fcf_yield)}
+        formatValue={(v) => `${v.toFixed(1)}x`}
+      />
+    );
+    if (relativeSnapshot.pb) {
+      toolNodes.pb = (
+        <DistributionTool
+          title="P/B ratio · vs own history"
+          subtitle={subtitle}
+          snapshot={relativeSnapshot.pb}
+          formatValue={(v) => `${v.toFixed(2)}x`}
+        />
+      );
+    }
+  }
+
+  // Split into visible (recommended) and hidden, preserving canonical order.
+  const visibleTools: ToolId[] = [];
+  const hiddenTools: ToolId[] = [];
+  for (const t of TOOL_RENDER_ORDER) {
+    if (!toolNodes[t]) continue;
+    if (recommendedTools.has(t)) visibleTools.push(t);
+    else hiddenTools.push(t);
+  }
+
+  // History-length disclaimer attaches to whichever section first surfaces
+  // a relative tool — the warning is about distribution data quality, so it
+  // belongs next to the tools it actually applies to.
+  const showHistoryNote =
+    relativeSnapshot !== null && relativeSnapshot.years_of_data < 5;
+  const visibleHasRelative = visibleTools.some((t) => RELATIVE_TOOLS.has(t));
+  const hiddenHasRelative = hiddenTools.some((t) => RELATIVE_TOOLS.has(t));
+
   return (
     <div className="space-y-4">
       {guide && (
@@ -137,44 +218,32 @@ function ValuationToolkit({
           relativeSnapshot={relativeSnapshot}
           method={valuation.method}
           treasuryCurrent={treasuryCurrent}
+          recommendedTools={recommendedTools}
         />
       )}
 
-      <DcfTool
-        positionId={positionId}
-        valuation={valuation}
-        intrinsicBase={intrinsicBase}
-        intrinsicLow={intrinsicLow}
-        intrinsicHigh={intrinsicHigh}
-        currentPrice={currentPrice}
-      />
+      {showHistoryNote && visibleHasRelative && (
+        <HistoryLengthNote years={relativeSnapshot!.years_of_data} />
+      )}
 
-      {relativeSnapshot && (
-        <>
-          {relativeSnapshot.years_of_data < 5 && (
-            <HistoryLengthNote years={relativeSnapshot.years_of_data} />
-          )}
-          <DistributionTool
-            title="PE ratio · vs own history"
-            subtitle={`${formatYears(relativeSnapshot.years_of_data)} · ${relativeSnapshot.points_count} points`}
-            snapshot={relativeSnapshot.pe}
-            formatValue={(v) => `${v.toFixed(1)}x`}
-          />
-          <DistributionTool
-            title="P/FCF ratio · vs own history"
-            subtitle={`${formatYears(relativeSnapshot.years_of_data)} · ${relativeSnapshot.points_count} points`}
-            snapshot={invertYieldToMultipleSnapshot(relativeSnapshot.fcf_yield)}
-            formatValue={(v) => `${v.toFixed(1)}x`}
-          />
-          {relativeSnapshot.pb && (
-            <DistributionTool
-              title="P/B ratio · vs own history"
-              subtitle={`${formatYears(relativeSnapshot.years_of_data)} · ${relativeSnapshot.points_count} points`}
-              snapshot={relativeSnapshot.pb}
-              formatValue={(v) => `${v.toFixed(2)}x`}
-            />
-          )}
-        </>
+      {visibleTools.map((t) => (
+        <div key={t}>{toolNodes[t]}</div>
+      ))}
+
+      {hiddenTools.length > 0 && (
+        <details className="rounded-lg border border-navy-200 bg-white">
+          <summary className="cursor-pointer px-5 py-3 text-sm font-medium text-navy-700 hover:text-navy-900">
+            View other valuation tools ({hiddenTools.length})
+          </summary>
+          <div className="space-y-4 border-t border-navy-100 p-4">
+            {showHistoryNote && !visibleHasRelative && hiddenHasRelative && (
+              <HistoryLengthNote years={relativeSnapshot!.years_of_data} />
+            )}
+            {hiddenTools.map((t) => (
+              <div key={t}>{toolNodes[t]}</div>
+            ))}
+          </div>
+        </details>
       )}
     </div>
   );
@@ -1174,12 +1243,14 @@ function ValuationGuideBlock({
   relativeSnapshot,
   method,
   treasuryCurrent,
+  recommendedTools,
 }: {
   guide: ValuationGuide;
   dcfTier: DcfTier;
   relativeSnapshot: RelativeValuationSnapshot | null;
   method: ValuationMethod;
   treasuryCurrent: number | null;
+  recommendedTools: Set<ToolId>;
 }) {
   return (
     <div className="rounded-lg border border-navy-200 border-l-4 border-l-navy-500 bg-white p-5">
@@ -1194,17 +1265,6 @@ function ValuationGuideBlock({
       <p className="mt-3 text-sm leading-relaxed text-navy-700">
         {guide.reasoning}
       </p>
-
-      <ReadingSignalBlock
-        dcfTier={dcfTier}
-        relativeSnapshot={relativeSnapshot}
-        method={method}
-      />
-
-      <FcfYieldVsTreasuryNote
-        relativeSnapshot={relativeSnapshot}
-        treasuryCurrent={treasuryCurrent}
-      />
 
       <div className="mt-4 space-y-1.5 border-t border-navy-100 pt-3 text-sm">
         <GuideRow label="Primary" tool={guide.primary_tool} role="trust" />
@@ -1223,6 +1283,18 @@ function ValuationGuideBlock({
           />
         )}
       </div>
+
+      <ReadingSignalBlock
+        dcfTier={dcfTier}
+        relativeSnapshot={relativeSnapshot}
+        method={method}
+        recommendedTools={recommendedTools}
+      />
+
+      <FcfYieldVsTreasuryNote
+        relativeSnapshot={relativeSnapshot}
+        treasuryCurrent={treasuryCurrent}
+      />
 
       <p className="mt-4 text-[10px] italic text-navy-400">
         AI-generated guidance. Always check the data yourself — this is a
@@ -1254,10 +1326,15 @@ function ReadingSignalBlock({
   dcfTier,
   relativeSnapshot,
   method,
+  recommendedTools,
 }: {
   dcfTier: DcfTier;
   relativeSnapshot: RelativeValuationSnapshot | null;
   method: ValuationMethod;
+  // Subset of tools to surface here (typically primary + secondary from the
+  // guide). When null, all cells render — fallback for the rare case of no
+  // guide row.
+  recommendedTools: Set<ToolId> | null;
 }) {
   const dcfLabel = MOS_TIER_LABELS[dcfTier];
   const dcfMethodLabel =
@@ -1287,30 +1364,53 @@ function ReadingSignalBlock({
       ? percentileToQuartileLabel(relativeSnapshot.pb.current_percentile)
       : null;
 
+  const showCell = (tool: ToolId): boolean =>
+    recommendedTools === null || recommendedTools.has(tool);
+
+  const cells: React.ReactNode[] = [];
+  if (showCell("dcf")) {
+    cells.push(
+      <SignalCell
+        key="dcf"
+        tool={`Absolute valuation (${dcfMethodLabel})`}
+        value={dcfLabel}
+      />,
+    );
+  }
+  if (showCell("pe") && peQuartile) {
+    cells.push(
+      <SignalCell key="pe" tool="PE vs own history" value={peQuartile} />,
+    );
+  }
+  if (showCell("pfcf") && pfcfQuartile) {
+    cells.push(
+      <SignalCell
+        key="pfcf"
+        tool="P/FCF vs own history"
+        value={pfcfQuartile}
+      />,
+    );
+  }
+  if (showCell("pb") && pbQuartile) {
+    cells.push(
+      <SignalCell key="pb" tool="P/B vs own history" value={pbQuartile} />,
+    );
+  }
+
+  // No recommended tool produced a renderable signal — skip the block
+  // entirely rather than show an empty container.
+  if (cells.length === 0) return null;
+
   return (
     <div className="mt-4 rounded-md border border-navy-200 bg-navy-50/40 p-4">
       <div className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-navy-600">
         Reading signal at current price
       </div>
-      <div className="grid gap-2.5 text-sm sm:grid-cols-2">
-        <SignalCell
-          tool={`Absolute valuation (${dcfMethodLabel})`}
-          value={dcfLabel}
-        />
-        {peQuartile && (
-          <SignalCell tool="PE vs own history" value={peQuartile} />
-        )}
-        {pfcfQuartile && (
-          <SignalCell tool="P/FCF vs own history" value={pfcfQuartile} />
-        )}
-        {pbQuartile && (
-          <SignalCell tool="P/B vs own history" value={pbQuartile} />
-        )}
-      </div>
+      <div className="grid gap-2.5 text-sm sm:grid-cols-2">{cells}</div>
       <p className="mt-3 text-[11px] leading-relaxed text-navy-500">
-        Factual read — not a verdict. When all four point the same way, the
-        signals are aligned; when they disagree, weigh them per the guidance
-        above.
+        Factual read — not a verdict. When the recommended tools point the
+        same way, the signal is aligned; when they disagree, weigh them per
+        the guidance above.
       </p>
     </div>
   );

@@ -106,12 +106,14 @@ ${companyInfo}
 
 ${fundamentalsInfo}
 
+IMPORTANT — language: write the 'reasoning' string in SPANISH, close conversational tone, as if explaining to a fellow investor over coffee. Financial acronyms and jargon (ROIC, FCF, moat, gross margin, switching costs, etc.) stay in English — they're universally recognized. Everything else in natural Spanish prose. The enum values (strength, archetype) stay in English; only the 'reasoning' text is translated.
+
 OUTPUT (strict JSON, no preamble, no commentary):
 
 {
   "strength": "strong" | "weak" | "unclear",
   "archetype": "brand" | "network_effects" | "switching_costs" | "scale" | "ip" | "regulatory" | "cost_advantage" | "none",
-  "reasoning": "1-2 sentences citing specific evidence — sustained gross margins, dominant share, regulatory entry barrier, recurring revenue, etc."
+  "reasoning": "1-2 frases en español citando evidencia concreta — sustained gross margins, dominant share, regulatory entry barrier, recurring revenue, etc."
 }`;
 }
 

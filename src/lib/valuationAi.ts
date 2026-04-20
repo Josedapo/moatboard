@@ -48,13 +48,15 @@ Choose ONE basis:
 - "price_to_sales": if pre-profit growth stock with positive revenue. intrinsic_value = revenue_per_share × sector_multiple_used.
 - "comparables": for special situations where neither applies cleanly; explain reasoning.
 
+IMPORTANT — language: write the 'reasoning' string in SPANISH, close conversational tone. Financial acronyms (DCF, PE, FCF, etc.) stay in English; everything else in natural Spanish. Enum values (basis) stay in English.
+
 OUTPUT (strict JSON, no preamble):
 
 {
   "intrinsic_value": <number, per share, in current price's currency>,
   "basis": "forward_pe" | "price_to_sales" | "comparables",
   "sector_multiple_used": <number>,
-  "reasoning": "1-2 sentences explaining the multiple chosen and explicitly noting why DCF wasn't applicable."
+  "reasoning": "1-2 frases en español explicando el múltiplo elegido y por qué DCF no aplicaba."
 }`;
 
   const response = await getClient().messages.create({

@@ -40,6 +40,20 @@ export type ParsedFundamentals = {
   yearsAvailable: number;
   earliestYear: number | null;
   latestYear: number | null;
+  latestFiling: LatestFiling | null;
+};
+
+// Minimal metadata about the most recent 10-Q or 10-K filing observed in
+// raw_facts. Persisted in sec_fundamentals_cache so we can detect "has a
+// new quarterly filing dropped since the last snapshot?" without re-reading
+// the full XBRL payload each time. The quarterly snapshot trigger compares
+// `accession` across filings — accession numbers are globally unique, so
+// equality is the authoritative "same filing" check.
+export type LatestFiling = {
+  accession: string;
+  period_end: string; // YYYY-MM-DD — the fiscal period the filing covers
+  form: string;       // '10-K' | '10-K/A' | '10-Q' | '10-Q/A' | '20-F' | '20-F/A'
+  filed: string;      // YYYY-MM-DD — the date SEC received the filing
 };
 
 type FactRecord = {
@@ -64,6 +78,20 @@ type NormalizedRecord = { end: string; val: number; filed: string };
 // that happen to file as foreign issuers. CLAUDE.md still says US-listed
 // only, but a US-listed foreign filer (BABA-style) would file 20-F.
 const ANNUAL_FORMS = new Set(["10-K", "10-K/A", "20-F", "20-F/A"]);
+
+// Any filing that can trigger a quarterly fundamentals snapshot. 10-K is
+// included because the fourth-quarter numbers are only disclosed in the
+// annual filing (no 10-Q is filed for Q4). 6-K is deliberately omitted —
+// foreign filers' interim reports are too heterogeneous to treat as a
+// reliable quarterly trigger.
+const PERIODIC_FORMS = new Set([
+  "10-K",
+  "10-K/A",
+  "10-Q",
+  "10-Q/A",
+  "20-F",
+  "20-F/A",
+]);
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
@@ -206,6 +234,51 @@ function newTrace(): FieldTrace {
     tagsUsed: [],
     yearsFound: 0,
     fallbackTriggered: false,
+  };
+}
+
+// Walk the companyfacts payload to find the 10-Q / 10-K with the most recent
+// `filed` date. Accession number is globally unique — the caller compares it
+// against previously-snapshotted accessions to detect new filings.
+//
+// Searches multiple "anchor" tags because not every company populates every
+// tag, and picking a single tag would miss filings for filers that report
+// NetIncomeLoss but not Revenues (e.g. holding companies) or vice versa.
+// The search stops as soon as any anchor tag returns records — the latest
+// filing is almost always present in multiple tags simultaneously.
+export function extractLatestFiling(
+  facts: SecCompanyFacts,
+): LatestFiling | null {
+  const ANCHOR_TAGS: { ns: string; tag: string; unit: string }[] = [
+    { ns: "us-gaap", tag: "Revenues", unit: "USD" },
+    { ns: "us-gaap", tag: "NetIncomeLoss", unit: "USD" },
+    {
+      ns: "us-gaap",
+      tag: "RevenueFromContractWithCustomerExcludingAssessedTax",
+      unit: "USD",
+    },
+    { ns: "us-gaap", tag: "Assets", unit: "USD" },
+    { ns: "us-gaap", tag: "StockholdersEquity", unit: "USD" },
+  ];
+
+  let best: FactRecord | null = null;
+  for (const { ns, tag, unit } of ANCHOR_TAGS) {
+    const records = getUnitRecords(facts, tag, ns, unit);
+    if (!records) continue;
+    for (const r of records) {
+      if (!PERIODIC_FORMS.has(r.form)) continue;
+      if (!r.accn || !r.filed) continue;
+      if (!best || r.filed > best.filed) best = r;
+    }
+    if (best) break; // first anchor that produced a match is sufficient
+  }
+
+  if (!best) return null;
+  return {
+    accession: best.accn!,
+    period_end: best.end,
+    form: best.form,
+    filed: best.filed,
   };
 }
 
@@ -576,5 +649,14 @@ export function parseFundamentals(
       ? Number(rows[rows.length - 1].fiscalYearEnd.slice(0, 4))
       : null;
 
-  return { years: rows, parseNotes: notes, yearsAvailable, earliestYear, latestYear };
+  const latestFiling = extractLatestFiling(facts);
+
+  return {
+    years: rows,
+    parseNotes: notes,
+    yearsAvailable,
+    earliestYear,
+    latestYear,
+    latestFiling,
+  };
 }

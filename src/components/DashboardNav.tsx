@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { auth, signOut } from "@/auth";
+import DashboardNavLinks from "./DashboardNavLinks";
 
 export default async function DashboardNav() {
   const session = await auth();
@@ -7,9 +8,12 @@ export default async function DashboardNav() {
   return (
     <nav className="border-b border-navy-100 bg-white">
       <div className="mx-auto flex h-16 max-w-5xl items-center justify-between px-6">
-        <Link href="/" className="text-xl font-bold text-navy-900">
-          Moatboard
-        </Link>
+        <div className="flex items-center gap-8">
+          <Link href="/" className="text-xl font-bold text-navy-900">
+            Moatboard
+          </Link>
+          <DashboardNavLinks />
+        </div>
         <div className="flex items-center gap-6">
           {session?.user && (
             <span className="text-sm text-navy-600">{session.user.email}</span>

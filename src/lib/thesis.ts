@@ -171,6 +171,7 @@ Write the thesis as JSON with exactly these fields. Each field has TWO parts: a 
 }
 
 Rules:
+- Write all 'highlight' and 'body' strings in SPANISH, close conversational tone — as if explaining to a fellow investor over coffee. Financial acronyms and jargon (ROIC, FCF, moat, gross margin, DCF, PE, ROE, capex, SBC, retention multiple, etc.) stay in English — universally recognized. Everything else in natural Spanish prose. Field keys (why_worth_owning, moat, etc.) stay in English.
 - Calm, analytical prose. No hype. No price predictions. No superlatives without evidence.
 - The "highlight" is a strong one-line takeaway — written so a busy reader scanning only the highlights gets the core thesis.
 - The "body" expands on the highlight with specifics. Do not just repeat the highlight.
