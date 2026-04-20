@@ -151,6 +151,87 @@ CREATE TABLE IF NOT EXISTS moat_validations (
 CREATE INDEX IF NOT EXISTS moat_validations_from_snapshot_idx ON moat_validations(from_snapshot_id);
 CREATE INDEX IF NOT EXISTS moat_validations_position_idx ON moat_validations(position_id);
 
+-- Review signals — event-driven review workflow (Phase 6).
+-- One row per (user, ticker, dedup_key). Generated daily by the SEC
+-- EDGAR cron that scans new 10-Q/10-K and 8-K filings with material
+-- Item codes for every ticker in the user's portfolio or watchlist.
+-- The table is the single inbox of "things worth checking" — no price
+-- alerts, no analyst upgrades, no social noise. Deliberately per-user:
+-- discarded tickers don't generate rows here.
+CREATE TABLE IF NOT EXISTS review_signals (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  ticker VARCHAR(10) NOT NULL,
+
+  -- Source + event classification
+  source VARCHAR(20) NOT NULL CHECK (source IN (
+    'sec_8k', 'sec_10q', 'sec_10k', 'sec_10qa', 'sec_10ka'
+  )),
+  event_type VARCHAR(40) NOT NULL,
+  event_date TIMESTAMPTZ NOT NULL,
+
+  -- Source reference (SEC accession for now; url rebuilt when needed)
+  source_ref VARCHAR(50) NOT NULL,
+  source_url TEXT,
+
+  -- Severity + status
+  severity VARCHAR(20) NOT NULL CHECK (severity IN (
+    'floor', 'material', 'informational'
+  )),
+  status VARCHAR(15) NOT NULL DEFAULT 'new' CHECK (status IN (
+    'new', 'reviewed', 'dismissed', 'expired'
+  )),
+
+  -- Review bookkeeping. `reviewed_by_snapshot_id` links the signal to
+  -- the fundamentals_snapshots row that was created or touched during
+  -- the review (e.g. a 10-Q floor satisfied by opening /trajectory and
+  -- validating the moat).
+  reviewed_at TIMESTAMPTZ,
+  reviewed_by_snapshot_id INTEGER REFERENCES fundamentals_snapshots(id) ON DELETE SET NULL,
+  review_note_md TEXT,
+  dismiss_reason_md TEXT,
+
+  -- Raw payload for debugging + re-rendering. `summary_md` is an
+  -- optional human-readable Spanish summary (lazy-filled the first
+  -- time the user opens the alert to save LLM cost).
+  raw_payload JSONB,
+  summary_md TEXT,
+
+  -- Dedup key: SEC accession for filings. Uniqueness is per-user so
+  -- the same filing can exist for multiple users without collision.
+  deduplication_key TEXT NOT NULL,
+
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS review_signals_dedup_idx
+  ON review_signals(user_id, ticker, deduplication_key);
+CREATE INDEX IF NOT EXISTS review_signals_status_idx
+  ON review_signals(user_id, status, event_date DESC);
+CREATE INDEX IF NOT EXISTS review_signals_ticker_idx
+  ON review_signals(ticker, event_date DESC);
+
+-- Cron heartbeat — every cron run inserts one row so the UI can show
+-- "last check: HH:MM" and warn the user when the pipeline hasn't run
+-- in > 36h (honest "0 signals = calm state" requires this). Agent's
+-- recommendation: without this, the inbox-is-empty message lies when
+-- the cron silently fails.
+CREATE TABLE IF NOT EXISTS cron_runs (
+  id SERIAL PRIMARY KEY,
+  job VARCHAR(50) NOT NULL,
+  started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  finished_at TIMESTAMPTZ,
+  ok BOOLEAN NOT NULL DEFAULT FALSE,
+  -- Counts populated on success: how many tickers processed, how many
+  -- filings scanned, how many rows inserted, how many errors per ticker.
+  processed_tickers INTEGER,
+  inserted_signals INTEGER,
+  error_count INTEGER,
+  error_summary TEXT
+);
+
+CREATE INDEX IF NOT EXISTS cron_runs_job_idx ON cron_runs(job, started_at DESC);
+
 -- Moatboard's verdict on the business (one row per position, overwritten on regeneration)
 CREATE TABLE IF NOT EXISTS moatboard_analyses (
   id SERIAL PRIMARY KEY,
