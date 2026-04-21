@@ -270,7 +270,11 @@ export function extractLatestFiling(
       if (!r.accn || !r.filed) continue;
       if (!best || r.filed > best.filed) best = r;
     }
-    if (best) break; // first anchor that produced a match is sufficient
+    // Walk every anchor, not just the first. Some filers stopped
+    // populating `Revenues` after the ASC 606 migration (~2018) and
+    // switched to `RevenueFromContractWithCustomerExcludingAssessedTax`;
+    // bailing on the first anchor that matched would lock us onto
+    // stale 2017-2018 records for those tickers.
   }
 
   if (!best) return null;

@@ -165,7 +165,8 @@ CREATE TABLE IF NOT EXISTS review_signals (
 
   -- Source + event classification
   source VARCHAR(20) NOT NULL CHECK (source IN (
-    'sec_8k', 'sec_10q', 'sec_10k', 'sec_10qa', 'sec_10ka'
+    'sec_8k', 'sec_10q', 'sec_10k', 'sec_10qa', 'sec_10ka',
+    'snapshot_diff'
   )),
   event_type VARCHAR(40) NOT NULL,
   event_date TIMESTAMPTZ NOT NULL,

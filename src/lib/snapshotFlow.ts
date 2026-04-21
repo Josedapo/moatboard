@@ -31,11 +31,20 @@ import { ensureSecFundamentals } from "@/lib/sec";
 import {
   createSnapshot,
   getSnapshotByFiling,
+  getPreviousSnapshot,
   type CreateSnapshotInput,
   type FundamentalsSnapshot,
   type MoatSnapshot,
   type SnapshotTrigger,
 } from "@/lib/snapshots";
+import {
+  detectMaterialChanges,
+  hasMaterialChange,
+  severityFromChanges,
+  type MaterialChanges,
+} from "@/lib/snapshotDiff";
+import { createSignalIfMissing } from "@/lib/reviewSignals";
+import { buildFilingIndexUrlFromAccession } from "@/lib/secFilings";
 import type {
   RelativeValuationSnapshot,
   Valuation,
@@ -119,7 +128,90 @@ export async function ensureQuarterlySnapshots({
     secFilingAccession: filing.accession,
   });
   const snapshot = await createSnapshot(input);
+
+  // Delta alert: compare the fresh snapshot against its immediate
+  // predecessor and emit a review_signals row if any quality threshold
+  // was crossed. Idempotent via deduplication_key — re-invocations of
+  // ensureQuarterlySnapshots with the same accession cannot produce
+  // duplicates (the snapshot itself is short-circuited earlier anyway).
+  await maybeEmitDeltaSignal({
+    userId,
+    ticker,
+    newSnapshot: snapshot,
+    filing,
+  }).catch((err) => {
+    // Non-fatal: snapshot is already persisted. Log and move on so the
+    // caller (position page load) doesn't fail because of inbox issues.
+    console.error(
+      `maybeEmitDeltaSignal failed for ${ticker} accession ${filing.accession}: ${(err as Error).message}`,
+    );
+  });
+
   return { createdCount: 1, latestFiling: filing, snapshot };
+}
+
+async function maybeEmitDeltaSignal({
+  userId,
+  ticker,
+  newSnapshot,
+  filing,
+}: {
+  userId: string | number;
+  ticker: string;
+  newSnapshot: FundamentalsSnapshot;
+  filing: LatestFiling;
+}): Promise<void> {
+  const previous = await getPreviousSnapshot({
+    userId,
+    ticker,
+    snapshotId: newSnapshot.id,
+  });
+  if (!previous) return; // first snapshot ever for this (user, ticker) — nothing to compare
+
+  const changes = detectMaterialChanges(previous, newSnapshot);
+  if (!hasMaterialChange(changes)) return;
+
+  const severity = severityFromChanges(changes);
+  const rawPayload = buildDeltaPayload({ previous, newSnapshot, filing, changes });
+
+  await createSignalIfMissing({
+    userId,
+    ticker,
+    source: "snapshot_diff",
+    eventType: "material_fundamentals_change",
+    eventDate: newSnapshot.taken_at.slice(0, 10),
+    sourceRef: filing.accession,
+    sourceUrl: buildFilingIndexUrlFromAccession(filing.accession),
+    severity,
+    rawPayload,
+    // One signal per (user, ticker, target-snapshot). Re-runs are
+    // idempotent; a subsequent filing gets its own snapshot and thus
+    // its own dedupe key.
+    deduplicationKey: `snapshot_diff:${newSnapshot.id}`,
+  });
+}
+
+function buildDeltaPayload({
+  previous,
+  newSnapshot,
+  filing,
+  changes,
+}: {
+  previous: FundamentalsSnapshot;
+  newSnapshot: FundamentalsSnapshot;
+  filing: LatestFiling;
+  changes: MaterialChanges;
+}) {
+  return {
+    from_snapshot_id: previous.id,
+    to_snapshot_id: newSnapshot.id,
+    filing_accession: filing.accession,
+    filing_form: filing.form,
+    filing_period_end: filing.period_end,
+    tier: changes.tier,
+    gate: changes.gate,
+    dimension_drops: changes.dimensionDrops,
+  };
 }
 
 // 10-K and 20-F are the annual filings; anything else we treat as quarterly.

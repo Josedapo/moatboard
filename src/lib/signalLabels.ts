@@ -29,6 +29,7 @@ export const EVENT_TYPE_LABEL: Record<SignalEventType, string> = {
   bylaws_amendment: "Modificación de estatutos",
   fd_disclosure: "Divulgación Reg FD",
   other_material: "Otros eventos materiales",
+  material_fundamentals_change: "Cambio material en fundamentales",
 };
 
 // Source → short badge label (SEC form type).
@@ -38,6 +39,7 @@ export const SOURCE_LABEL: Record<SignalSource, string> = {
   sec_10k: "10-K",
   sec_10qa: "10-Q/A",
   sec_10ka: "10-K/A",
+  snapshot_diff: "Delta",
 };
 
 // Severity visual spec — consistent with DirectionCircle tones used

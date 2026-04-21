@@ -347,20 +347,16 @@ export async function ensureSecFundamentals(
   }[];
 
   const cached = cachedRows[0];
+  // Fast path: the parsed cache is complete AND carries the latest-
+  // filing metadata needed by delta alerts + quarterly snapshots. Rows
+  // cached before that column existed fall through to re-parse so they
+  // can backfill without waiting for TTL expiry.
   if (
     cached &&
     Array.isArray(cached.parsed_annual) &&
-    cached.years_available !== null
+    cached.years_available !== null &&
+    cached.latest_quarter_accession !== null
   ) {
-    const latestFiling =
-      cached.latest_quarter_accession && cached.latest_quarter_period_end
-        ? {
-            accession: cached.latest_quarter_accession,
-            period_end: cached.latest_quarter_period_end,
-            form: cached.latest_quarter_form ?? "",
-            filed: cached.latest_quarter_filed ?? "",
-          }
-        : null;
     return {
       status: "ok",
       cik: raw.cik,
@@ -370,7 +366,12 @@ export async function ensureSecFundamentals(
         yearsAvailable: cached.years_available,
         earliestYear: cached.earliest_year,
         latestYear: cached.latest_year,
-        latestFiling,
+        latestFiling: {
+          accession: cached.latest_quarter_accession,
+          period_end: cached.latest_quarter_period_end ?? "",
+          form: cached.latest_quarter_form ?? "",
+          filed: cached.latest_quarter_filed ?? "",
+        },
       },
     };
   }

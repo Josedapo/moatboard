@@ -5,6 +5,7 @@ import type {
   ScorecardSummary,
 } from "@/lib/verdict";
 import type { ValuationMethod } from "@/lib/valuations";
+import type { Quality } from "@/lib/scorecard";
 
 // Pure module: types + diffSnapshots, zero DB dependency. Lives apart from
 // `snapshots.ts` (which imports `sql`) so Client Components can pull the
@@ -71,6 +72,138 @@ export type SnapshotDiff = {
     delta_pp: number | null;
   };
 };
+
+// ─────────────────────────────────────────────────────────────────────────
+// Material-change detection — the "delta alerts" layer.
+//
+// Fired when a new quarterly snapshot crosses a threshold that Joseda (or
+// any user) would want to revisit. Deliberately minimalista: any tier
+// downgrade, gate activation, or per-dimension downgrade flips the
+// signal. False positives are acceptable; missing a thesis-breaker is not.
+// ─────────────────────────────────────────────────────────────────────────
+
+// Ordered from best to worst. Numeric value = rank used for comparisons.
+const TIER_RANK: Record<Tier, number> = {
+  exceptional: 4,
+  good: 3,
+  mediocre: 2,
+  poor: 1,
+};
+
+const QUALITY_RANK: Record<Quality, number> = {
+  strong: 3,
+  acceptable: 2,
+  weak: 1,
+  neutral: 0,
+};
+
+// Minimum applicable dimensions required before the framework is willing
+// to publish a verdict. Mirrors the gate in dashboard/position/[id]/page.
+const MIN_APPLICABLE_DIMENSIONS = 5;
+
+export type DimensionKey = keyof ScorecardSummary["dimensions"];
+
+export type DimensionDrop = {
+  dimension: DimensionKey;
+  before: Quality;
+  after: Quality;
+  levels: number;
+};
+
+export type MaterialChanges = {
+  tier: {
+    before: Tier | null;
+    after: Tier | null;
+    levelsDropped: number; // 0 if no drop
+  };
+  gate: {
+    applicableBefore: number;
+    applicableAfter: number;
+    activated: boolean; // wasn't outside framework, now is
+  };
+  dimensionDrops: DimensionDrop[];
+};
+
+export function detectMaterialChanges(
+  before: FundamentalsSnapshot,
+  after: FundamentalsSnapshot,
+): MaterialChanges {
+  const beforeRank = before.tier ? TIER_RANK[before.tier] : null;
+  const afterRank = after.tier ? TIER_RANK[after.tier] : null;
+  const tierLevelsDropped =
+    beforeRank !== null && afterRank !== null && beforeRank > afterRank
+      ? beforeRank - afterRank
+      : 0;
+
+  const beforeApplicable = countApplicable(before.scorecard_summary);
+  const afterApplicable = countApplicable(after.scorecard_summary);
+  const gateBefore = beforeApplicable < MIN_APPLICABLE_DIMENSIONS;
+  const gateAfter = afterApplicable < MIN_APPLICABLE_DIMENSIONS;
+
+  const dimensionDrops: DimensionDrop[] = [];
+  const beforeDims = before.scorecard_summary.dimensions;
+  const afterDims = after.scorecard_summary.dimensions;
+  for (const key of Object.keys(beforeDims) as DimensionKey[]) {
+    const b = beforeDims[key];
+    const a = afterDims[key];
+    // Only count drops between scored qualities. Transitions to/from
+    // neutral mean "not applicable" — that's a coverage change, not a
+    // deterioration, and we don't want to page Joseda over data drift.
+    if (b === "neutral" || a === "neutral") continue;
+    const bRank = QUALITY_RANK[b];
+    const aRank = QUALITY_RANK[a];
+    if (bRank > aRank) {
+      dimensionDrops.push({
+        dimension: key,
+        before: b,
+        after: a,
+        levels: bRank - aRank,
+      });
+    }
+  }
+
+  return {
+    tier: {
+      before: before.tier,
+      after: after.tier,
+      levelsDropped: tierLevelsDropped,
+    },
+    gate: {
+      applicableBefore: beforeApplicable,
+      applicableAfter: afterApplicable,
+      activated: !gateBefore && gateAfter,
+    },
+    dimensionDrops,
+  };
+}
+
+// True when any rule fires — tier drop, gate activation, or any
+// dimension downgrade. Caller uses this to decide whether to emit a
+// review_signals row.
+export function hasMaterialChange(changes: MaterialChanges): boolean {
+  return (
+    changes.tier.levelsDropped > 0 ||
+    changes.gate.activated ||
+    changes.dimensionDrops.length > 0
+  );
+}
+
+// Severity mapping for the inbox. Tier drops and gate activation get
+// the louder 'material' frame; dimension-only drops get the quieter
+// 'informational' treatment so the inbox doesn't scream at every
+// quarter.
+export function severityFromChanges(
+  changes: MaterialChanges,
+): "material" | "informational" {
+  if (changes.tier.levelsDropped > 0 || changes.gate.activated) {
+    return "material";
+  }
+  return "informational";
+}
+
+function countApplicable(summary: ScorecardSummary): number {
+  return summary.strong + summary.acceptable + summary.weak;
+}
 
 export function diffSnapshots(
   before: FundamentalsSnapshot,

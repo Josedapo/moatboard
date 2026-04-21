@@ -9,7 +9,11 @@ export type SignalSource =
   | "sec_10q"
   | "sec_10k"
   | "sec_10qa"
-  | "sec_10ka";
+  | "sec_10ka"
+  // Analytical source — not an SEC filing per se, but a cross-snapshot
+  // comparison flagged by the quality framework. Emitted from
+  // snapshotFlow when a newly-minted snapshot crosses a threshold.
+  | "snapshot_diff";
 
 export type SignalSeverity = "floor" | "material" | "informational";
 
@@ -33,7 +37,10 @@ export type SignalEventType =
   | "management_change" // 8-K 5.02
   | "bylaws_amendment" // 8-K 5.03
   | "fd_disclosure" // 8-K 7.01
-  | "other_material"; // 8-K 8.01
+  | "other_material" // 8-K 8.01
+  // Analytical — quality framework detected material deterioration
+  // when a new quarterly snapshot was compared against the prior one.
+  | "material_fundamentals_change";
 
 export type ClassifiedSignal = {
   source: SignalSource;

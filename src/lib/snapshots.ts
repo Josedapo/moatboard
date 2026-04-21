@@ -150,6 +150,37 @@ export async function getLatestSnapshot({
   return rows[0] ?? null;
 }
 
+// Returns the snapshot taken immediately before `snapshotId` for the same
+// (user, ticker). Used by delta-alert detection after a new quarterly
+// snapshot is created — we compare it with its immediate predecessor to
+// see whether anything crossed a material threshold.
+export async function getPreviousSnapshot({
+  userId,
+  ticker,
+  snapshotId,
+}: {
+  userId: string | number;
+  ticker: string;
+  snapshotId: number;
+}): Promise<FundamentalsSnapshot | null> {
+  const rows = (await sql`
+    SELECT id, user_id, ticker, position_id, transaction_id, trigger,
+           sec_filing_accession, taken_at, current_price, tier,
+           scorecard_summary, multi_year, moat,
+           valuation_method, valuation_intrinsic_value, valuation_intrinsic_value_low,
+           valuation_intrinsic_value_high, valuation_margin_of_safety_pct,
+           valuation_assumptions, valuation_guide,
+           business_understanding_version, thesis_snapshot, created_at
+    FROM fundamentals_snapshots
+    WHERE user_id = ${userId}
+      AND ticker = ${ticker.toUpperCase()}
+      AND id < ${snapshotId}
+    ORDER BY taken_at DESC, id DESC
+    LIMIT 1
+  `) as unknown as FundamentalsSnapshot[];
+  return rows[0] ?? null;
+}
+
 // Returns the snapshot for a given filing if one already exists — used to
 // short-circuit `ensureQuarterlySnapshots` so we don't re-create the same
 // snapshot on every page load.

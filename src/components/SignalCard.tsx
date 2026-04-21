@@ -153,6 +153,10 @@ export default function SignalCard({
         {EVENT_TYPE_LABEL[signal.event_type]}
       </h4>
 
+      {signal.event_type === "material_fundamentals_change" && (
+        <DeltaChangeBlock payload={signal.raw_payload} />
+      )}
+
       {(signal.source_url || positionId !== null) && (
         <div className="mt-1 flex flex-wrap items-center gap-3 text-[11px]">
           {signal.source_url && (
@@ -234,7 +238,7 @@ export default function SignalCard({
       {/* Actions row at the foot. mt-auto keeps cards aligned in grid. */}
       {actionMode === "idle" && (
         <div className="mt-auto flex flex-wrap items-center gap-2 pt-3">
-          {!summaryMd && (
+          {!summaryMd && signal.source !== "snapshot_diff" && (
             <button
               type="button"
               onClick={summarise}
@@ -316,6 +320,110 @@ export default function SignalCard({
         </div>
       )}
     </article>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Delta-change block — renders a compact, text-only summary of what the
+// quality framework detected between two snapshots. No AI calls; the
+// payload from snapshotFlow already carries the structured diff.
+// ─────────────────────────────────────────────────────────────────────────
+
+type DeltaPayload = {
+  from_snapshot_id?: number;
+  to_snapshot_id?: number;
+  filing_accession?: string;
+  filing_form?: string;
+  filing_period_end?: string | null;
+  tier?: {
+    before: string | null;
+    after: string | null;
+    levelsDropped: number;
+  };
+  gate?: {
+    applicableBefore: number;
+    applicableAfter: number;
+    activated: boolean;
+  };
+  dimension_drops?: Array<{
+    dimension: string;
+    before: string;
+    after: string;
+    levels: number;
+  }>;
+};
+
+const TIER_LABEL: Record<string, string> = {
+  exceptional: "Exceptional",
+  good: "Good",
+  mediocre: "Mediocre",
+  poor: "Poor",
+};
+
+const DIMENSION_LABEL: Record<string, string> = {
+  returnOnInvestedCapital: "ROIC",
+  fcfMargin: "FCF margin",
+  grossMargin: "Gross margin",
+  shareCountTrend: "Share count trend",
+  operatingMargins: "Operating margin",
+  debtToEquity: "D/E",
+  revenueGrowth: "Revenue growth",
+  returnOnEquity: "ROE",
+  returnOnAssets: "ROA",
+  bookValuePerShareCagr: "BV/share CAGR",
+  affoPayoutRatio: "AFFO payout",
+  netDebtToEbitda: "Net Debt/EBITDA",
+  affoPerShareCagr: "AFFO/share CAGR",
+};
+
+function DeltaChangeBlock({ payload }: { payload: unknown }) {
+  if (!payload || typeof payload !== "object") return null;
+  const p = payload as DeltaPayload;
+  const tier = p.tier;
+  const gate = p.gate;
+  const drops = Array.isArray(p.dimension_drops) ? p.dimension_drops : [];
+
+  const hasTierDrop =
+    tier && tier.before && tier.after && tier.levelsDropped > 0;
+  const hasGateActivated = gate?.activated === true;
+
+  if (!hasTierDrop && !hasGateActivated && drops.length === 0) return null;
+
+  return (
+    <div className="mt-2 space-y-1.5 rounded-lg border border-navy-200 bg-white/70 px-3 py-2 text-xs text-navy-800">
+      {hasTierDrop && tier && tier.before && tier.after && (
+        <div>
+          <span className="font-semibold">Tier:</span>{" "}
+          {TIER_LABEL[tier.before] ?? tier.before} →{" "}
+          {TIER_LABEL[tier.after] ?? tier.after}{" "}
+          <span className="text-navy-500">
+            (−{tier.levelsDropped} {tier.levelsDropped === 1 ? "nivel" : "niveles"})
+          </span>
+        </div>
+      )}
+      {hasGateActivated && gate && (
+        <div className="text-red-700">
+          <span className="font-semibold">Marco analítico:</span> la empresa
+          salió del marco ({gate.applicableBefore} → {gate.applicableAfter}{" "}
+          dimensiones aplicables)
+        </div>
+      )}
+      {drops.length > 0 && (
+        <div>
+          <span className="font-semibold">Dimensiones que empeoraron:</span>
+          <ul className="mt-1 ml-4 list-disc space-y-0.5">
+            {drops.map((d, i) => (
+              <li key={i}>
+                {DIMENSION_LABEL[d.dimension] ?? d.dimension}:{" "}
+                <span className="text-navy-500">
+                  {d.before} → {d.after}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
   );
 }
 
