@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useMemo, useState, useTransition } from "react";
 import { reanalyzeTickerAction } from "@/app/dashboard/actions";
 import type {
@@ -55,6 +56,25 @@ const STATE_STYLE: Record<
   },
 };
 
+type SortKey =
+  | "ticker"
+  | "issuer"
+  | "conviction"
+  | "n_funds"
+  | "state";
+type SortDir = "asc" | "desc";
+
+// Higher value = earlier in the "natural" state sort order: unseen
+// first (actionable), then owned/watchlist, then discards. Sort desc
+// surfaces unseen at the top.
+const STATE_RANK: Record<string, number> = {
+  "": 4, // unseen
+  in_portfolio: 3,
+  watchlist: 2,
+  discarded: 1,
+  outside_circle: 0,
+};
+
 // Client wrapper for the leaderboard: client-side filter + sort across
 // the pre-computed rows. Server does the heavy SQL aggregation; this
 // component is thin, just presentation + state for interactive UX.
@@ -66,6 +86,22 @@ export default function DiscoveryLeaderboard({
   const [filter, setFilter] = useState<FilterKey>("unseen");
   const [query, setQuery] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [sortKey, setSortKey] = useState<SortKey>("conviction");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
+
+  const handleSort = (key: SortKey) => {
+    if (sortKey === key) {
+      setSortDir(sortDir === "asc" ? "desc" : "asc");
+    } else {
+      setSortKey(key);
+      // Sensible defaults: numeric columns desc, text columns asc.
+      setSortDir(
+        key === "ticker" || key === "issuer" || key === "state"
+          ? "asc"
+          : "desc",
+      );
+    }
+  };
 
   const toggleExpanded = (ticker: string) => {
     setExpanded((prev) => {
@@ -78,7 +114,7 @@ export default function DiscoveryLeaderboard({
 
   const filtered = useMemo(() => {
     const q = query.trim().toUpperCase();
-    return rows.filter((r) => {
+    const passed = rows.filter((r) => {
       if (filter === "unseen" && r.ticker_state) return false;
       if (filter === "in_portfolio" && r.ticker_state !== "in_portfolio")
         return false;
@@ -96,7 +132,29 @@ export default function DiscoveryLeaderboard({
         return false;
       return true;
     });
-  }, [rows, filter, query]);
+
+    const mult = sortDir === "asc" ? 1 : -1;
+    return [...passed].sort((a, b) => {
+      switch (sortKey) {
+        case "ticker":
+          return a.ticker.localeCompare(b.ticker) * mult;
+        case "issuer":
+          return a.issuer_name.localeCompare(b.issuer_name) * mult;
+        case "conviction":
+          return (a.conviction_score - b.conviction_score) * mult;
+        case "n_funds":
+          return (a.n_funds - b.n_funds) * mult;
+        case "state": {
+          const ra = STATE_RANK[a.ticker_state ?? ""] ?? 0;
+          const rb = STATE_RANK[b.ticker_state ?? ""] ?? 0;
+          if (ra !== rb) return (ra - rb) * mult;
+          // Secondary: conviction desc so within a state group the
+          // strongest signals surface first.
+          return b.conviction_score - a.conviction_score;
+        }
+      }
+    });
+  }, [rows, filter, query, sortKey, sortDir]);
 
   const counts = useMemo(() => {
     const c: Record<FilterKey, number> = {
@@ -162,19 +220,47 @@ export default function DiscoveryLeaderboard({
           <thead className="border-b border-navy-100 bg-navy-50 text-xs uppercase tracking-wider text-navy-600">
             <tr>
               <th className="px-4 py-3 text-left font-semibold">#</th>
-              <th className="px-4 py-3 text-left font-semibold">Ticker</th>
-              <th className="px-4 py-3 text-left font-semibold">Empresa</th>
-              <th className="px-4 py-3 text-right font-semibold">
-                Conviction
-              </th>
-              <th className="px-4 py-3 text-right font-semibold">Fondos</th>
+              <SortableHeader
+                label="Ticker"
+                active={sortKey === "ticker"}
+                dir={sortDir}
+                onClick={() => handleSort("ticker")}
+                align="left"
+              />
+              <SortableHeader
+                label="Empresa"
+                active={sortKey === "issuer"}
+                dir={sortDir}
+                onClick={() => handleSort("issuer")}
+                align="left"
+              />
+              <SortableHeader
+                label="Conviction"
+                active={sortKey === "conviction"}
+                dir={sortDir}
+                onClick={() => handleSort("conviction")}
+                align="right"
+              />
+              <SortableHeader
+                label="Fondos"
+                active={sortKey === "n_funds"}
+                dir={sortDir}
+                onClick={() => handleSort("n_funds")}
+                align="right"
+              />
               <th className="px-4 py-3 text-left font-semibold">
                 <span className="inline-flex items-center gap-1">
                   Tiers
                   <TiersInfoPopover />
                 </span>
               </th>
-              <th className="px-4 py-3 text-left font-semibold">Estado</th>
+              <SortableHeader
+                label="Estado"
+                active={sortKey === "state"}
+                dir={sortDir}
+                onClick={() => handleSort("state")}
+                align="left"
+              />
               <th className="px-4 py-3 text-right font-semibold"></th>
             </tr>
           </thead>
@@ -330,7 +416,13 @@ function FundBreakdownGrouped({ funds }: { funds: FundInPosition[] }) {
                 key={f.display_name}
                 className="flex items-center justify-between rounded border border-navy-100 bg-white px-2 py-1.5"
               >
-                <span className="truncate">{f.display_name}</span>
+                <Link
+                  href={`/dashboard/discovery/fund/${f.cik}`}
+                  className="truncate text-navy-700 hover:text-navy-900 hover:underline"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {f.display_name}
+                </Link>
                 <span className="ml-2 shrink-0 font-mono tabular-nums text-navy-500">
                   {f.weight_in_fund.toFixed(1)}%
                 </span>
@@ -367,6 +459,45 @@ function TierBreakdown({ row }: { row: LeaderboardRow }) {
         ) : null,
       )}
     </div>
+  );
+}
+
+// Column header that toggles sort state on click. Indicator glyph
+// ↕ (inactive), ▲ (asc), ▼ (desc). Alignment prop mirrors the th so
+// numeric columns retain right alignment.
+function SortableHeader({
+  label,
+  active,
+  dir,
+  onClick,
+  align,
+}: {
+  label: string;
+  active: boolean;
+  dir: SortDir;
+  onClick: () => void;
+  align: "left" | "right";
+}) {
+  const alignCell = align === "right" ? "text-right" : "text-left";
+  const alignFlex = align === "right" ? "justify-end" : "justify-start";
+  return (
+    <th className={`px-4 py-3 font-semibold ${alignCell}`}>
+      <button
+        type="button"
+        onClick={onClick}
+        className={`inline-flex items-center gap-1 ${alignFlex} ${
+          active ? "text-navy-900" : "text-navy-600"
+        } hover:text-navy-900`}
+      >
+        <span>{label}</span>
+        <span
+          aria-hidden
+          className={active ? "text-navy-700" : "text-navy-300"}
+        >
+          {active ? (dir === "asc" ? "▲" : "▼") : "↕"}
+        </span>
+      </button>
+    </th>
   );
 }
 

@@ -1,8 +1,11 @@
+import Link from "next/link";
 import { auth } from "@/auth";
 import { redirect } from "next/navigation";
 import { computeLeaderboard } from "@/lib/discoveryLeaderboard";
+import { computeDeltaWindow } from "@/lib/discoveryDelta";
 import DashboardNav from "@/components/DashboardNav";
 import DiscoveryLeaderboard from "@/components/DiscoveryLeaderboard";
+import DiscoveryNewEntrants from "@/components/DiscoveryNewEntrants";
 import AnalyzeEntryForm from "@/components/AnalyzeEntryForm";
 
 export const metadata = {
@@ -22,7 +25,10 @@ export default async function DiscoveryPage() {
   const session = await auth();
   if (!session?.user?.id) redirect("/auth/signin");
 
-  const { rows, meta } = await computeLeaderboard(session.user.id);
+  const [{ rows, meta }, delta] = await Promise.all([
+    computeLeaderboard(session.user.id),
+    computeDeltaWindow(session.user.id),
+  ]);
   const quarterLabel = meta.latestQuarter
     ? formatQuarter(meta.latestQuarter)
     : "—";
@@ -32,7 +38,15 @@ export default async function DiscoveryPage() {
       <DashboardNav />
       <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-8">
         <header className="mb-6">
-          <h1 className="text-2xl font-bold text-navy-950">Discovery</h1>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <h1 className="text-2xl font-bold text-navy-950">Discovery</h1>
+            <Link
+              href="/dashboard/discovery/funds"
+              className="rounded-lg border border-navy-200 bg-white px-3 py-1.5 text-xs font-medium text-navy-700 hover:border-navy-400 hover:text-navy-900"
+            >
+              Ver fondos →
+            </Link>
+          </div>
           <p className="mt-2 max-w-3xl text-sm text-navy-600">
             Empresas que aparecen en la cartera de los {meta.fundsCovered} fondos
             curados, ordenadas por conviction score (suma ponderada por tier
@@ -52,6 +66,14 @@ export default async function DiscoveryPage() {
 
         <section className="mb-6">
           <AnalyzeEntryForm />
+        </section>
+
+        <section className="mb-6">
+          <DiscoveryNewEntrants
+            entrants={delta.newEntrants}
+            latestQuarter={delta.latestQuarter}
+            priorQuarter={delta.priorQuarter}
+          />
         </section>
 
         <DiscoveryLeaderboard rows={rows} />

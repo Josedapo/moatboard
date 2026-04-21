@@ -7,8 +7,9 @@
 
 import { sql } from "@/lib/db";
 import {
-  fetchLatestThirteenFFiling,
+  fetchRecentThirteenFFilings,
   parseInformationTable,
+  type ThirteenFFilingRef,
 } from "@/lib/thirteenF";
 import { resolveCusips } from "@/lib/cusip";
 
@@ -70,31 +71,56 @@ export async function getFundById(fundId: number): Promise<DiscoveryFund | null>
   return rows[0] ?? null;
 }
 
-// Ingest the latest 13F-HR for a fund. Returns a structured result for
-// the backfill script to log without crashing the whole run if one fund
-// hiccups.
+// Ingest the latest 13F-HR for a fund. Thin wrapper around
+// ingestRecentFilings that returns the single result for callers that
+// only care about the current quarter.
 export async function ingestLatestFiling(
   fundId: number,
 ): Promise<IngestResult> {
+  const results = await ingestRecentFilings(fundId, 1);
+  return results[0] ?? { status: "no_filing", fundId };
+}
+
+// Ingest up to `n` most recent 13F-HR filings for a fund, newest first.
+// Useful for backfilling prior quarters so QoQ delta has something to
+// compare against. Idempotent per accession; already-ingested filings
+// short-circuit as ok_cached.
+export async function ingestRecentFilings(
+  fundId: number,
+  n: number,
+): Promise<IngestResult[]> {
   const fund = await getFundById(fundId);
   if (!fund) {
-    return { status: "error", fundId, message: "Fund not found" };
+    return [{ status: "error", fundId, message: "Fund not found" }];
   }
 
-  let filingRef;
+  let filingRefs: ThirteenFFilingRef[];
   try {
-    filingRef = await fetchLatestThirteenFFiling(fund.cik);
+    filingRefs = await fetchRecentThirteenFFilings(fund.cik, n);
   } catch (err) {
-    return {
-      status: "error",
-      fundId,
-      message: `SEC fetch failed: ${(err as Error).message}`,
-    };
+    return [
+      {
+        status: "error",
+        fundId,
+        message: `SEC fetch failed: ${(err as Error).message}`,
+      },
+    ];
   }
-  if (!filingRef) {
-    return { status: "no_filing", fundId };
+  if (filingRefs.length === 0) {
+    return [{ status: "no_filing", fundId }];
   }
 
+  const results: IngestResult[] = [];
+  for (const filingRef of filingRefs) {
+    results.push(await ingestSingleFiling(fundId, filingRef));
+  }
+  return results;
+}
+
+async function ingestSingleFiling(
+  fundId: number,
+  filingRef: ThirteenFFilingRef,
+): Promise<IngestResult> {
   // Idempotency: skip if this accession is already stored.
   const existing = (await sql`
     SELECT id FROM discovery_filings

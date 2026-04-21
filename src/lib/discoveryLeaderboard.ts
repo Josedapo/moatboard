@@ -10,6 +10,7 @@ import { sql } from "@/lib/db";
 
 export type FundInPosition = {
   display_name: string;
+  cik: string;
   tier: "A" | "B" | "C" | "D" | "E";
   weight_in_fund: number; // percentage 0-100
 };
@@ -50,19 +51,25 @@ export async function computeLeaderboard(
       ORDER BY fund_id, period_of_report DESC
     ),
     fund_holdings AS (
+      -- Roll up to one row per (fund, ticker). A fund occasionally
+      -- holds multiple CUSIPs that map to the same ticker (class A/C
+      -- share lines, post-split legacy CUSIPs). Without this rollup
+      -- the fund appears twice in fund_breakdown and JSX key collides.
       SELECT
         h.ticker,
-        h.issuer_name,
+        MAX(h.issuer_name) AS issuer_name,
         f.fund_id,
         df.tier,
         df.tier_weight::float AS tier_weight,
         df.display_name,
-        h.value_usd::float AS value_usd,
-        h.weight_in_fund::float AS weight_in_fund
+        df.cik,
+        SUM(h.value_usd)::float AS value_usd,
+        SUM(h.weight_in_fund)::float AS weight_in_fund
       FROM discovery_holdings h
       JOIN latest_filing f ON f.id = h.filing_id
       JOIN discovery_funds df ON df.id = f.fund_id
       WHERE h.ticker IS NOT NULL AND df.active = TRUE
+      GROUP BY h.ticker, f.fund_id, df.tier, df.tier_weight, df.display_name, df.cik
     )
     SELECT
       fh.ticker,
@@ -82,6 +89,7 @@ export async function computeLeaderboard(
       JSON_AGG(
         JSON_BUILD_OBJECT(
           'display_name', fh.display_name,
+          'cik', fh.cik,
           'tier', fh.tier,
           'weight_in_fund', fh.weight_in_fund
         ) ORDER BY fh.tier, fh.display_name

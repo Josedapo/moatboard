@@ -49,10 +49,33 @@ export async function resolveCusips(
   const missing = uniq.filter((c) => !out.has(c));
   if (missing.length === 0) return out;
 
-  // 2. Batch-resolve via OpenFIGI
+  // 2. Batch-resolve via OpenFIGI. Transport / HTTP failures propagate
+  // as a BatchFailure so the caller can surface them without polluting
+  // the cache with spurious "unresolvable" rows.
   for (let i = 0; i < missing.length; i += BATCH_SIZE) {
     const batch = missing.slice(i, i + BATCH_SIZE);
-    const resolutions = await resolveBatch(batch);
+    let resolutions: CusipResolution[];
+    try {
+      resolutions = await resolveBatch(batch);
+    } catch (err) {
+      console.error(
+        `OpenFIGI batch failed (will retry next run): ${(err as Error).message}`,
+      );
+      // Mark in-memory as unresolved but DO NOT persist — next run
+      // will re-query these CUSIPs.
+      for (const cusip of batch) {
+        out.set(cusip, {
+          cusip,
+          ticker: null,
+          issuer_name: null,
+          exchange_code: null,
+        });
+      }
+      if (i + BATCH_SIZE < missing.length) {
+        await sleep(THROTTLE_MS);
+      }
+      continue;
+    }
     for (const r of resolutions) {
       out.set(r.cusip, r);
       await persistResolution(r);
@@ -68,33 +91,22 @@ export async function resolveCusips(
 async function resolveBatch(cusips: string[]): Promise<CusipResolution[]> {
   const body = cusips.map((c) => ({ idType: "ID_CUSIP", idValue: c }));
 
-  let res: Response;
-  try {
-    res = await fetch(OPENFIGI_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-  } catch (err) {
-    console.error(`OpenFIGI network error: ${(err as Error).message}`);
-    return cusips.map((cusip) => ({
-      cusip,
-      ticker: null,
-      issuer_name: null,
-      exchange_code: null,
-    }));
-  }
+  const res = await fetch(OPENFIGI_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
 
   if (!res.ok) {
-    // 429 rate limit or 5xx — give up on this batch, mark as unresolved.
-    // They will re-attempt next run (rows not persisted on failure).
-    console.error(`OpenFIGI ${res.status}: ${await res.text()}`);
-    return cusips.map((cusip) => ({
-      cusip,
-      ticker: null,
-      issuer_name: null,
-      exchange_code: null,
-    }));
+    // 429 rate limit or 5xx — surface as error so caller doesn't
+    // cache a spurious "unresolvable" result. A legitimate "no match"
+    // still comes through as an empty data[] in a 200 response and
+    // IS cached (useful to avoid repeat lookups on truly missing
+    // securities).
+    const body = await res.text().catch(() => "");
+    throw new Error(
+      `OpenFIGI ${res.status} ${res.statusText}: ${body.slice(0, 200)}`,
+    );
   }
 
   const payload = (await res.json()) as Array<

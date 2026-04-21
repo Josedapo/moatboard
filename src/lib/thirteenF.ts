@@ -49,12 +49,24 @@ export type ThirteenFFilingRef = {
 };
 
 // Find the most recent 13F-HR (or 13F-HR/A) filing for the given CIK.
-// Returns null when the fund has never filed 13F-HR (some managers file
-// only 13F-NT = notice of other filer reporting). Throws on network
-// errors so the caller can surface the fund in a retry list.
+// Thin wrapper around fetchRecentThirteenFFilings for callers that only
+// care about the latest one.
 export async function fetchLatestThirteenFFiling(
   cik: string,
 ): Promise<ThirteenFFilingRef | null> {
+  const recent = await fetchRecentThirteenFFilings(cik, 1);
+  return recent[0] ?? null;
+}
+
+// Find the N most recent 13F-HR filings for the given CIK, newest first.
+// Walks the /submissions feed and picks up to N filings with form
+// "13F-HR" or "13F-HR/A", ignoring 13F-NT (notice of other filer). The
+// info table URL is resolved eagerly for each, so callers can move
+// straight to parseInformationTable.
+export async function fetchRecentThirteenFFilings(
+  cik: string,
+  maxCount: number,
+): Promise<ThirteenFFilingRef[]> {
   const cik10 = padCik(cik);
   const res = await fetch(SUBMISSIONS_URL(cik10), {
     headers: { "User-Agent": SEC_USER_AGENT! },
@@ -67,7 +79,7 @@ export async function fetchLatestThirteenFFiling(
   }
   const data = (await res.json()) as RawSubmissionsResponse;
   const recent = data.filings?.recent;
-  if (!recent) return null;
+  if (!recent) return [];
 
   const accessions = recent.accessionNumber ?? [];
   const forms = recent.form ?? [];
@@ -82,23 +94,22 @@ export async function fetchLatestThirteenFFiling(
     reportDates.length,
   );
 
-  // Walk in order (SEC returns most-recent first) and pick the first
-  // 13F-HR or 13F-HR/A. Ignore 13F-NT (notice of other filer — empty).
-  for (let i = 0; i < n; i++) {
+  const out: ThirteenFFilingRef[] = [];
+  for (let i = 0; i < n && out.length < maxCount; i++) {
     const form = forms[i];
     if (form !== "13F-HR" && form !== "13F-HR/A") continue;
     const accession = accessions[i];
     const infoTableUrl = await resolveInfoTableUrl(cik10, accession);
-    return {
+    out.push({
       accession,
       form,
       filingDate: filingDates[i],
       periodOfReport: reportDates[i],
       primaryDocument: primaryDocs[i] ?? "",
       infoTableUrl,
-    };
+    });
   }
-  return null;
+  return out;
 }
 
 // 13F filings have multiple files in the accession archive: a narrative
