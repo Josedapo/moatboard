@@ -7,6 +7,7 @@ const NAV = [
   { href: "/dashboard", label: "Portfolio", exact: true },
   { href: "/dashboard/watchlist", label: "Watchlist", exact: false },
   { href: "/dashboard/history", label: "History", exact: false },
+  { href: "/dashboard/discovery", label: "Discovery", exact: false },
   { href: "/dashboard/inbox", label: "Inbox", exact: false },
 ];
 

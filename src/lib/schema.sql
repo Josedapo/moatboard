@@ -597,3 +597,81 @@ CREATE INDEX IF NOT EXISTS idx_fundamentals_snapshots_position
 CREATE UNIQUE INDEX IF NOT EXISTS uniq_filing_snapshot
   ON fundamentals_snapshots(user_id, ticker, sec_filing_accession)
   WHERE sec_filing_accession IS NOT NULL;
+
+-- ─────────────────────────────────────────────────────────────────────────
+-- Discovery (Phase 7): roster of curated world-class funds, their
+-- quarterly 13F-HR filings, and the per-holding rows. Drives the
+-- consensus-conviction leaderboard feeding the wizard.
+-- ─────────────────────────────────────────────────────────────────────────
+
+-- 32 curated funds (seeded). Tier weights drive the conviction score
+-- so quality-aligned managers (tier A) outweigh growth hedges (tier E)
+-- in the leaderboard, preventing mega-cap-bias dominance.
+CREATE TABLE IF NOT EXISTS discovery_funds (
+  id SERIAL PRIMARY KEY,
+  cik VARCHAR(10) NOT NULL UNIQUE,
+  manager_name VARCHAR(160) NOT NULL,
+  display_name VARCHAR(120) NOT NULL,
+  tier VARCHAR(1) NOT NULL CHECK (tier IN ('A','B','C','D','E')),
+  tier_weight NUMERIC(3, 1) NOT NULL,
+  philosophy VARCHAR(400),
+  active BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_discovery_funds_active_tier
+  ON discovery_funds(active, tier);
+
+-- One row per quarterly 13F-HR filing successfully parsed. Idempotent
+-- via UNIQUE (fund_id, accession).
+CREATE TABLE IF NOT EXISTS discovery_filings (
+  id SERIAL PRIMARY KEY,
+  fund_id INTEGER NOT NULL REFERENCES discovery_funds(id) ON DELETE CASCADE,
+  accession VARCHAR(25) NOT NULL,
+  period_of_report DATE NOT NULL,
+  filing_date DATE NOT NULL,
+  total_value_usd NUMERIC(20, 2),
+  holdings_count INTEGER,
+  source_url TEXT,
+  fetched_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (fund_id, accession)
+);
+
+CREATE INDEX IF NOT EXISTS idx_discovery_filings_fund_period
+  ON discovery_filings(fund_id, period_of_report DESC);
+CREATE INDEX IF NOT EXISTS idx_discovery_filings_period
+  ON discovery_filings(period_of_report DESC);
+
+-- Per-holding per-filing rows. ticker nullable for CUSIPs we can't
+-- resolve (delisted, private, non-US). weight_in_fund is 0-100.
+CREATE TABLE IF NOT EXISTS discovery_holdings (
+  id SERIAL PRIMARY KEY,
+  filing_id INTEGER NOT NULL REFERENCES discovery_filings(id) ON DELETE CASCADE,
+  cusip VARCHAR(9) NOT NULL,
+  ticker VARCHAR(10),
+  issuer_name VARCHAR(200) NOT NULL,
+  class_title VARCHAR(40),
+  shares BIGINT NOT NULL,
+  value_usd NUMERIC(20, 2) NOT NULL,
+  weight_in_fund NUMERIC(7, 4) NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_discovery_holdings_filing
+  ON discovery_holdings(filing_id);
+CREATE INDEX IF NOT EXISTS idx_discovery_holdings_ticker
+  ON discovery_holdings(ticker);
+CREATE INDEX IF NOT EXISTS idx_discovery_holdings_cusip
+  ON discovery_holdings(cusip);
+
+-- CUSIP → ticker cache. Permanent once resolved. ticker nullable when
+-- OpenFIGI can't map (private companies, foreign securities). Source
+-- tracks where the resolution came from for manual audits.
+CREATE TABLE IF NOT EXISTS discovery_cusip_ticker (
+  cusip VARCHAR(9) PRIMARY KEY,
+  ticker VARCHAR(10),
+  issuer_name VARCHAR(200),
+  exchange_code VARCHAR(10),
+  resolved_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  source VARCHAR(30) NOT NULL DEFAULT 'openfigi'
+);
