@@ -90,6 +90,16 @@ export default function RedFlagsList({ flags }: { flags: RedFlag[] }) {
               <p className="text-sm leading-relaxed text-navy-700">
                 {flag.detail}
               </p>
+              {flag.source_excerpt && (
+                <blockquote className="mt-3 border-l-2 border-navy-300 bg-white/60 px-3 py-2 text-xs italic leading-relaxed text-navy-700">
+                  “{flag.source_excerpt}”
+                  {flag.source_item && (
+                    <span className="mt-1 block not-italic text-navy-500">
+                      — {flag.source_item}
+                    </span>
+                  )}
+                </blockquote>
+              )}
             </div>
           );
         }),

@@ -30,6 +30,10 @@ import {
 import { saveRedFlags } from "@/lib/redFlags";
 import { generateRedFlags } from "@/lib/redFlagsAi";
 import { fetchQuoteAndFundamentals } from "@/lib/financial";
+import {
+  prepareUnderstandingFiling,
+  prepareRedFlagsFiling,
+} from "@/lib/filingForPrompt";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
@@ -104,6 +108,8 @@ export async function navigateToStepAction(
 
 // Forces a fresh generation — used by the "Regenerate" button. The previous
 // version stays in business_understanding with archived_at set.
+// Fetches the latest 10-K when available and passes it as primary source;
+// silently falls back to pre-10K behaviour when SEC is unreachable.
 export async function regenerateUnderstandingAction(
   ticker: string,
 ): Promise<void> {
@@ -111,17 +117,23 @@ export async function regenerateUnderstandingAction(
   if (!userId) return;
   const upper = ticker.toUpperCase();
 
-  const { quote, fundamentals } = await fetchQuoteAndFundamentals(upper);
+  const [{ quote, fundamentals }, filing] = await Promise.all([
+    fetchQuoteAndFundamentals(upper),
+    prepareUnderstandingFiling(upper),
+  ]);
   const { generated, model } = await generateBusinessUnderstanding(
     upper,
     quote,
     fundamentals,
+    filing,
   );
   await saveNewUnderstanding({
     ticker: upper,
     summaryMd: generated.summary_md,
     questionsAndAnswers: generated.questions_and_answers,
     sources: generated.sources,
+    last10kAccession: filing?.accession ?? null,
+    last10kPeriodEnd: filing?.reportDate ?? null,
     model,
   });
   revalidatePath(`/dashboard/analyze/${upper}`);
@@ -136,9 +148,23 @@ export async function regenerateRedFlagsAction(
   if (!userId) return;
   const upper = ticker.toUpperCase();
 
-  const { quote, fundamentals } = await fetchQuoteAndFundamentals(upper);
-  const { flags, model } = await generateRedFlags(upper, quote, fundamentals);
-  await saveRedFlags({ ticker: upper, flags, model });
+  const [{ quote, fundamentals }, filing] = await Promise.all([
+    fetchQuoteAndFundamentals(upper),
+    prepareRedFlagsFiling(upper),
+  ]);
+  const { flags, model } = await generateRedFlags(
+    upper,
+    quote,
+    fundamentals,
+    filing,
+  );
+  await saveRedFlags({
+    ticker: upper,
+    flags,
+    last10kAccession: filing?.accession ?? null,
+    last10kPeriodEnd: filing?.reportDate ?? null,
+    model,
+  });
   revalidatePath(`/dashboard/analyze/${upper}`);
 }
 

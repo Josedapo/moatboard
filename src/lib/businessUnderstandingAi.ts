@@ -6,6 +6,12 @@
 // picture. Honesty over politeness: if something doesn't have clear value
 // for an investor, say it.
 //
+// When a 10-K is available (new flow), the real Item 1 (Business) text is
+// injected as the primary source. Yahoo Finance's short summary drops to
+// a secondary context signal. When no 10-K is available (very recent IPO,
+// SEC fetch failure), we fall back to the pre-10K behaviour and tag the
+// `sources` array accordingly so the row is honest about its ancestry.
+//
 // Two entry points:
 //   1. `generateBusinessUnderstanding` — full first-pass generation (summary
 //      + 5-7 pre-generated Q&A). Persisted via `saveNewUnderstanding`.
@@ -19,6 +25,18 @@ import type {
   QnA,
   BusinessUnderstandingSource,
 } from "@/lib/businessUnderstanding";
+
+// Filing grounding passed in by the caller (regenerate action). When
+// provided, the prompt uses the 10-K text as the primary source.
+export type UnderstandingFilingInput = {
+  text: string;
+  truncated: boolean;
+  accession: string;
+  form: string;
+  filingDate: string; // YYYY-MM-DD
+  reportDate: string | null;
+  url: string;
+};
 
 const MODEL = "claude-sonnet-4-6";
 
@@ -55,6 +73,7 @@ function buildGenerationPrompt(
   ticker: string,
   quote: Quote | null,
   fundamentals: Fundamentals | null,
+  filing: UnderstandingFilingInput | null,
 ): string {
   const companyLine = quote
     ? `${quote.longName ?? ticker} (${ticker}) · ${quote.sector ?? "sector ?"} / ${quote.industry ?? "industry ?"}`
@@ -65,9 +84,9 @@ function buildGenerationPrompt(
       ? `Market cap: $${(quote.marketCap / 1e9).toFixed(1)}B`
       : "Market cap no disponible";
 
-  const summaryLine = quote?.longBusinessSummary
-    ? `Resumen de Yahoo Finance (referencia — puedes reescribirlo):\n${quote.longBusinessSummary}`
-    : "Sin resumen de Yahoo Finance.";
+  const secondaryYahooLine = quote?.longBusinessSummary
+    ? `Resumen breve de Yahoo Finance (contexto actual de mercado, no fuente primaria):\n${quote.longBusinessSummary}`
+    : "Yahoo Finance no aporta resumen.";
 
   const fdLine = fundamentals
     ? `Algunos datos financieros recientes:
@@ -76,15 +95,35 @@ function buildGenerationPrompt(
 - Crecimiento ingresos (últ. año): ${formatPct(fundamentals.revenueGrowth)}`
     : "Sin datos financieros detallados.";
 
+  const filingBlock = filing
+    ? `
+FUENTE PRIMARIA — DOCUMENTO SEC EDGAR (${filing.form}${filing.reportDate ? `, periodo ${filing.reportDate}` : ""}, filed ${filing.filingDate}).
+El texto está en inglés; tu respuesta va en español.${filing.truncated ? " El documento se truncó por longitud — úsalo como primary input, pero si falta información crítica puedes apoyarte en la fuente secundaria." : ""}
+
+=== TEXTO ${filing.form} (plano) ===
+${filing.text}
+=== FIN DEL DOCUMENTO ===
+`
+    : `
+(No hay un ${"10-K"} reciente disponible en EDGAR para este ticker. Apóyate en el contexto de Yahoo Finance y tu conocimiento general; indícalo implícitamente escribiendo con mayor cautela cuando una afirmación sea difícil de verificar.)
+`;
+
   return `${TONE_PREAMBLE}
 
 Explícame ${companyLine}.
 
 ${marketCapLine}
-
-${summaryLine}
+${filingBlock}
+FUENTE SECUNDARIA:
+${secondaryYahooLine}
 
 ${fdLine}
+
+INSTRUCCIONES DE USO DE LAS FUENTES:
+- La fuente primaria es el ${filing ? filing.form : "resumen de Yahoo Finance"}. Ahí está la descripción real del negocio, sus segmentos, productos, geografías, clientes.
+- Cita mentalmente los segmentos / productos / tipos de cliente tal como aparecen en el documento (nombres propios, líneas de negocio), pero escríbelo en lenguaje llano en español.
+- Nombres propios, tickers, productos, siglas financieras (ROIC, FCF, CAGR, moat, DCF, EPS) y referencias a secciones legales (Item 1, Item 1A) se quedan en inglés dentro del texto en español.
+- No inventes. Si la fuente no aclara algo, dilo ("el 10-K no detalla…").
 
 La explicación debe tener cinco secciones con estos títulos exactos (en este orden):
 1. "Qué hace exactamente" — el mecanismo real, no una frase abstracta.
@@ -93,22 +132,11 @@ La explicación debe tener cinco secciones con estos títulos exactos (en este o
 4. "En qué invierte" — dónde va el capital (capex, I+D, adquisiciones).
 5. "Qué la hace diferente (o no)" — si hay algo estructural, o es commodity-like.
 
-Después, anticipa 5-7 preguntas que un inversor con criterio se haría y respóndelas tú mismo. Las preguntas deben ser CONCRETAS y específicas de este negocio, no genéricas ("¿es rentable?" no vale; "¿qué pasa con los volúmenes si las tasas bajan 200bp?" sí).
+LONGITUD (crítico): cada sección debe tener 1-2 párrafos; cada párrafo 2-3 frases. Objetivo: 80-130 palabras por sección (400-650 palabras totales para las 5 secciones). Densidad alta, una cifra o dato concreto por sección cuando aporte, sin listados exhaustivos. Si tienes que elegir entre exhaustividad y claridad, elige claridad. No es un highlight superficial, pero tampoco una memoria anual parafraseada.
 
-FORMATO DE SALIDA — JSON estricto, nada antes ni después:
+Después, anticipa 5-7 preguntas que un inversor con criterio se haría y respóndelas tú mismo. Las preguntas deben ser CONCRETAS y específicas de este negocio, no genéricas ("¿es rentable?" no vale; "¿qué pasa con los volúmenes si las tasas bajan 200bp?" sí). Las respuestas 1-3 frases, directas.
 
-{
-  "sections": [
-    {
-      "title": "Qué hace exactamente",
-      "paragraphs": ["Párrafo 1 (2-4 frases).", "Párrafo 2 opcional."]
-    },
-    ... (5 secciones en total)
-  ],
-  "questions_and_answers": [
-    { "question": "...", "answer": "1-3 frases, directas, sin rodeos" }
-  ]
-}`;
+Llama a la tool submit_business_understanding con exactamente 5 secciones (en el orden indicado) y 5-7 Q&A. No escribas texto plano fuera de la tool.`;
 }
 
 function buildFollowupPrompt(
@@ -154,38 +182,83 @@ export async function generateBusinessUnderstanding(
   ticker: string,
   quote: Quote | null,
   fundamentals: Fundamentals | null,
+  filing: UnderstandingFilingInput | null = null,
 ): Promise<{ generated: GeneratedUnderstanding; model: string }> {
-  const prompt = buildGenerationPrompt(ticker, quote, fundamentals);
+  const prompt = buildGenerationPrompt(ticker, quote, fundamentals, filing);
 
+  // tool_use guarantees valid JSON — free-form Spanish paragraphs and
+  // Q&A answers are too risky to serialize through "return JSON" prompts
+  // (unescaped quotes / bare newlines break JSON.parse).
+  // 5 sections × paragraphs + 5-7 Q&A with concrete answers easily
+  // crosses 4k tokens; 8000 is the comfort cushion.
   const response = await getClient().messages.create({
     model: MODEL,
-    max_tokens: 3000,
+    max_tokens: 8000,
+    tools: [
+      {
+        name: "submit_business_understanding",
+        description: "Submit the structured business understanding.",
+        input_schema: {
+          type: "object",
+          properties: {
+            sections: {
+              type: "array",
+              description: "Exactly 5 sections with the fixed titles in order.",
+              items: {
+                type: "object",
+                properties: {
+                  title: { type: "string" },
+                  paragraphs: {
+                    type: "array",
+                    items: { type: "string" },
+                  },
+                },
+                required: ["title", "paragraphs"],
+              },
+            },
+            questions_and_answers: {
+              type: "array",
+              description: "5-7 concrete investor questions with answers.",
+              items: {
+                type: "object",
+                properties: {
+                  question: { type: "string" },
+                  answer: { type: "string" },
+                },
+                required: ["question", "answer"],
+              },
+            },
+          },
+          required: ["sections", "questions_and_answers"],
+        },
+      },
+    ],
+    tool_choice: { type: "tool", name: "submit_business_understanding" },
     messages: [{ role: "user", content: prompt }],
   });
 
-  const textBlock = response.content.find((b) => b.type === "text");
-  if (!textBlock || textBlock.type !== "text") {
-    throw new Error("No text response from Claude");
-  }
-
-  const raw = textBlock.text.trim();
-  const jsonMatch = raw.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) {
+  const toolUse = response.content.find((b) => b.type === "tool_use");
+  if (!toolUse || toolUse.type !== "tool_use") {
     throw new Error(
-      `Could not find JSON in business-understanding response: ${raw.slice(0, 200)}`,
+      `Claude did not return a tool_use block (stop_reason=${response.stop_reason}, blocks=${response.content.map((b) => b.type).join(",")})`,
     );
   }
 
-  const parsed = JSON.parse(jsonMatch[0]) as {
+  const input = toolUse.input as {
     sections?: Array<{ title?: string; paragraphs?: unknown }>;
     questions_and_answers?: Array<{ question?: string; answer?: string }>;
   };
 
-  if (!Array.isArray(parsed.sections) || parsed.sections.length < 3) {
-    throw new Error("Generated summary sections missing or too few");
+  if (!Array.isArray(input.sections) || input.sections.length < 3) {
+    console.error(
+      `Understanding tool_use missing sections. stop_reason=${response.stop_reason}. Raw: ${JSON.stringify(toolUse.input).slice(0, 600)}`,
+    );
+    throw new Error(
+      `Generated summary sections missing or too few (stop_reason=${response.stop_reason})`,
+    );
   }
 
-  const sections: SummarySection[] = parsed.sections
+  const sections: SummarySection[] = input.sections
     .filter(
       (s): s is { title: string; paragraphs: string[] } =>
         typeof s.title === "string" &&
@@ -199,13 +272,18 @@ export async function generateBusinessUnderstanding(
   }
 
   if (
-    !Array.isArray(parsed.questions_and_answers) ||
-    parsed.questions_and_answers.length < 3
+    !Array.isArray(input.questions_and_answers) ||
+    input.questions_and_answers.length < 3
   ) {
-    throw new Error("Generated Q&A list is missing or too short");
+    console.error(
+      `Understanding Q&A list too short. stop_reason=${response.stop_reason}. qa_length=${input.questions_and_answers?.length ?? "undefined"}. Raw input preview: ${JSON.stringify(input).slice(0, 800)}`,
+    );
+    throw new Error(
+      `Generated Q&A list is missing or too short (stop_reason=${response.stop_reason}, length=${input.questions_and_answers?.length ?? 0})`,
+    );
   }
 
-  const qa: QnA[] = parsed.questions_and_answers
+  const qa: QnA[] = input.questions_and_answers
     .filter((q) => typeof q.question === "string" && typeof q.answer === "string")
     .map((q) => ({
       question: q.question!,
@@ -219,11 +297,23 @@ export async function generateBusinessUnderstanding(
 
   const serialized: SerializedSummary = { sections };
 
+  const sources: BusinessUnderstandingSource[] = filing
+    ? [
+        {
+          url: filing.url,
+          label: filing.reportDate
+            ? `${filing.form} (FY ${filing.reportDate})`
+            : `${filing.form} filed ${filing.filingDate}`,
+          type: "10k",
+        },
+      ]
+    : [];
+
   return {
     generated: {
       summary_md: JSON.stringify(serialized),
       questions_and_answers: qa,
-      sources: [],
+      sources,
     },
     model: MODEL,
   };

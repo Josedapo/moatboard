@@ -19,6 +19,10 @@ export type RedFlag = {
   severity: RedFlagSeverity;
   summary: string;
   detail: string;
+  // Populated when the flag was grounded in the real 10-K. Optional for
+  // back-compat with rows generated before the 10-K ingestion work.
+  source_excerpt?: string;
+  source_item?: string; // e.g. "Item 1A", "Item 3", "Item 7"
 };
 
 export type QualitativeRedFlags = {

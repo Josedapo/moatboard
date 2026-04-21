@@ -25,14 +25,25 @@ export type BusinessUnderstanding = {
   generated_at: string;
   generated_with_model: string;
   archived_at: string | null;
+  last_10k_accession: string | null;
+  last_10k_period_end: string | null; // YYYY-MM-DD
 };
+
+const UNDERSTANDING_COLUMNS = `
+  ticker, version, summary_md, questions_and_answers, sources,
+  generated_at, generated_with_model, archived_at,
+  last_10k_accession,
+  TO_CHAR(last_10k_period_end, 'YYYY-MM-DD') AS last_10k_period_end
+`;
 
 export async function getCurrentUnderstanding(
   ticker: string,
 ): Promise<BusinessUnderstanding | null> {
   const rows = (await sql`
     SELECT ticker, version, summary_md, questions_and_answers, sources,
-           generated_at, generated_with_model, archived_at
+           generated_at, generated_with_model, archived_at,
+           last_10k_accession,
+           TO_CHAR(last_10k_period_end, 'YYYY-MM-DD') AS last_10k_period_end
     FROM business_understanding
     WHERE ticker = ${ticker.toUpperCase()} AND archived_at IS NULL
     ORDER BY version DESC
@@ -47,7 +58,9 @@ export async function getUnderstandingVersion(
 ): Promise<BusinessUnderstanding | null> {
   const rows = (await sql`
     SELECT ticker, version, summary_md, questions_and_answers, sources,
-           generated_at, generated_with_model, archived_at
+           generated_at, generated_with_model, archived_at,
+           last_10k_accession,
+           TO_CHAR(last_10k_period_end, 'YYYY-MM-DD') AS last_10k_period_end
     FROM business_understanding
     WHERE ticker = ${ticker.toUpperCase()} AND version = ${version}
     LIMIT 1
@@ -60,13 +73,17 @@ export async function listUnderstandingVersions(
 ): Promise<BusinessUnderstanding[]> {
   const rows = (await sql`
     SELECT ticker, version, summary_md, questions_and_answers, sources,
-           generated_at, generated_with_model, archived_at
+           generated_at, generated_with_model, archived_at,
+           last_10k_accession,
+           TO_CHAR(last_10k_period_end, 'YYYY-MM-DD') AS last_10k_period_end
     FROM business_understanding
     WHERE ticker = ${ticker.toUpperCase()}
     ORDER BY version DESC
   `) as unknown as BusinessUnderstanding[];
   return rows;
 }
+
+void UNDERSTANDING_COLUMNS;
 
 // Creates a new version. If a current version exists, archive it first
 // (set archived_at=NOW()). The new row gets version = prev + 1, or 1 if none.
@@ -75,12 +92,16 @@ export async function saveNewUnderstanding({
   summaryMd,
   questionsAndAnswers,
   sources,
+  last10kAccession,
+  last10kPeriodEnd,
   model = "claude-sonnet-4-6",
 }: {
   ticker: string;
   summaryMd: string;
   questionsAndAnswers: QnA[];
   sources: BusinessUnderstandingSource[];
+  last10kAccession?: string | null;
+  last10kPeriodEnd?: string | null;
   model?: string;
 }): Promise<BusinessUnderstanding> {
   const upper = ticker.toUpperCase();
@@ -100,16 +121,32 @@ export async function saveNewUnderstanding({
 
   const rows = (await sql`
     INSERT INTO business_understanding
-      (ticker, version, summary_md, questions_and_answers, sources, generated_with_model)
+      (ticker, version, summary_md, questions_and_answers, sources,
+       last_10k_accession, last_10k_period_end, generated_with_model)
     VALUES
       (${upper}, ${nextVersion[0].next_version}, ${summaryMd},
        ${JSON.stringify(questionsAndAnswers)}::jsonb,
        ${JSON.stringify(sources)}::jsonb,
+       ${last10kAccession ?? null},
+       ${last10kPeriodEnd ?? null},
        ${model})
     RETURNING ticker, version, summary_md, questions_and_answers, sources,
-              generated_at, generated_with_model, archived_at
+              generated_at, generated_with_model, archived_at,
+              last_10k_accession,
+              TO_CHAR(last_10k_period_end, 'YYYY-MM-DD') AS last_10k_period_end
   `) as unknown as BusinessUnderstanding[];
   return rows[0];
+}
+
+// Stale when the tracked 10-K accession differs from the latest one known
+// to the caller. Mirrors isRedFlagsStale in lib/redFlags.ts.
+export function isBusinessUnderstandingStale(
+  cached: BusinessUnderstanding,
+  latest10kAccession: string | null,
+): boolean {
+  if (!latest10kAccession) return false;
+  if (!cached.last_10k_accession) return true;
+  return cached.last_10k_accession !== latest10kAccession;
 }
 
 // Append a user follow-up Q&A to a specific (usually current) version's chat

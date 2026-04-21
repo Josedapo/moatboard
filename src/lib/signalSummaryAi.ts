@@ -22,22 +22,9 @@ import type {
   SignalEventType,
   SignalSource,
 } from "@/lib/signalClassifier";
-
-const SEC_USER_AGENT = process.env.SEC_USER_AGENT;
-if (!SEC_USER_AGENT) {
-  throw new Error(
-    "SEC_USER_AGENT is not set. SEC EDGAR requires 'Name Email' format.",
-  );
-}
+import { fetchFilingText } from "@/lib/secDocument";
 
 const MODEL = "claude-sonnet-4-6";
-
-// Rough character cap before we truncate the filing. Sonnet 4.6 has a
-// 200k-token context; budgeting ~15k tokens for prompt + response
-// leaves ~185k for the document (~600k–750k chars of English). We cap
-// at 550k chars as a conservative cushion — most 10-Qs fit; some 10-Ks
-// get truncated, which is the known trade-off of Strategy A.
-const MAX_DOCUMENT_CHARS = 550_000;
 
 let _client: Anthropic | null = null;
 function getClient(): Anthropic {
@@ -94,69 +81,6 @@ export async function summariseFiling({
     model: MODEL,
     truncated,
   };
-}
-
-// Download the primary filing document from EDGAR and strip the HTML
-// shell down to something Claude can read. Minimal cleaning on purpose
-// — we remove scripts/styles and collapse whitespace but keep the
-// semantic text (headings, paragraphs, tables as plain text). No DOM
-// parser dependency; SEC filings are well-formed enough for regex.
-async function fetchFilingText(
-  url: string,
-): Promise<{ text: string; truncated: boolean }> {
-  const res = await fetch(url, {
-    headers: { "User-Agent": SEC_USER_AGENT! },
-    cache: "no-store",
-  });
-  if (!res.ok) {
-    throw new Error(
-      `SEC document fetch failed: ${res.status} ${res.statusText}`,
-    );
-  }
-  const raw = await res.text();
-
-  // Strip <script> and <style> blocks including their content.
-  let cleaned = raw
-    .replace(/<script[\s\S]*?<\/script>/gi, "")
-    .replace(/<style[\s\S]*?<\/style>/gi, "")
-    .replace(/<head[\s\S]*?<\/head>/gi, "");
-
-  // Replace closing block tags with newlines so structure survives.
-  cleaned = cleaned.replace(
-    /<\/(p|div|tr|li|h[1-6]|section|article|header|footer)>/gi,
-    "\n",
-  );
-
-  // Strip every remaining tag.
-  cleaned = cleaned.replace(/<[^>]+>/g, " ");
-
-  // Decode a handful of common HTML entities. Not exhaustive but covers
-  // what SEC filings use in 99% of cases.
-  cleaned = cleaned
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&#8217;/g, "’")
-    .replace(/&#8220;/g, "“")
-    .replace(/&#8221;/g, "”")
-    .replace(/&#8211;/g, "–")
-    .replace(/&#8212;/g, "—")
-    .replace(/&#160;/g, " ")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'");
-
-  // Collapse whitespace (including newlines between tags) into single
-  // spaces, then restore paragraph breaks for the double-newlines we
-  // introduced on block-close tags.
-  cleaned = cleaned.replace(/[ \t]+/g, " ");
-  cleaned = cleaned.replace(/\n +/g, "\n").replace(/\n{3,}/g, "\n\n");
-  cleaned = cleaned.trim();
-
-  const truncated = cleaned.length > MAX_DOCUMENT_CHARS;
-  if (truncated) cleaned = cleaned.slice(0, MAX_DOCUMENT_CHARS);
-
-  return { text: cleaned, truncated };
 }
 
 function buildPrompt({

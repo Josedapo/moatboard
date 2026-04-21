@@ -398,8 +398,16 @@ CREATE TABLE IF NOT EXISTS business_understanding (
   generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   generated_with_model VARCHAR(50) NOT NULL DEFAULT 'claude-sonnet-4-6',
   archived_at TIMESTAMPTZ,
+  last_10k_accession TEXT,
+  last_10k_period_end DATE,
   PRIMARY KEY (ticker, version)
 );
+
+-- Backfill on existing DBs that predate the 10-K grounding columns.
+ALTER TABLE business_understanding
+  ADD COLUMN IF NOT EXISTS last_10k_accession TEXT;
+ALTER TABLE business_understanding
+  ADD COLUMN IF NOT EXISTS last_10k_period_end DATE;
 
 CREATE INDEX IF NOT EXISTS idx_business_understanding_ticker_version
   ON business_understanding(ticker, version DESC);

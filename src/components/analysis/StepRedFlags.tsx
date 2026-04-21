@@ -5,6 +5,8 @@ import {
 import { getRedFlags, saveRedFlags } from "@/lib/redFlags";
 import { generateRedFlags } from "@/lib/redFlagsAi";
 import { fetchQuoteAndFundamentals } from "@/lib/financial";
+import { prepareRedFlagsFiling } from "@/lib/filingForPrompt";
+import { buildFilingIndexUrlFromAccession } from "@/lib/secFilings";
 import RedFlagsList from "@/components/shared/RedFlagsList";
 
 export default async function StepRedFlags({ ticker }: { ticker: string }) {
@@ -13,13 +15,23 @@ export default async function StepRedFlags({ ticker }: { ticker: string }) {
 
   if (!cached) {
     try {
-      const { quote, fundamentals } = await fetchQuoteAndFundamentals(ticker);
+      const [{ quote, fundamentals }, filing] = await Promise.all([
+        fetchQuoteAndFundamentals(ticker),
+        prepareRedFlagsFiling(ticker),
+      ]);
       const { flags, model } = await generateRedFlags(
         ticker,
         quote,
         fundamentals,
+        filing,
       );
-      cached = await saveRedFlags({ ticker, flags, model });
+      cached = await saveRedFlags({
+        ticker,
+        flags,
+        last10kAccession: filing?.accession ?? null,
+        last10kPeriodEnd: filing?.reportDate ?? null,
+        model,
+      });
     } catch (err) {
       generationError =
         err instanceof Error ? err.message : "Failed to generate red flags";
@@ -40,6 +52,14 @@ export default async function StepRedFlags({ ticker }: { ticker: string }) {
   }
 
   const generatedOn = formatDate(cached.generated_at);
+  const filingUrl = cached.last_10k_accession
+    ? buildFilingIndexUrlFromAccession(cached.last_10k_accession)
+    : null;
+  const filingPeriodLabel = cached.last_10k_period_end
+    ? `FY ${cached.last_10k_period_end}`
+    : cached.last_10k_accession
+      ? `accession ${cached.last_10k_accession}`
+      : null;
 
   return (
     <div className="space-y-6">
@@ -52,6 +72,28 @@ export default async function StepRedFlags({ ticker }: { ticker: string }) {
             <p className="mt-1 text-xs text-navy-500">
               Generadas el {generatedOn}
             </p>
+            {filingPeriodLabel && (
+              <p className="mt-1 text-xs text-navy-500">
+                Basado en{" "}
+                {filingUrl ? (
+                  <a
+                    href={filingUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="underline hover:text-navy-700"
+                  >
+                    10-K {filingPeriodLabel}
+                  </a>
+                ) : (
+                  <>10-K {filingPeriodLabel}</>
+                )}
+              </p>
+            )}
+            {!cached.last_10k_accession && (
+              <p className="mt-1 text-xs text-amber-700">
+                Sin 10-K reciente disponible — fallback a conocimiento general.
+              </p>
+            )}
           </div>
           <form action={regenerateRedFlagsAction.bind(null, ticker)}>
             <button
@@ -62,11 +104,6 @@ export default async function StepRedFlags({ ticker }: { ticker: string }) {
             </button>
           </form>
         </div>
-
-        <p className="mb-5 rounded-lg bg-navy-50 p-3 text-xs text-navy-600">
-          Basado en conocimiento general del modelo. Aún no lee el 10-K real —
-          verifica en la última memoria anual antes de tomar decisiones serias.
-        </p>
 
         <RedFlagsList flags={cached.flags} />
       </section>

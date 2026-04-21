@@ -320,10 +320,6 @@ When testing the verdict + valuation pipeline:
 - **CVNA / GME** — should be Poor (high debt / no moat).
 - **RDDT / ASTS** — recent IPO / pre-commercial. Should hit the "Moatboard can't analyze" gate (fewer than 5 applicable scorecard dimensions, or AI multiples + op margin worst < −50%).
 
-## Known Limitations (tech debt to address)
-
-- **Business understanding (Step 1) is not anchored in the real 10-K.** The AI generator uses yfinance's short business summary plus Claude's general knowledge of the company. For well-known tickers (V, AAPL, MSFT) this produces accurate summaries; for obscure or recent tickers Claude may hallucinate. Real fix: fetch the 10-K Item 1 (Business) and the latest earnings-call transcript from SEC EDGAR, pass them into the prompt, and cite the source. **Same gap applies to Step 2 (Red Flags)** — the AI works off training data, not the real filing.
-
 ## Pending Decisions
 
 - **AI thesis on Invest (deferred, 2026-04-19).** The plan had the Decision step auto-generate a structured AI thesis when the user clicks Invest. Postponed: the combination of `fundamentals_snapshots` (frozen quantitative picture) + `position_transactions.pre_commitment_md` (the "what would make me change my mind" text) may already cover what an AI thesis would add. Decide once the full wizard + monthly review flow is in use. If kept, the existing `generateAiThesisAction` from the position page can be wired into `decideInvestAction`.

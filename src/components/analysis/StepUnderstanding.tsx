@@ -6,9 +6,12 @@ import {
 import {
   getCurrentUnderstanding,
   saveNewUnderstanding,
+  isBusinessUnderstandingStale,
 } from "@/lib/businessUnderstanding";
 import { generateBusinessUnderstanding } from "@/lib/businessUnderstandingAi";
 import { fetchQuoteAndFundamentals } from "@/lib/financial";
+import { fetchLatestAnnualFiling } from "@/lib/secFilings";
+import { prepareUnderstandingFiling } from "@/lib/filingForPrompt";
 import FollowupChat from "@/components/analysis/FollowupChat";
 import BusinessUnderstandingView from "@/components/shared/BusinessUnderstandingView";
 
@@ -19,17 +22,23 @@ export default async function StepUnderstanding({ ticker }: { ticker: string }) 
   let generationError: string | null = null;
   if (!understanding) {
     try {
-      const { quote, fundamentals } = await fetchQuoteAndFundamentals(ticker);
+      const [{ quote, fundamentals }, filing] = await Promise.all([
+        fetchQuoteAndFundamentals(ticker),
+        prepareUnderstandingFiling(ticker),
+      ]);
       const { generated, model } = await generateBusinessUnderstanding(
         ticker,
         quote,
         fundamentals,
+        filing,
       );
       understanding = await saveNewUnderstanding({
         ticker,
         summaryMd: generated.summary_md,
         questionsAndAnswers: generated.questions_and_answers,
         sources: generated.sources,
+        last10kAccession: filing?.accession ?? null,
+        last10kPeriodEnd: filing?.reportDate ?? null,
         model,
       });
     } catch (err) {
@@ -55,8 +64,45 @@ export default async function StepUnderstanding({ ticker }: { ticker: string }) 
 
   const generatedOn = formatDate(understanding.generated_at);
 
+  // Stale check: if SEC has a newer 10-K than the one this row was
+  // grounded in, surface a banner. We intentionally do NOT auto-
+  // regenerate — Joseda decides when to refresh.
+  const latestFiling = await fetchLatestAnnualFiling(ticker).catch(() => null);
+  const isStale =
+    latestFiling != null &&
+    isBusinessUnderstandingStale(understanding, latestFiling.accession);
+
+  const sourceFiling = understanding.sources.find((s) => s.type === "10k");
+
   return (
     <div className="space-y-6">
+      {isStale && latestFiling && (
+        <section className="rounded-2xl border border-amber-300 bg-amber-50 p-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold text-amber-900">
+                Nuevo {latestFiling.form} disponible
+              </p>
+              <p className="mt-1 text-xs text-amber-800">
+                Publicado el {formatDate(latestFiling.filingDate)}
+                {latestFiling.reportDate
+                  ? ` (FY ${latestFiling.reportDate})`
+                  : ""}
+                . Esta explicación se generó a partir del filing anterior.
+              </p>
+            </div>
+            <form action={regenerateUnderstandingAction.bind(null, ticker)}>
+              <button
+                type="submit"
+                className="rounded-lg bg-amber-600 px-3 py-2 text-xs font-medium text-white hover:bg-amber-700"
+              >
+                Regenerar con nuevo {latestFiling.form}
+              </button>
+            </form>
+          </div>
+        </section>
+      )}
+
       <section className="rounded-2xl border border-navy-100 bg-white p-6 shadow-sm">
         <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
           <div>
@@ -66,6 +112,19 @@ export default async function StepUnderstanding({ ticker }: { ticker: string }) 
             <p className="mt-1 text-xs text-navy-500">
               Versión {understanding.version} · generada el {generatedOn}
             </p>
+            {sourceFiling && (
+              <p className="mt-1 text-xs text-navy-500">
+                Basado en{" "}
+                <a
+                  href={sourceFiling.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="underline hover:text-navy-700"
+                >
+                  {sourceFiling.label}
+                </a>
+              </p>
+            )}
           </div>
           <form action={regenerateUnderstandingAction.bind(null, ticker)}>
             <button

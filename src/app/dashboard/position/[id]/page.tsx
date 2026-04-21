@@ -4,7 +4,10 @@ import { auth } from "@/auth";
 import { getPositionById } from "@/lib/positions";
 import { getCostBasis, listTransactions } from "@/lib/positionTransactions";
 import { fetchQuoteAndFundamentals } from "@/lib/financial";
-import { getCurrentUnderstanding } from "@/lib/businessUnderstanding";
+import {
+  getCurrentUnderstanding,
+  isBusinessUnderstandingStale,
+} from "@/lib/businessUnderstanding";
 import { getRedFlags } from "@/lib/redFlags";
 import {
   computeDecisionContext,
@@ -21,6 +24,10 @@ import {
   regenerateUnderstandingAction,
   regenerateRedFlagsAction,
 } from "@/app/dashboard/analyze/[ticker]/actions";
+import {
+  buildFilingIndexUrlFromAccession,
+  fetchLatestAnnualFiling,
+} from "@/lib/secFilings";
 import type { MoatboardAnalysis as Analysis } from "@/lib/moatboardAnalyses";
 import type {
   Valuation,
@@ -30,7 +37,6 @@ import type {
 import type { ValuationGuide } from "@/lib/valuationGuides";
 import type { RelativeValuationSnapshot } from "@/lib/valuations";
 import DashboardNav from "@/components/DashboardNav";
-import BusinessDescription from "@/components/BusinessDescription";
 import MoatboardAnalysis from "@/components/MoatboardAnalysis";
 import ValuationSection from "@/components/Valuation";
 import QualityBadge from "@/components/QualityBadge";
@@ -77,6 +83,7 @@ export default async function PositionDetail({
     understanding,
     redFlags,
     decisionContext,
+    latestAnnualFiling,
   ] = await Promise.all([
     fetchQuoteAndFundamentals(position.ticker),
     getCostBasis(positionId),
@@ -84,7 +91,17 @@ export default async function PositionDetail({
     getCurrentUnderstanding(position.ticker),
     getRedFlags(position.ticker),
     computeDecisionContext({ userId: session.user.id, ticker: position.ticker }),
+    fetchLatestAnnualFiling(position.ticker).catch(() => null),
   ]);
+
+  const isUnderstandingStale =
+    understanding != null &&
+    latestAnnualFiling != null &&
+    isBusinessUnderstandingStale(understanding, latestAnnualFiling.accession);
+
+  const understandingSourceFiling = understanding?.sources.find(
+    (s) => s.type === "10k",
+  );
 
   // All signals for this ticker (new + reviewed) for the Presentaciones
   // tab. Fetched separately from the Promise.all above so a slow query
@@ -310,6 +327,9 @@ export default async function PositionDetail({
             nextEarningsDaysAway,
             nextReportType,
             tickerSignals,
+            isUnderstandingStale,
+            latestAnnualFiling,
+            understandingSourceFiling: understandingSourceFiling ?? null,
           })}
         />
       </main>
@@ -344,6 +364,11 @@ function buildPanels(args: {
   nextEarningsDaysAway: number | null;
   nextReportType: "10-K" | "10-Q" | null;
   tickerSignals: import("@/lib/reviewSignals").ReviewSignal[];
+  isUnderstandingStale: boolean;
+  latestAnnualFiling: import("@/lib/secFilings").LatestAnnualFiling | null;
+  understandingSourceFiling:
+    | import("@/lib/businessUnderstanding").BusinessUnderstandingSource
+    | null;
 }): Record<PositionTabId, React.ReactNode> {
   const {
     ticker,
@@ -370,6 +395,9 @@ function buildPanels(args: {
     nextEarningsDaysAway,
     nextReportType,
     tickerSignals,
+    isUnderstandingStale,
+    latestAnnualFiling,
+    understandingSourceFiling,
   } = args;
 
   const razonamiento = (
@@ -426,57 +454,71 @@ function buildPanels(args: {
 
   const negocio = (
     <div className="space-y-6">
-      {(understanding || quote?.longBusinessSummary) && (
-        <section className="rounded-2xl border border-navy-100 bg-white p-6 shadow-sm">
-          {understanding ? (
-            <>
-              <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <h2 className="text-xl font-bold text-navy-950">
-                    Entender el negocio
-                  </h2>
-                  <p className="mt-1 text-xs text-navy-500">
-                    Versión {understanding.version} · generada el{" "}
-                    {formatLongDateEs(understanding.generated_at)}
-                  </p>
-                </div>
-                <form
-                  action={regenerateUnderstandingAction.bind(null, ticker)}
-                >
-                  <button
-                    type="submit"
-                    className="text-sm font-medium text-navy-600 hover:text-navy-900"
-                  >
-                    Regenerar
-                  </button>
-                </form>
-              </div>
-              <BusinessUnderstandingView understanding={understanding} />
-              <div className="mt-6">
-                <FollowupChat ticker={ticker} />
-              </div>
-            </>
-          ) : (
-            <>
-              <h2 className="mb-3 text-xs font-semibold uppercase tracking-wider text-navy-500">
-                About the business
-              </h2>
-              <p className="mb-4 text-sm text-navy-600">
-                No hay resumen propio para este ticker todavía.
+      {isUnderstandingStale && latestAnnualFiling && (
+        <section className="rounded-2xl border border-amber-300 bg-amber-50 p-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold text-amber-900">
+                Nuevo {latestAnnualFiling.form} disponible
               </p>
-            </>
-          )}
+              <p className="mt-1 text-xs text-amber-800">
+                Publicado el {formatLongDateEs(latestAnnualFiling.filingDate)}
+                {latestAnnualFiling.reportDate
+                  ? ` (FY ${latestAnnualFiling.reportDate})`
+                  : ""}
+                . La explicación actual se generó con el filing anterior.
+              </p>
+            </div>
+            <form action={regenerateUnderstandingAction.bind(null, ticker)}>
+              <button
+                type="submit"
+                className="rounded-lg bg-amber-600 px-3 py-2 text-xs font-medium text-white hover:bg-amber-700"
+              >
+                Regenerar con nuevo {latestAnnualFiling.form}
+              </button>
+            </form>
+          </div>
+        </section>
+      )}
 
-          {quote?.longBusinessSummary && (
-            <details className="mt-6 rounded-lg border border-navy-100 bg-navy-50/30">
-              <summary className="cursor-pointer px-4 py-3 text-xs font-semibold uppercase tracking-wider text-navy-500 hover:text-navy-700">
-                Resumen de Yahoo (referencia)
-              </summary>
-              <div className="border-t border-navy-100 px-4 py-3">
-                <BusinessDescription text={quote.longBusinessSummary} />
-              </div>
-            </details>
-          )}
+      {understanding && (
+        <section className="rounded-2xl border border-navy-100 bg-white p-6 shadow-sm">
+          <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h2 className="text-xl font-bold text-navy-950">
+                Entender el negocio
+              </h2>
+              <p className="mt-1 text-xs text-navy-500">
+                Versión {understanding.version} · generada el{" "}
+                {formatLongDateEs(understanding.generated_at)}
+              </p>
+              {understandingSourceFiling && (
+                <p className="mt-1 text-xs text-navy-500">
+                  Basado en{" "}
+                  <a
+                    href={understandingSourceFiling.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="underline hover:text-navy-700"
+                  >
+                    {understandingSourceFiling.label}
+                  </a>
+                </p>
+              )}
+            </div>
+            <form action={regenerateUnderstandingAction.bind(null, ticker)}>
+              <button
+                type="submit"
+                className="text-sm font-medium text-navy-600 hover:text-navy-900"
+              >
+                Regenerar
+              </button>
+            </form>
+          </div>
+          <BusinessUnderstandingView understanding={understanding} />
+          <div className="mt-6">
+            <FollowupChat ticker={ticker} />
+          </div>
         </section>
       )}
 
@@ -485,6 +527,8 @@ function buildPanels(args: {
           ticker={ticker}
           flags={redFlags.flags}
           generatedAt={redFlags.generated_at}
+          last10kAccession={redFlags.last_10k_accession}
+          last10kPeriodEnd={redFlags.last_10k_period_end}
         />
       )}
     </div>
@@ -633,10 +677,14 @@ function RedFlagsAccordion({
   ticker,
   flags,
   generatedAt,
+  last10kAccession,
+  last10kPeriodEnd,
 }: {
   ticker: string;
   flags: import("@/lib/redFlags").RedFlag[];
   generatedAt: string;
+  last10kAccession: string | null;
+  last10kPeriodEnd: string | null;
 }) {
   const counts = summarizeFlagsBySeverity(flags);
   const hasUrgent = counts.serious > 0 || counts.watch > 0;
@@ -649,6 +697,15 @@ function RedFlagsAccordion({
       ? `Red flags · ${summaryParts.join(", ")}`
       : "Red flags · sin alertas conocidas";
 
+  const filingUrl = last10kAccession
+    ? buildFilingIndexUrlFromAccession(last10kAccession)
+    : null;
+  const filingLabel = last10kPeriodEnd
+    ? `10-K FY ${last10kPeriodEnd}`
+    : last10kAccession
+      ? `10-K accession ${last10kAccession}`
+      : null;
+
   return (
     <section className="mb-6 rounded-2xl border border-navy-100 bg-white shadow-sm">
       <details open={hasUrgent} className="group">
@@ -660,11 +717,31 @@ function RedFlagsAccordion({
         </summary>
         <div className="border-t border-navy-100 px-6 py-4">
           <div className="mb-3 flex items-start justify-between gap-3">
-            <p className="flex-1 rounded-lg bg-navy-50 p-3 text-xs text-navy-600">
-              Basado en conocimiento general del modelo. Aún no lee el 10-K
-              real — verifica en la última memoria anual antes de tomar
-              decisiones serias.
-            </p>
+            <div className="flex-1 text-xs text-navy-500">
+              <p>Generadas el {formatLongDateEs(generatedAt)}</p>
+              {filingLabel && (
+                <p className="mt-0.5">
+                  Basado en{" "}
+                  {filingUrl ? (
+                    <a
+                      href={filingUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="underline hover:text-navy-700"
+                    >
+                      {filingLabel}
+                    </a>
+                  ) : (
+                    filingLabel
+                  )}
+                </p>
+              )}
+              {!last10kAccession && (
+                <p className="mt-0.5 text-amber-700">
+                  Sin 10-K reciente disponible — fallback a conocimiento general.
+                </p>
+              )}
+            </div>
             <form action={regenerateRedFlagsAction.bind(null, ticker)}>
               <button
                 type="submit"
@@ -675,9 +752,6 @@ function RedFlagsAccordion({
             </form>
           </div>
           <RedFlagsList flags={flags} />
-          <p className="mt-4 text-xs text-navy-500">
-            Generadas el {formatLongDateEs(generatedAt)}
-          </p>
         </div>
       </details>
     </section>
