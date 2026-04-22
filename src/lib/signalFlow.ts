@@ -9,6 +9,10 @@ import { sql } from "@/lib/db";
 import { fetchRecentFilings, buildFilingUrl } from "@/lib/secFilings";
 import { classifyFiling } from "@/lib/signalClassifier";
 import { createSignalIfMissing } from "@/lib/reviewSignals";
+import {
+  ensureInsiderSignalsForTicker,
+  type EnsureInsiderSignalsResult,
+} from "@/lib/form4Flow";
 
 export type EnsureSignalsResult = {
   ticker: string;
@@ -127,6 +131,7 @@ export async function listActiveTickersForUser(
 export async function runDailySignalsJob(): Promise<{
   cronRunId: number;
   summary: EnsureSignalsResult[];
+  insiderSummary: EnsureInsiderSignalsResult[];
 }> {
   const startedRows = (await sql`
     INSERT INTO cron_runs (job, started_at, ok)
@@ -136,7 +141,9 @@ export async function runDailySignalsJob(): Promise<{
   const cronRunId = startedRows[0].id;
 
   const summary: EnsureSignalsResult[] = [];
+  const insiderSummary: EnsureInsiderSignalsResult[] = [];
   let totalInserted = 0;
+  let insiderSignalsInserted = 0;
   let errorCount = 0;
   const errorLines: string[] = [];
 
@@ -162,6 +169,22 @@ export async function runDailySignalsJob(): Promise<{
           errorCount++;
           errorLines.push(`${ticker}: ${r.errorMessage ?? "unknown"}`);
         }
+
+        // Form 4 insider purchases — same ticker, same user, separate
+        // pipeline. Runs in-line so a failure on one path doesn't
+        // mask the other: each reports its own errored flag.
+        const ins = await ensureInsiderSignalsForTicker({
+          userId: u.id,
+          ticker,
+        });
+        insiderSummary.push(ins);
+        insiderSignalsInserted += ins.signalsInserted;
+        if (ins.errored) {
+          errorCount++;
+          errorLines.push(
+            `${ticker} (form4): ${ins.errorMessage ?? "unknown"}`,
+          );
+        }
       }
     }
 
@@ -170,7 +193,7 @@ export async function runDailySignalsJob(): Promise<{
       SET finished_at = NOW(),
           ok = ${errorCount === 0},
           processed_tickers = ${processedTickers.size},
-          inserted_signals = ${totalInserted},
+          inserted_signals = ${totalInserted + insiderSignalsInserted},
           error_count = ${errorCount},
           error_summary = ${errorLines.length > 0 ? errorLines.join("\n") : null}
       WHERE id = ${cronRunId}
@@ -188,5 +211,5 @@ export async function runDailySignalsJob(): Promise<{
     throw err;
   }
 
-  return { cronRunId, summary };
+  return { cronRunId, summary, insiderSummary };
 }

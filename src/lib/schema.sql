@@ -166,7 +166,7 @@ CREATE TABLE IF NOT EXISTS review_signals (
   -- Source + event classification
   source VARCHAR(20) NOT NULL CHECK (source IN (
     'sec_8k', 'sec_10q', 'sec_10k', 'sec_10qa', 'sec_10ka',
-    'snapshot_diff', 'discovery_13f'
+    'snapshot_diff', 'discovery_13f', 'sec_form4'
   )),
   event_type VARCHAR(40) NOT NULL,
   event_date TIMESTAMPTZ NOT NULL,
@@ -675,6 +675,42 @@ CREATE TABLE IF NOT EXISTS discovery_cusip_ticker (
   resolved_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   source VARCHAR(30) NOT NULL DEFAULT 'openfigi'
 );
+
+-- Per-ticker log of insider (Section 16) transactions parsed from Form
+-- 4 XML filings. Shared across users because Form 4 is public data;
+-- review_signals rows generated from this table are per-user.
+-- Idempotency at (accession, transaction_index) since a single Form 4
+-- can carry multiple transactions (same insider, same day, split
+-- executions). transaction_value_usd is generated for fast filtering.
+CREATE TABLE IF NOT EXISTS insider_transactions (
+  id BIGSERIAL PRIMARY KEY,
+  ticker VARCHAR(10) NOT NULL,
+  issuer_cik VARCHAR(10) NOT NULL,
+  accession VARCHAR(25) NOT NULL,
+  filing_date DATE NOT NULL,
+  transaction_date DATE NOT NULL,
+  transaction_index INT NOT NULL,
+  reporting_owner_cik VARCHAR(10) NOT NULL,
+  reporting_owner_name VARCHAR(200) NOT NULL,
+  reporting_owner_title VARCHAR(200),
+  is_officer BOOLEAN NOT NULL DEFAULT FALSE,
+  is_director BOOLEAN NOT NULL DEFAULT FALSE,
+  is_ten_percent_owner BOOLEAN NOT NULL DEFAULT FALSE,
+  transaction_code CHAR(1) NOT NULL,
+  acquired_disposed CHAR(1) NOT NULL,
+  shares NUMERIC(20,4) NOT NULL,
+  price_per_share NUMERIC(14,4) NOT NULL,
+  transaction_value_usd NUMERIC(18,2) GENERATED ALWAYS AS (shares * price_per_share) STORED,
+  rule10b5_1_flag BOOLEAN,
+  direct_or_indirect CHAR(1) NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (accession, transaction_index)
+);
+
+CREATE INDEX IF NOT EXISTS idx_insider_tx_ticker_date
+  ON insider_transactions(ticker, transaction_date DESC);
+CREATE INDEX IF NOT EXISTS idx_insider_tx_code
+  ON insider_transactions(ticker, transaction_code, transaction_date DESC);
 
 -- Per-user acknowledgement of new 13F filings shown in the Discovery
 -- "Novedades" panel. A row here means the user has explicitly marked

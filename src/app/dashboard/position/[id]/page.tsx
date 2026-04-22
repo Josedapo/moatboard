@@ -45,6 +45,7 @@ import TransactionOperationNotesList from "@/components/shared/TransactionOperat
 import PositionPreCommitment from "@/components/position/PositionPreCommitment";
 import AddOperationForm from "@/components/position/AddOperationForm";
 import FiftyTwoWeekBar from "@/components/position/FiftyTwoWeekBar";
+import InsiderPurchasesCard from "@/components/position/InsiderPurchasesCard";
 import BusinessUnderstandingView from "@/components/shared/BusinessUnderstandingView";
 import RedFlagsList, {
   summarizeFlagsBySeverity,
@@ -537,14 +538,17 @@ function buildPanels(args: {
   const calidad = outsideFramework ? (
     <UnsupportedBusinessNotice />
   ) : (
-    <MoatboardAnalysis
-      positionId={positionId}
-      ticker={ticker}
-      analysis={analysis}
-      fundamentals={fundamentals}
-      cashYieldContext={cashYieldContext}
-      loadError={analysisError}
-    />
+    <>
+      <MoatboardAnalysis
+        positionId={positionId}
+        ticker={ticker}
+        analysis={analysis}
+        fundamentals={fundamentals}
+        cashYieldContext={cashYieldContext}
+        loadError={analysisError}
+      />
+      <InsiderPurchasesCard ticker={ticker} />
+    </>
   );
 
   const valoracion = outsideFramework ? (

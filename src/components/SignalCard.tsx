@@ -161,6 +161,10 @@ export default function SignalCard({
         <FundMovementBlock payload={signal.raw_payload} />
       )}
 
+      {signal.source === "sec_form4" && (
+        <InsiderPurchaseBlock payload={signal.raw_payload} />
+      )}
+
       {(signal.source_url || positionId !== null) && (
         <div className="mt-1 flex flex-wrap items-center gap-3 text-[11px]">
           {signal.source_url && signal.source === "discovery_13f" ? (
@@ -251,7 +255,8 @@ export default function SignalCard({
         <div className="mt-auto flex flex-wrap items-center gap-2 pt-3">
           {!summaryMd &&
             signal.source !== "snapshot_diff" &&
-            signal.source !== "discovery_13f" && (
+            signal.source !== "discovery_13f" &&
+            signal.source !== "sec_form4" && (
             <button
               type="button"
               onClick={summarise}
@@ -388,6 +393,113 @@ const DIMENSION_LABEL: Record<string, string> = {
   netDebtToEbitda: "Net Debt/EBITDA",
   affoPerShareCagr: "AFFO/share CAGR",
 };
+
+// ─────────────────────────────────────────────────────────────────────────
+// Insider purchase block — renders when the signal source is
+// `sec_form4`. Payload is written by form4Flow in ensureInsiderSignalsForTicker;
+// aggregates all qualifying transactions of a single Form 4.
+// ─────────────────────────────────────────────────────────────────────────
+
+type InsiderPurchasePayload = {
+  issuer_cik?: string;
+  issuer_name?: string;
+  reporting_owner_name?: string;
+  reporting_owner_title?: string | null;
+  is_officer?: boolean;
+  is_director?: boolean;
+  is_ten_percent_owner?: boolean;
+  transactions?: Array<{
+    transaction_date: string;
+    shares: number;
+    price_per_share: number;
+    value_usd: number;
+    direct_or_indirect: "D" | "I";
+    rule10b5_1_flag: boolean | null;
+  }>;
+  total_value_usd?: number;
+};
+
+function formatUsdCompact(value: number): string {
+  if (value >= 1_000_000) return `$${(value / 1_000_000).toFixed(2)}M`;
+  if (value >= 1_000) return `$${(value / 1_000).toFixed(0)}K`;
+  return `$${value.toFixed(0)}`;
+}
+
+function formatSharesCompact(shares: number): string {
+  if (shares >= 1_000_000) return `${(shares / 1_000_000).toFixed(2)}M`;
+  if (shares >= 1_000) return `${(shares / 1_000).toFixed(1)}K`;
+  return shares.toLocaleString("es-ES", { maximumFractionDigits: 0 });
+}
+
+function InsiderPurchaseBlock({ payload }: { payload: unknown }) {
+  if (!payload || typeof payload !== "object") return null;
+  const p = payload as InsiderPurchasePayload;
+  if (!p.reporting_owner_name || !p.transactions || p.transactions.length === 0)
+    return null;
+
+  const total = p.total_value_usd ?? 0;
+  const any10b5_1 = p.transactions.some((t) => t.rule10b5_1_flag === true);
+
+  return (
+    <div className="mt-2 space-y-1.5 rounded-lg border border-navy-200 bg-white/70 px-3 py-2 text-xs text-navy-800">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-semibold text-navy-900">
+          {p.reporting_owner_name}
+        </span>
+        {p.reporting_owner_title && (
+          <span className="text-navy-600">{p.reporting_owner_title}</span>
+        )}
+        {p.is_officer && (
+          <span className="inline-flex rounded-md border border-emerald-300 bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-emerald-800">
+            Officer
+          </span>
+        )}
+        {p.is_director && !p.is_officer && (
+          <span className="inline-flex rounded-md border border-teal-300 bg-teal-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-teal-800">
+            Director
+          </span>
+        )}
+        {p.is_ten_percent_owner && (
+          <span className="inline-flex rounded-md border border-navy-200 bg-navy-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-navy-700">
+            10%+
+          </span>
+        )}
+      </div>
+      <ul className="space-y-0.5">
+        {p.transactions.slice(0, 3).map((t, i) => (
+          <li key={i} className="text-[11px] text-navy-600">
+            {t.transaction_date} · {formatSharesCompact(t.shares)} shares @ $
+            {t.price_per_share.toFixed(2)} ·{" "}
+            <span className="font-semibold text-navy-800">
+              {formatUsdCompact(t.value_usd)}
+            </span>
+            {t.direct_or_indirect === "I" && (
+              <span className="ml-1 text-navy-400">(indirecta)</span>
+            )}
+          </li>
+        ))}
+        {p.transactions.length > 3 && (
+          <li className="text-[11px] text-navy-400">
+            +{p.transactions.length - 3} operaciones más
+          </li>
+        )}
+      </ul>
+      <div className="flex items-center justify-between gap-2 text-[11px] text-navy-500">
+        <span>
+          Total agregado:{" "}
+          <span className="font-semibold text-navy-800">
+            {formatUsdCompact(total)}
+          </span>
+        </span>
+        {any10b5_1 && (
+          <span className="inline-flex items-center rounded-md border border-amber-300 bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-800">
+            10b5-1 plan
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
 
 // ─────────────────────────────────────────────────────────────────────────
 // Fund movement block — renders the per-fund 13F movement (NEW / ADD /

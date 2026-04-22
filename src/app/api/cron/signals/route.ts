@@ -37,8 +37,22 @@ export async function GET(request: Request): Promise<NextResponse> {
   }
 
   try {
-    const { cronRunId, summary } = await runDailySignalsJob();
+    const { cronRunId, summary, insiderSummary } =
+      await runDailySignalsJob();
     const expired = await expireOldSignals(90);
+
+    const form4sScanned = insiderSummary.reduce(
+      (acc, s) => acc + s.form4sScanned,
+      0,
+    );
+    const insiderTxInserted = insiderSummary.reduce(
+      (acc, s) => acc + s.transactionsInserted,
+      0,
+    );
+    const insiderSignalsInserted = insiderSummary.reduce(
+      (acc, s) => acc + s.signalsInserted,
+      0,
+    );
 
     return NextResponse.json({
       ok: true,
@@ -47,9 +61,13 @@ export async function GET(request: Request): Promise<NextResponse> {
       newSignals: summary.reduce((acc, s) => acc + s.inserted, 0),
       errors: summary.filter((s) => s.errored).length,
       expiredThisRun: expired,
+      form4sScanned,
+      insiderTransactionsInserted: insiderTxInserted,
+      insiderSignalsInserted,
       // Per-ticker breakdown kept so a manual hit surfaces what was
       // touched. In production the cron_runs row is the durable record.
       perTicker: summary,
+      perTickerInsider: insiderSummary,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "unknown error";

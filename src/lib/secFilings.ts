@@ -35,6 +35,11 @@ const RELEVANT_FORMS = new Set([
   "10-Q/A",
   "10-K",
   "10-K/A",
+  // Form 4: insider transactions (Section 16 filings). One filing per
+  // insider per day-of-transaction. High volume for mega-caps but small
+  // payloads per filing. Parsed via form4Parser; filtered to open-market
+  // purchases (code P) before emitting a signal.
+  "4",
 ]);
 
 export type RawFiling = {
@@ -191,6 +196,19 @@ export function buildFilingUrl(filing: RawFiling): string {
   // CIK in path is without leading zeros
   const cikTrimmed = filing.cik.replace(/^0+/, "") || "0";
   return `https://www.sec.gov/Archives/edgar/data/${cikTrimmed}/${accNoDashes}/${filing.primaryDocument}`;
+}
+
+// Build the raw-XML URL for a Form 4. SEC's submissions feed exposes
+// `primaryDocument` with an `xslF345X05/` (or similar) prefix that
+// resolves to the XSLT-transformed HTML. The raw XML lives at the same
+// path without that prefix folder. Callers that need to parse the XML
+// (form4Flow, Phase 2 DEF 14A if XBRL) go through here.
+export function buildForm4RawXmlUrl(filing: RawFiling): string {
+  const accNoDashes = filing.accession.replace(/-/g, "");
+  const cikTrimmed = filing.cik.replace(/^0+/, "") || "0";
+  // Strip any leading "xslF*/" segment from primaryDocument.
+  const rawDoc = filing.primaryDocument.replace(/^xslF[^/]+\//, "");
+  return `https://www.sec.gov/Archives/edgar/data/${cikTrimmed}/${accNoDashes}/${rawDoc}`;
 }
 
 // Build a filing-index URL from just the accession number. Returns

@@ -122,6 +122,23 @@ export function stripHtml(raw: string): string {
   return cleaned.trim();
 }
 
+// Fetch the raw body of a primary document without any HTML stripping.
+// Used by the Form 4 parser, which needs to read XML verbatim — running
+// stripHtml over an XML file would destroy the tag structure. Same auth
+// + no-store semantics as fetchFilingText.
+export async function fetchFilingRawXml(url: string): Promise<string> {
+  const res = await fetch(url, {
+    headers: { "User-Agent": SEC_USER_AGENT! },
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    throw new Error(
+      `SEC XML fetch failed: ${res.status} ${res.statusText}`,
+    );
+  }
+  return await res.text();
+}
+
 // Best-effort extractor for Item 1A (Risk Factors). Returns null when
 // the slice doesn't look right — callers should then fall back to the
 // end-truncated full document.

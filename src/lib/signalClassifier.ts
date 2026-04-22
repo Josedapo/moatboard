@@ -19,7 +19,14 @@ export type SignalSource =
   // the weekly cron ingests a new filing. One row per (user, ticker,
   // fund, filing) where the movement was material enough (±5% share
   // count threshold) to surface.
-  | "discovery_13f";
+  | "discovery_13f"
+  // Form 4 filing where an insider (officer, director, 10% owner)
+  // executed an open-market PURCHASE (transaction code 'P') in a
+  // ticker the user owns or watchlists. Emitted from form4Flow after
+  // the daily signals cron ingests a new filing. One row per filing,
+  // with the raw_payload carrying the aggregated transactions (a
+  // single Form 4 can split into multiple share lots).
+  | "sec_form4";
 
 export type SignalSeverity = "floor" | "material" | "informational";
 
@@ -53,7 +60,11 @@ export type SignalEventType =
   | "fund_initiated_position"
   | "fund_increased_position"
   | "fund_reduced_position"
-  | "fund_exited_position";
+  | "fund_exited_position"
+  // Cross-signal from Form 4: an insider of the user's ticker executed
+  // an open-market purchase. Aggregated per filing, not per
+  // transaction.
+  | "insider_purchase";
 
 export type ClassifiedSignal = {
   source: SignalSource;
