@@ -16,7 +16,7 @@ const TABS: Array<{ id: PositionTabId; label: string }> = [
   { id: "negocio", label: "Negocio" },
   { id: "calidad", label: "Calidad" },
   { id: "valoracion", label: "Valoración" },
-  { id: "presentaciones", label: "Presentaciones" },
+  { id: "presentaciones", label: "Señales" },
 ];
 
 // Client tab shell. The five panels are server-rendered upstream and

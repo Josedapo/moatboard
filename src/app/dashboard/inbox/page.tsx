@@ -35,9 +35,10 @@ export default async function InboxPage() {
           <div>
             <h1 className="text-3xl font-bold text-navy-950">Inbox</h1>
             <p className="mt-2 text-navy-600">
-              Señales de SEC EDGAR pendientes de revisar para tus tickers
-              activos (cartera + watchlist). Al marcarlas como revisadas pasan
-              al apartado <strong>Presentaciones</strong> de la empresa.
+              Señales pendientes de revisar para tus tickers activos (cartera +
+              watchlist): SEC EDGAR, movimientos de fondos curados y compras de
+              insiders. Al marcarlas como revisadas pasan al apartado{" "}
+              <strong>Señales</strong> de la empresa.
             </p>
           </div>
           <Link

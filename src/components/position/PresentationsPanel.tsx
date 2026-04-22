@@ -70,8 +70,9 @@ export default function PresentationsPanel({
               Sin señales para este ticker.
             </p>
             <p className="mt-1 text-xs text-navy-500">
-              Aquí aparecerán los 10-Q, 10-K y 8-K materiales cuando la SEC
-              los publique.
+              Aquí aparecerán las señales relevantes sobre esta empresa: 10-Q,
+              10-K, 8-K materiales, movimientos de fondos curados en Discovery
+              y compras de insiders (Form 4).
             </p>
           </div>
         ) : (
