@@ -12,13 +12,16 @@ import {
   type ThirteenFFilingRef,
 } from "@/lib/thirteenF";
 import { resolveCusips } from "@/lib/cusip";
+import { generateCrossSignalsForFiling } from "@/lib/discoveryCrossSignals";
 
 export type IngestResult =
   | {
       status: "ok_new";
       fundId: number;
+      filingId: number;
       accession: string;
       periodOfReport: string;
+      filingDate: string;
       holdingsCount: number;
       totalValueUsd: number;
       unresolvedCusips: number;
@@ -79,6 +82,120 @@ export async function ingestLatestFiling(
 ): Promise<IngestResult> {
   const results = await ingestRecentFilings(fundId, 1);
   return results[0] ?? { status: "no_filing", fundId };
+}
+
+// Weekly cron entrypoint. Iterates every active fund, calls
+// ingestLatestFiling, writes a `cron_runs` heartbeat row so the UI
+// can show "last check: HH:MM" on the Discovery surface. Per-fund
+// errors are isolated — a single SEC fetch failure doesn't abort
+// the rest of the run, it just lands as `status: "error"` in the
+// summary + adds a line to `error_summary`.
+//
+// Re-uses the `cron_runs` table (job='discovery_weekly') and the
+// same shape that `runDailySignalsJob` uses for the signals cron.
+// `processed_tickers` stores the fund count; `inserted_signals`
+// stores the count of ok_new filings. Reusing columns avoids adding
+// specialised discovery_ columns for what's semantically the same
+// heartbeat observation.
+export type WeeklyDiscoveryJobSummaryEntry = IngestResult & {
+  fund_display_name: string;
+  fund_tier: string;
+};
+
+export async function runWeeklyDiscoveryJob(): Promise<{
+  cronRunId: number;
+  summary: WeeklyDiscoveryJobSummaryEntry[];
+  crossSignalsCreated: number;
+}> {
+  const startedRows = (await sql`
+    INSERT INTO cron_runs (job, started_at, ok)
+    VALUES ('discovery_weekly', NOW(), FALSE)
+    RETURNING id
+  `) as unknown as { id: number }[];
+  const cronRunId = startedRows[0].id;
+
+  const summary: WeeklyDiscoveryJobSummaryEntry[] = [];
+  let newFilings = 0;
+  let crossSignalsCreated = 0;
+  let errorCount = 0;
+  const errorLines: string[] = [];
+
+  try {
+    const funds = await listActiveFunds();
+    for (const fund of funds) {
+      try {
+        const result = await ingestLatestFiling(fund.id);
+        const entry: WeeklyDiscoveryJobSummaryEntry = {
+          ...result,
+          fund_display_name: fund.display_name,
+          fund_tier: fund.tier,
+        };
+        summary.push(entry);
+
+        if (result.status === "ok_new") {
+          newFilings += 1;
+          // Intersect this filing's movements with every user's active
+          // tickers; emit one review_signals row per (user, ticker,
+          // movement). Failures here must NOT abort the run or the
+          // per-fund loop — the filing is already persisted.
+          try {
+            const created = await generateCrossSignalsForFiling({
+              fundId: fund.id,
+              filingId: result.filingId,
+              accession: result.accession,
+              periodOfReport: result.periodOfReport,
+              filingDate: result.filingDate,
+            });
+            crossSignalsCreated += created;
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : "unknown error";
+            errorCount += 1;
+            errorLines.push(
+              `${fund.display_name} cross-signals: ${msg}`,
+            );
+          }
+        } else if (result.status === "error") {
+          errorCount += 1;
+          errorLines.push(`${fund.display_name}: ${result.message}`);
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "unknown error";
+        errorCount += 1;
+        errorLines.push(`${fund.display_name}: ${msg}`);
+        summary.push({
+          status: "error",
+          fundId: fund.id,
+          message: msg,
+          fund_display_name: fund.display_name,
+          fund_tier: fund.tier,
+        });
+      }
+    }
+
+    await sql`
+      UPDATE cron_runs
+      SET finished_at = NOW(),
+          ok = ${errorCount === 0},
+          processed_tickers = ${summary.length},
+          inserted_signals = ${newFilings},
+          error_count = ${errorCount},
+          error_summary = ${errorLines.length > 0 ? errorLines.join("\n") : null}
+      WHERE id = ${cronRunId}
+    `;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "unknown error";
+    await sql`
+      UPDATE cron_runs
+      SET finished_at = NOW(),
+          ok = FALSE,
+          error_count = ${errorCount + 1},
+          error_summary = ${`job-level error: ${msg}`}
+      WHERE id = ${cronRunId}
+    `;
+    throw err;
+  }
+
+  return { cronRunId, summary, crossSignalsCreated };
 }
 
 // Ingest up to `n` most recent 13F-HR filings for a fund, newest first.
@@ -237,8 +354,10 @@ async function ingestSingleFiling(
   return {
     status: "ok_new",
     fundId,
+    filingId: filingDbId,
     accession: filingRef.accession,
     periodOfReport: filingRef.periodOfReport,
+    filingDate: filingRef.filingDate,
     holdingsCount: shHoldings.length,
     totalValueUsd: shTotalValueUsd,
     unresolvedCusips,

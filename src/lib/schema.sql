@@ -166,7 +166,7 @@ CREATE TABLE IF NOT EXISTS review_signals (
   -- Source + event classification
   source VARCHAR(20) NOT NULL CHECK (source IN (
     'sec_8k', 'sec_10q', 'sec_10k', 'sec_10qa', 'sec_10ka',
-    'snapshot_diff'
+    'snapshot_diff', 'discovery_13f'
   )),
   event_type VARCHAR(40) NOT NULL,
   event_date TIMESTAMPTZ NOT NULL,
@@ -675,3 +675,19 @@ CREATE TABLE IF NOT EXISTS discovery_cusip_ticker (
   resolved_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   source VARCHAR(30) NOT NULL DEFAULT 'openfigi'
 );
+
+-- Per-user acknowledgement of new 13F filings shown in the Discovery
+-- "Novedades" panel. A row here means the user has explicitly marked
+-- a filing as "seen" from the panel; the panel then hides it on
+-- subsequent visits. Deliberately permanent (no TTL) — the user
+-- controls when something leaves the panel, not the calendar.
+CREATE TABLE IF NOT EXISTS discovery_filing_dismissals (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  filing_id INTEGER NOT NULL REFERENCES discovery_filings(id) ON DELETE CASCADE,
+  dismissed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (user_id, filing_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_dfd_user_dismissed
+  ON discovery_filing_dismissals(user_id, dismissed_at DESC);

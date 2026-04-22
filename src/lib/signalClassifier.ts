@@ -13,7 +13,13 @@ export type SignalSource =
   // Analytical source — not an SEC filing per se, but a cross-snapshot
   // comparison flagged by the quality framework. Emitted from
   // snapshotFlow when a newly-minted snapshot crosses a threshold.
-  | "snapshot_diff";
+  | "snapshot_diff"
+  // 13F-HR filing of a curated Discovery fund that MOVED a ticker the
+  // user owns or watchlists. Emitted from discoveryCrossSignals after
+  // the weekly cron ingests a new filing. One row per (user, ticker,
+  // fund, filing) where the movement was material enough (±5% share
+  // count threshold) to surface.
+  | "discovery_13f";
 
 export type SignalSeverity = "floor" | "material" | "informational";
 
@@ -40,7 +46,14 @@ export type SignalEventType =
   | "other_material" // 8-K 8.01
   // Analytical — quality framework detected material deterioration
   // when a new quarterly snapshot was compared against the prior one.
-  | "material_fundamentals_change";
+  | "material_fundamentals_change"
+  // Cross-signal from Discovery: a curated fund moved a user-owned or
+  // watchlisted ticker in its most recent 13F-HR. Split by direction so
+  // the UI can render distinct labels + badges.
+  | "fund_initiated_position"
+  | "fund_increased_position"
+  | "fund_reduced_position"
+  | "fund_exited_position";
 
 export type ClassifiedSignal = {
   source: SignalSource;

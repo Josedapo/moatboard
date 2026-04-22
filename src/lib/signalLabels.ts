@@ -30,6 +30,10 @@ export const EVENT_TYPE_LABEL: Record<SignalEventType, string> = {
   fd_disclosure: "Divulgación Reg FD",
   other_material: "Otros eventos materiales",
   material_fundamentals_change: "Cambio material en fundamentales",
+  fund_initiated_position: "Fondo inicia posición",
+  fund_increased_position: "Fondo aumenta posición",
+  fund_reduced_position: "Fondo reduce posición",
+  fund_exited_position: "Fondo sale de la posición",
 };
 
 // Source → short badge label (SEC form type).
@@ -40,6 +44,7 @@ export const SOURCE_LABEL: Record<SignalSource, string> = {
   sec_10qa: "10-Q/A",
   sec_10ka: "10-K/A",
   snapshot_diff: "Delta",
+  discovery_13f: "13F-HR",
 };
 
 // Severity visual spec — consistent with DirectionCircle tones used

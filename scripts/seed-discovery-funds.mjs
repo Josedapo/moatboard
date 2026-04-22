@@ -1,4 +1,4 @@
-// Seed the discovery_funds table with the 32 curated world-class funds.
+// Seed the discovery_funds table with the 33 curated world-class funds.
 // Idempotent via ON CONFLICT (cik). Safe to re-run; updates display_name,
 // tier, tier_weight, philosophy if the roster is edited.
 // Run: node scripts/seed-discovery-funds.mjs
@@ -27,6 +27,7 @@ const FUNDS_SEED = [
   { cik: "0001106129", manager_name: "JENSEN INVESTMENT MANAGEMENT INC", display_name: "Jensen Investment", tier: "A", tier_weight: 3.0, philosophy: "15%+ ROE for 10+ years screen; quality-at-reasonable-price" },
   { cik: "0001641864", manager_name: "Giverny Capital Inc.", display_name: "Giverny Capital", tier: "A", tier_weight: 3.0, philosophy: "Owner-operator mindset, quality compounders (Rochon)" },
   { cik: "0000859804", manager_name: "WEDGEWOOD PARTNERS INC", display_name: "Wedgewood Partners", tier: "A", tier_weight: 3.0, philosophy: "Focused quality growth (Rolfe)" },
+  { cik: "0001484148", manager_name: "Turtle Creek Asset Management Inc.", display_name: "Turtle Creek", tier: "A", tier_weight: 3.0, philosophy: "Concentrated long-term compounders, 5-10y intrinsic-value doubling screen (Brenton)" },
 
   // Tier B — Value / Value-with-Quality (weight 2.0)
   { cik: "0001067983", manager_name: "BERKSHIRE HATHAWAY INC", display_name: "Berkshire", tier: "B", tier_weight: 2.0, philosophy: "Buffett/Munger: quality businesses at fair prices" },

@@ -157,9 +157,20 @@ export default function SignalCard({
         <DeltaChangeBlock payload={signal.raw_payload} />
       )}
 
+      {signal.source === "discovery_13f" && (
+        <FundMovementBlock payload={signal.raw_payload} />
+      )}
+
       {(signal.source_url || positionId !== null) && (
         <div className="mt-1 flex flex-wrap items-center gap-3 text-[11px]">
-          {signal.source_url && (
+          {signal.source_url && signal.source === "discovery_13f" ? (
+            <Link
+              href={signal.source_url}
+              className="text-navy-600 hover:text-navy-900"
+            >
+              Ver ficha del fondo →
+            </Link>
+          ) : signal.source_url ? (
             <a
               href={signal.source_url}
               target="_blank"
@@ -168,7 +179,7 @@ export default function SignalCard({
             >
               EDGAR ↗
             </a>
-          )}
+          ) : null}
           {positionId !== null && (
             <Link
               href={`/dashboard/position/${positionId}/trajectory`}
@@ -238,7 +249,9 @@ export default function SignalCard({
       {/* Actions row at the foot. mt-auto keeps cards aligned in grid. */}
       {actionMode === "idle" && (
         <div className="mt-auto flex flex-wrap items-center gap-2 pt-3">
-          {!summaryMd && signal.source !== "snapshot_diff" && (
+          {!summaryMd &&
+            signal.source !== "snapshot_diff" &&
+            signal.source !== "discovery_13f" && (
             <button
               type="button"
               onClick={summarise}
@@ -375,6 +388,108 @@ const DIMENSION_LABEL: Record<string, string> = {
   netDebtToEbitda: "Net Debt/EBITDA",
   affoPerShareCagr: "AFFO/share CAGR",
 };
+
+// ─────────────────────────────────────────────────────────────────────────
+// Fund movement block — renders the per-fund 13F movement (NEW / ADD /
+// TRIM / EXIT) when the signal source is `discovery_13f`. Payload is
+// written by generateCrossSignalsForFiling in discoveryCrossSignals.ts.
+// ─────────────────────────────────────────────────────────────────────────
+
+type FundMovementPayload = {
+  fund_id?: number;
+  fund_cik?: string;
+  fund_display_name?: string;
+  fund_tier?: "A" | "B" | "C" | "D" | "E";
+  movement?: "new" | "add" | "trim" | "exit";
+  prior_shares?: string;
+  latest_shares?: string;
+  shares_pct_change?: number | null;
+  latest_weight?: number;
+  prior_weight?: number;
+  period_of_report?: string;
+  prior_period_of_report?: string;
+};
+
+const FUND_TIER_CHIP: Record<"A" | "B" | "C" | "D" | "E", string> = {
+  A: "border-emerald-300 bg-emerald-100 text-emerald-800",
+  B: "border-teal-300 bg-teal-100 text-teal-800",
+  C: "border-amber-300 bg-amber-100 text-amber-800",
+  D: "border-amber-300 bg-amber-100 text-amber-800",
+  E: "border-navy-200 bg-navy-100 text-navy-700",
+};
+
+const MOVEMENT_BADGE: Record<
+  "new" | "add" | "trim" | "exit",
+  { label: (pct: number | null | undefined) => string; className: string }
+> = {
+  new: {
+    label: () => "NEW",
+    className: "bg-emerald-600 text-white",
+  },
+  add: {
+    label: (pct) =>
+      pct != null && Number.isFinite(pct) ? `+${Math.round(pct)}%` : "+",
+    className: "bg-emerald-500 text-white",
+  },
+  trim: {
+    label: (pct) =>
+      pct != null && Number.isFinite(pct) ? `${Math.round(pct)}%` : "−",
+    className: "bg-amber-500 text-white",
+  },
+  exit: {
+    label: () => "EXIT",
+    className: "bg-red-600 text-white",
+  },
+};
+
+function formatQuarter(ymd?: string): string {
+  if (!ymd) return "—";
+  const [yStr, mStr] = ymd.split("-");
+  const month = Number(mStr);
+  const q = month <= 3 ? "Q1" : month <= 6 ? "Q2" : month <= 9 ? "Q3" : "Q4";
+  return `${q} ${yStr}`;
+}
+
+function FundMovementBlock({ payload }: { payload: unknown }) {
+  if (!payload || typeof payload !== "object") return null;
+  const p = payload as FundMovementPayload;
+  if (!p.fund_display_name || !p.fund_tier || !p.movement) return null;
+
+  const badge = MOVEMENT_BADGE[p.movement];
+  const weightText =
+    p.latest_weight != null && p.latest_weight > 0
+      ? `${p.latest_weight.toFixed(2)}% del fondo`
+      : p.prior_weight != null && p.prior_weight > 0
+        ? `era ${p.prior_weight.toFixed(2)}% del fondo`
+        : null;
+
+  return (
+    <div className="mt-2 space-y-1.5 rounded-lg border border-navy-200 bg-white/70 px-3 py-2 text-xs text-navy-800">
+      <div className="flex flex-wrap items-center gap-2">
+        <span
+          className={`inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${FUND_TIER_CHIP[p.fund_tier]}`}
+        >
+          Tier {p.fund_tier}
+        </span>
+        <span className="font-semibold text-navy-900">
+          {p.fund_display_name}
+        </span>
+        <span
+          className={`inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ${badge.className}`}
+        >
+          {badge.label(p.shares_pct_change)}
+        </span>
+      </div>
+      <div className="text-[11px] text-navy-600">
+        13F de {formatQuarter(p.period_of_report)}
+        {p.prior_period_of_report && (
+          <> · vs. {formatQuarter(p.prior_period_of_report)}</>
+        )}
+        {weightText && <> · {weightText}</>}
+      </div>
+    </div>
+  );
+}
 
 function DeltaChangeBlock({ payload }: { payload: unknown }) {
   if (!payload || typeof payload !== "object") return null;

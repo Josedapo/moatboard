@@ -28,6 +28,10 @@ src/
 │       ├── watchlist/page.tsx         # Tickers on watchlist. Each row links to watchlist/[ticker]
 │       ├── watchlist/[ticker]/page.tsx # Dedicated per-ticker view — NextEarningsCard + PresentationsPanel (no ficha for watchlist tickers)
 │       ├── history/page.tsx           # Discarded + Outside circle tickers; "Was held" badge → "Open ficha →" for closed positions
+│       ├── discovery/
+│       │   ├── page.tsx               # Discovery leaderboard — consensus conviction across 31 curated funds, sortable columns, filter chips by ticker_state, entrantes-nuevos panel, ticker search
+│       │   ├── funds/page.tsx         # Fund roster index grouped by tier, sortable (portfolio value, holdings, top-5 concentration, movements Q, último 13F)
+│       │   └── fund/[cik]/page.tsx    # Per-fund detail — header + movements summary (new/add/trim/exit) + holdings table with per-row movement badge + "Solo analizables" toggle
 │       ├── api/cron/signals/route.ts  # Vercel Cron endpoint (0 7 * * * UTC, CRON_SECRET-protected) — invokes runDailySignalsJob + expireOldSignals
 │       ├── analyze/[ticker]/
 │       │   ├── page.tsx               # Wizard dispatch (reads analysis_sessions.current_step, renders corresponding Step*) — 5 steps after business_type was consolidated into Quality
@@ -48,7 +52,12 @@ src/
 │   ├── MoatboardAnalysis.tsx          # Scorecard UI (accepts `hideRegenerate` for wizard use)
 │   ├── Valuation.tsx                  # Valuation toolkit UI (recommended tools visible by default; rest in <details>; Reading Signal filtered to recommended)
 │   ├── Thesis.tsx                     # AI/user thesis UI (still in repo; not currently rendered on the position page after the 2026-04-20 redesign)
-│   ├── BusinessDescription.tsx        # Stateless paragraph splitter for Yahoo summary
+│   ├── BusinessDescription.tsx        # Stateless paragraph splitter for Yahoo summary (legacy — no longer rendered on position page after 2026-04-21)
+│   ├── DiscoveryLeaderboard.tsx       # Client. Sortable table, filter chips, ticker search, expandable rows with tier-grouped fund list (fund names link to /fund/[cik])
+│   ├── DiscoveryNewEntrants.tsx       # Client. Collapsible "Entrantes nuevos en ≥5 fondos este Q" panel
+│   ├── DiscoveryFundsList.tsx         # Client. Tier-grouped, sortable roster index table
+│   ├── FundHoldingsTable.tsx          # Client. Per-fund holdings with movement badge column (NEW / ▲ % / = / ▼ %) + "Solo analizables" toggle
+│   ├── FundMovementsSummary.tsx       # Client. 4 headline cards (nuevas/aumentos/recortes/salidas) + collapsible per-category lists
 │   ├── analysis/                      # Wizard-specific components
 │   │   ├── WizardShell.tsx            # Step indicator (5 steps; past steps clickable via furthest_step tracking) + exit/restart
 │   │   ├── StepUnderstanding.tsx      # Wraps shared/BusinessUnderstandingView; checkpoint (Sí entiendo / Con dudas / No lo entiendo)
@@ -115,7 +124,16 @@ src/
 │   ├── analysisSessions.ts            # CRUD for analysis_sessions (current_step + furthest_step + outcome)
 │   ├── snapshots.ts                   # CRUD for fundamentals_snapshots + diffSnapshots
 │   ├── sec.ts                         # SEC EDGAR integration; persists latestFiling (accession/period/form/filed) for quarterly snapshot triggering
-│   └── secParser.ts                   # XBRL parser; extractLatestFiling walks raw_facts to find most recent 10-Q/10-K
+│   ├── secParser.ts                   # XBRL parser; extractLatestFiling walks raw_facts to find most recent 10-Q/10-K (walks ALL anchor tags — critical after ASC 606 migration from Revenues → RevenueFromContractWithCustomerExcludingAssessedTax)
+│   ├── secDocument.ts                 # Shared EDGAR primary-document helpers: fetchFilingText, stripHtml, extractItem1A. Used by signalSummaryAi + filingForPrompt
+│   ├── filingForPrompt.ts             # Orchestrators prepareUnderstandingFiling (start-truncated 10-K) + prepareRedFlagsFiling (tries Item 1A extraction, falls back to end-truncated)
+│   ├── thirteenF.ts                   # Discovery: 13F-HR XML parser. fetchRecentThirteenFFilings, parseInformationTable. Per-filing value-unit detection (thousands vs whole-dollar)
+│   ├── cusip.ts                       # Discovery: CUSIP→ticker resolver via OpenFIGI /v3/mapping (25 req/min free tier, 2.6s throttle). HTTP errors throw (no spurious null cache)
+│   ├── discoveryFlow.ts               # Discovery: ingestRecentFilings(fundId, n) — fetches + parses + persists the N most recent 13F per fund. Idempotent by (fund_id, accession)
+│   ├── discoveryLeaderboard.ts        # Discovery: computeLeaderboard — per-ticker aggregate across latest filing per fund, conviction = Σ tier_weight × weight_in_fund
+│   ├── discoveryDelta.ts              # Discovery: QoQ deltas + new entrants (≥5 funds, not in prior quarter)
+│   ├── discoveryFund.ts               # Discovery: per-fund detail (meta + latest filing + holdings rolled up by CUSIP) + computeFundMovements (new/add/trim/exit ±5% share threshold)
+│   └── discoveryFundList.ts           # Discovery: listFundsWithStats — roster index with portfolio value, top-5 concentration, movements count
 ├── proxy.ts                           # Auth gating (Next.js 16 — was middleware.ts)
 ├── auth.ts                            # NextAuth config (Neon adapter)
 └── types/next-auth.d.ts               # session.user.id augmentation
@@ -151,6 +169,10 @@ Tables:
 - `moat_validations` — **per-user, per-snapshot** comparative moat validations (output of the trajectory "Validar con IA" button). Immutable rows; revalidation history.
 - `cron_runs` — heartbeat log for every cron run (started_at, finished_at, ok, processed_tickers, inserted_signals, error_count, error_summary). Consumed by SignalsInbox for "última verificación hace Xh".
 - `monthly_reviews` — placeholder, kept for possible future ceremonial anual review (Phase 6 pending).
+- `discovery_funds` — **roster of 31 curated world-class funds** seeded via `scripts/seed-discovery-funds.mjs`. Columns: cik, manager_name, display_name, tier ('A'|'B'|'C'|'D'|'E'), tier_weight (3.0/2.0/1.0/1.0/0.5), philosophy, active. Pabrai's CIK 0001173334 marked `active=false` (last 13F-HR 2012 — stale filer entity).
+- `discovery_filings` — one row per parsed 13F-HR per fund, UNIQUE(fund_id, accession). Tracks period_of_report, filing_date, total_value_usd, holdings_count, source_url.
+- `discovery_holdings` — per-position rows from a 13F info table. Roll-up by CUSIP when filer reports shared vs sole voting authority separately. `ticker` nullable (ADRs without US listing, OTC, delisted). `weight_in_fund` precomputed so reads don't re-derive.
+- `discovery_cusip_ticker` — CUSIP→ticker cache populated via OpenFIGI. HTTP errors do NOT cache null; only legitimate "no match" responses get persisted as ticker=null. Script `scripts/reresolve-cusips.ts` exists to wipe null rows and re-query after rate-limit incidents.
 
 ## Architectural Patterns
 
