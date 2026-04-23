@@ -49,12 +49,6 @@ export default async function StepQuality({
           history, rare industry classification, or broken data. Rather than
           show a tier the framework can&apos;t back, Moatboard stops here.
         </p>
-        <Link
-          href="/about#coverage"
-          className="mb-5 inline-block text-sm font-medium text-navy-900 hover:text-navy-700"
-        >
-          See what Moatboard covers &rarr;
-        </Link>
         <div className="mt-4 flex gap-3">
           <form action={advanceStepAction.bind(null, ticker, "decision", null)}>
             <button

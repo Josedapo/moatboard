@@ -123,14 +123,6 @@ export default function MoatboardAnalysis({
                 {scorecardDescription(analysis?.scorecard_summary)}
               </div>
             </div>
-            <a
-              href="/about#dimensions"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex flex-none items-center rounded-lg border border-navy-200 bg-white px-3 py-1.5 text-xs font-medium text-navy-700 hover:border-navy-300 hover:bg-navy-50 hover:text-navy-900"
-            >
-              + Info &rarr;
-            </a>
           </div>
           <div className="space-y-5">
             <ScorecardGroup title="Business quality — scored">
@@ -345,70 +337,50 @@ function scorecardDescription(
     dims.returnOnEquity && dims.returnOnEquity !== "neutral";
   const isReit = dims.affoPayoutRatio && dims.affoPayoutRatio !== "neutral";
 
-  const link = (
-    <a
-      href="/about#coverage"
-      target="_blank"
-      rel="noopener noreferrer"
-      className="font-medium text-navy-700 underline underline-offset-2 hover:text-navy-900"
-    >
-      How Moatboard evaluates this type of business &rarr;
-    </a>
-  );
-
   if (isBankLike) {
     return (
-      <>
-        <p className="mb-2">
-          This is a <strong>balance-sheet business</strong> — bank, insurer,
-          mortgage finance or asset manager. Moatboard judges it on{" "}
-          <strong>ROE</strong>, <strong>ROA</strong> and{" "}
-          <strong>book value per share growth</strong> (the Buffett /
-          Damodaran frame for financial-institution quality), alongside
-          operating efficiency, share count and revenue growth. The generic
-          ROIC, gross margin, FCF margin and debt/equity dimensions used
-          for product businesses aren&apos;t meaningful here: invested
-          capital isn&apos;t product capital, revenue is net interest or
-          net premium (no COGS), cash flow is dominated by balance-sheet
-          activity, and leverage is the business model itself.
-        </p>
-        <p>{link}</p>
-      </>
+      <p>
+        This is a <strong>balance-sheet business</strong> — bank, insurer,
+        mortgage finance or asset manager. Moatboard judges it on{" "}
+        <strong>ROE</strong>, <strong>ROA</strong> and{" "}
+        <strong>book value per share growth</strong> (the Buffett /
+        Damodaran frame for financial-institution quality), alongside
+        operating efficiency, share count and revenue growth. The generic
+        ROIC, gross margin, FCF margin and debt/equity dimensions used
+        for product businesses aren&apos;t meaningful here: invested
+        capital isn&apos;t product capital, revenue is net interest or
+        net premium (no COGS), cash flow is dominated by balance-sheet
+        activity, and leverage is the business model itself.
+      </p>
     );
   }
   if (isReit) {
     return (
-      <>
-        <p className="mb-2">
-          This is a <strong>Real Estate Investment Trust</strong>. Moatboard
-          judges it on <strong>AFFO payout ratio</strong>,{" "}
-          <strong>Net Debt / EBITDA</strong> and{" "}
-          <strong>AFFO per share growth</strong> — the industry-standard
-          signals for REIT dividend safety, leverage and compounding —
-          alongside FCF margin, operating margin, share count and revenue
-          growth. ROIC and gross margin don&apos;t apply (revenue is rent,
-          no COGS concept); generic debt/equity thresholds don&apos;t
-          either (REITs use leverage by design).
-        </p>
-        <p>{link}</p>
-      </>
+      <p>
+        This is a <strong>Real Estate Investment Trust</strong>. Moatboard
+        judges it on <strong>AFFO payout ratio</strong>,{" "}
+        <strong>Net Debt / EBITDA</strong> and{" "}
+        <strong>AFFO per share growth</strong> — the industry-standard
+        signals for REIT dividend safety, leverage and compounding —
+        alongside FCF margin, operating margin, share count and revenue
+        growth. ROIC and gross margin don&apos;t apply (revenue is rent,
+        no COGS concept); generic debt/equity thresholds don&apos;t
+        either (REITs use leverage by design).
+      </p>
     );
   }
   return (
-    <>
-      <p className="mb-2">
-        This is a <strong>product business</strong>. Moatboard judges it on
-        the seven-dimension Buffett / Munger / Terry Smith quality framework:{" "}
-        <strong>ROIC</strong>, <strong>gross margin</strong>,{" "}
-        <strong>FCF margin</strong>, <strong>operating margin</strong>,{" "}
-        <strong>share count trend</strong>, <strong>debt / equity</strong>{" "}
-        and <strong>revenue growth</strong>. Multi-year metrics use the
-        median across available annual filings and require the worst year
-        to also clear the threshold, so a cyclical peak doesn&apos;t earn
-        a &ldquo;strong&rdquo; that the trough would reveal as temporary.
-      </p>
-      <p>{link}</p>
-    </>
+    <p>
+      This is a <strong>product business</strong>. Moatboard judges it on
+      the seven-dimension Buffett / Munger / Terry Smith quality framework:{" "}
+      <strong>ROIC</strong>, <strong>gross margin</strong>,{" "}
+      <strong>FCF margin</strong>, <strong>operating margin</strong>,{" "}
+      <strong>share count trend</strong>, <strong>debt / equity</strong>{" "}
+      and <strong>revenue growth</strong>. Multi-year metrics use the
+      median across available annual filings and require the worst year
+      to also clear the threshold, so a cyclical peak doesn&apos;t earn
+      a &ldquo;strong&rdquo; that the trough would reveal as temporary.
+    </p>
   );
 }
 
