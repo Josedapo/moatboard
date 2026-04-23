@@ -8,6 +8,7 @@ import { fetchQuoteAndFundamentals } from "@/lib/financial";
 import { prepareRedFlagsFiling } from "@/lib/filingForPrompt";
 import { buildFilingIndexUrlFromAccession } from "@/lib/secFilings";
 import RedFlagsList from "@/components/shared/RedFlagsList";
+import { SubmitButton, PendingOverlay } from "@/components/analysis/WizardPending";
 
 export default async function StepRedFlags({ ticker }: { ticker: string }) {
   let cached = await getRedFlags(ticker);
@@ -96,12 +97,13 @@ export default async function StepRedFlags({ ticker }: { ticker: string }) {
             )}
           </div>
           <form action={regenerateRedFlagsAction.bind(null, ticker)}>
-            <button
-              type="submit"
-              className="text-sm font-medium text-navy-600 hover:text-navy-900"
+            <PendingOverlay message="Claude está re-escaneando el 10-K…" />
+            <SubmitButton
+              pendingLabel="Regenerando…"
+              className="text-sm font-medium text-navy-600 hover:text-navy-900 disabled:opacity-60"
             >
               Regenerar
-            </button>
+            </SubmitButton>
           </form>
         </div>
 
@@ -117,12 +119,13 @@ export default async function StepRedFlags({ ticker }: { ticker: string }) {
         </p>
         <div className="flex flex-wrap gap-3">
           <form action={advanceStepAction.bind(null, ticker, "quality", null)}>
-            <button
-              type="submit"
-              className="rounded-lg bg-navy-900 px-5 py-2.5 text-sm font-medium text-white hover:bg-navy-800"
+            <PendingOverlay message="Claude está evaluando la calidad del negocio…" />
+            <SubmitButton
+              pendingLabel="Procesando…"
+              className="rounded-lg bg-navy-900 px-5 py-2.5 text-sm font-medium text-white hover:bg-navy-800 disabled:opacity-60"
             >
               Continuar al análisis de calidad →
-            </button>
+            </SubmitButton>
           </form>
           <form action={advanceStepAction.bind(null, ticker, "decision", null)}>
             <button

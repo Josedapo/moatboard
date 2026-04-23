@@ -669,13 +669,28 @@ function DistributionBar({
 
   return (
     <div className="mt-2">
-      {/* Top labels: only current + median for legibility */}
-      <div className="relative h-5 text-[11px] font-semibold tabular-nums">
+      {/* Top labels: Q1 / Median / Q3 values. Median keeps primary weight
+          (ink + semibold); Q1 and Q3 render lighter (ink-70 + normal) so
+          the eye still centres on the median while having the quartile
+          anchors available without having to scroll to the table below. */}
+      <div className="relative h-5 text-[11px] tabular-nums">
         <span
-          className="absolute -translate-x-1/2 text-navy-900"
+          className="absolute -translate-x-1/2 font-normal text-navy-600"
+          style={{ left: `${q1Pct}%` }}
+        >
+          {formatValue(q1)}
+        </span>
+        <span
+          className="absolute -translate-x-1/2 font-semibold text-navy-900"
           style={{ left: `${medianPct}%` }}
         >
           {formatValue(median)}
+        </span>
+        <span
+          className="absolute -translate-x-1/2 font-normal text-navy-600"
+          style={{ left: `${q3Pct}%` }}
+        >
+          {formatValue(q3)}
         </span>
       </div>
 

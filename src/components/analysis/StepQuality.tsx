@@ -1,10 +1,10 @@
-import Link from "next/link";
 import { advanceStepAction } from "@/app/dashboard/analyze/[ticker]/actions";
 import { ensureAnalysis } from "@/lib/positionFlow";
 import { fetchQuoteAndFundamentals } from "@/lib/financial";
 import type { Quote } from "@/lib/financial";
 import MoatboardAnalysis from "@/components/MoatboardAnalysis";
 import BusinessTypeHeader from "./BusinessTypeHeader";
+import { SubmitButton, PendingOverlay } from "@/components/analysis/WizardPending";
 
 export default async function StepQuality({
   ticker,
@@ -89,12 +89,13 @@ export default async function StepQuality({
         </p>
         <div className="flex flex-wrap gap-3">
           <form action={advanceStepAction.bind(null, ticker, "valuation", null)}>
-            <button
-              type="submit"
-              className="rounded-lg bg-navy-900 px-5 py-2.5 text-sm font-medium text-white hover:bg-navy-800"
+            <PendingOverlay message="Claude está calculando la valoración…" />
+            <SubmitButton
+              pendingLabel="Procesando…"
+              className="rounded-lg bg-navy-900 px-5 py-2.5 text-sm font-medium text-white hover:bg-navy-800 disabled:opacity-60"
             >
               Continue to valuation →
-            </button>
+            </SubmitButton>
           </form>
           <form action={advanceStepAction.bind(null, ticker, "decision", null)}>
             <button

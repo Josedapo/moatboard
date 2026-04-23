@@ -14,6 +14,7 @@ import { fetchLatestAnnualFiling } from "@/lib/secFilings";
 import { prepareUnderstandingFiling } from "@/lib/filingForPrompt";
 import FollowupChat from "@/components/analysis/FollowupChat";
 import BusinessUnderstandingView from "@/components/shared/BusinessUnderstandingView";
+import { SubmitButton, PendingOverlay } from "@/components/analysis/WizardPending";
 
 export default async function StepUnderstanding({ ticker }: { ticker: string }) {
   // Generate on first visit — expensive but one-shot, and cached per ticker
@@ -92,12 +93,15 @@ export default async function StepUnderstanding({ ticker }: { ticker: string }) 
               </p>
             </div>
             <form action={regenerateUnderstandingAction.bind(null, ticker)}>
-              <button
-                type="submit"
-                className="rounded-lg bg-amber-600 px-3 py-2 text-xs font-medium text-white hover:bg-amber-700"
+              <PendingOverlay
+                message="Claude está leyendo el nuevo 10-K…"
+              />
+              <SubmitButton
+                pendingLabel="Regenerando…"
+                className="rounded-lg bg-amber-600 px-3 py-2 text-xs font-medium text-white hover:bg-amber-700 disabled:opacity-60"
               >
                 Regenerar con nuevo {latestFiling.form}
-              </button>
+              </SubmitButton>
             </form>
           </div>
         </section>
@@ -127,12 +131,13 @@ export default async function StepUnderstanding({ ticker }: { ticker: string }) 
             )}
           </div>
           <form action={regenerateUnderstandingAction.bind(null, ticker)}>
-            <button
-              type="submit"
-              className="text-sm font-medium text-navy-600 hover:text-navy-900"
+            <PendingOverlay message="Claude está regenerando el resumen…" />
+            <SubmitButton
+              pendingLabel="Regenerando…"
+              className="text-sm font-medium text-navy-600 hover:text-navy-900 disabled:opacity-60"
             >
               Regenerar
-            </button>
+            </SubmitButton>
           </form>
         </div>
 
@@ -158,12 +163,13 @@ export default async function StepUnderstanding({ ticker }: { ticker: string }) 
               "understood",
             )}
           >
-            <button
-              type="submit"
-              className="w-full rounded-lg bg-navy-900 px-4 py-3 text-sm font-medium text-white hover:bg-navy-800"
+            <PendingOverlay message="Claude está revisando los red flags del 10-K…" />
+            <SubmitButton
+              pendingLabel="Procesando…"
+              className="w-full rounded-lg bg-navy-900 px-4 py-3 text-sm font-medium text-white hover:bg-navy-800 disabled:opacity-60"
             >
               Sí, lo entiendo
-            </button>
+            </SubmitButton>
           </form>
           <form
             action={advanceStepAction.bind(
@@ -173,12 +179,13 @@ export default async function StepUnderstanding({ ticker }: { ticker: string }) 
               "doubts_resolved",
             )}
           >
-            <button
-              type="submit"
-              className="w-full rounded-lg border border-navy-300 bg-white px-4 py-3 text-sm font-medium text-navy-700 hover:border-navy-900"
+            <PendingOverlay message="Claude está revisando los red flags del 10-K…" />
+            <SubmitButton
+              pendingLabel="Procesando…"
+              className="w-full rounded-lg border border-navy-300 bg-white px-4 py-3 text-sm font-medium text-navy-700 hover:border-navy-900 disabled:opacity-60"
             >
               Con dudas, pero continúo
-            </button>
+            </SubmitButton>
           </form>
           <form action={markOutsideCircleAction.bind(null, ticker)}>
             <input

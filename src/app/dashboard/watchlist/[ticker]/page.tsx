@@ -7,8 +7,13 @@ import {
   listSignalsForTicker,
   inferNextReportType,
 } from "@/lib/reviewSignals";
+import { getCurrentUnderstanding } from "@/lib/businessUnderstanding";
+import { getRedFlags } from "@/lib/redFlags";
+import { getMoatAssessment } from "@/lib/moats";
 import DashboardNav from "@/components/DashboardNav";
 import PresentationsPanel from "@/components/position/PresentationsPanel";
+import BusinessUnderstandingView from "@/components/shared/BusinessUnderstandingView";
+import RedFlagsList from "@/components/shared/RedFlagsList";
 import { reanalyzeTickerAction } from "../../actions";
 
 // Dedicated per-ticker view for watchlist entries. Same informational
@@ -39,9 +44,18 @@ export default async function WatchlistTickerPage({ params }: Props) {
   // discarded/outside_circle, or 404 when the user has no record.
   if (!state || state.status !== "watchlist") notFound();
 
-  const [{ quote }, signals] = await Promise.all([
+  const [
+    { quote },
+    signals,
+    understanding,
+    redFlags,
+    moat,
+  ] = await Promise.all([
     fetchQuoteAndFundamentals(ticker),
     listSignalsForTicker({ userId: session.user.id, ticker }),
+    getCurrentUnderstanding(ticker),
+    getRedFlags(ticker),
+    getMoatAssessment(ticker),
   ]);
 
   const nextEarningsDaysAway = quote?.nextEarningsDate
@@ -128,6 +142,96 @@ export default async function WatchlistTickerPage({ params }: Props) {
           nextEarningsDaysAway={nextEarningsDaysAway}
           nextReportType={nextReportType}
         />
+
+        {/* Qualitative analysis (read-only) — surfaces the ticker-level
+            AI caches that survive beyond a specific position: business
+            understanding, red flags, moat assessment. Scorecard and
+            valuation are intentionally not rendered here because they
+            are per-position (the draft position is deleted when a
+            ticker lands on watchlist). Re-analyze button above recreates
+            them on demand. */}
+        {(understanding || redFlags || moat) && (
+          <section className="mt-8">
+            <h2 className="mb-4 text-xs font-semibold uppercase tracking-wider text-navy-500">
+              Análisis cualitativo
+            </h2>
+
+            {understanding && (
+              <section className="mb-6 rounded-2xl border border-navy-100 bg-white p-6 shadow-sm">
+                <div className="mb-4">
+                  <h3 className="text-xl font-bold text-navy-950">
+                    Entiende el negocio
+                  </h3>
+                  <p className="mt-1 text-xs text-navy-500">
+                    Versión {understanding.version} · generada el{" "}
+                    {new Date(understanding.generated_at).toLocaleDateString(
+                      "es-ES",
+                      { year: "numeric", month: "long", day: "numeric" },
+                    )}
+                  </p>
+                </div>
+                <BusinessUnderstandingView understanding={understanding} />
+              </section>
+            )}
+
+            {redFlags && (
+              <section className="mb-6 rounded-2xl border border-navy-100 bg-white p-6 shadow-sm">
+                <div className="mb-4">
+                  <h3 className="text-xl font-bold text-navy-950">
+                    Red flags cualitativas
+                  </h3>
+                  <p className="mt-1 text-xs text-navy-500">
+                    Generadas el{" "}
+                    {new Date(redFlags.generated_at).toLocaleDateString(
+                      "es-ES",
+                      { year: "numeric", month: "long", day: "numeric" },
+                    )}
+                  </p>
+                </div>
+                <RedFlagsList flags={redFlags.flags} />
+              </section>
+            )}
+
+            {moat && (
+              <section className="mb-6 rounded-2xl border border-navy-100 bg-white p-6 shadow-sm">
+                <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
+                  <h3 className="text-xl font-bold text-navy-950">
+                    Moat
+                  </h3>
+                  <div className="flex gap-2 text-[10px] font-semibold uppercase tracking-wider">
+                    <span
+                      className={`rounded-full px-2.5 py-0.5 ring-1 ${
+                        moat.strength === "strong"
+                          ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
+                          : moat.strength === "weak"
+                            ? "bg-red-50 text-red-700 ring-red-200"
+                            : "bg-navy-50 text-navy-700 ring-navy-200"
+                      }`}
+                    >
+                      {moat.strength}
+                    </span>
+                    <span className="rounded-full bg-navy-50 px-2.5 py-0.5 text-navy-700 ring-1 ring-navy-200">
+                      {moat.archetype.replace(/_/g, " ")}
+                    </span>
+                  </div>
+                </div>
+                <p className="text-sm leading-relaxed text-navy-700">
+                  {moat.reasoning}
+                </p>
+              </section>
+            )}
+          </section>
+        )}
+
+        {!understanding && !redFlags && !moat && (
+          <section className="mt-8 rounded-2xl border border-dashed border-navy-200 bg-navy-50/30 p-6 text-center">
+            <p className="text-sm text-navy-600">
+              Este ticker aún no tiene análisis cualitativo en caché. Pulsa{" "}
+              <span className="font-medium text-navy-900">Re-analizar</span>{" "}
+              arriba para generarlo.
+            </p>
+          </section>
+        )}
       </main>
     </div>
   );

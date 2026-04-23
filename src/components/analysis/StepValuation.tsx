@@ -7,6 +7,7 @@ import type {
   RelativeValuationSnapshot,
   Valuation,
 } from "@/lib/valuations";
+import { SubmitButton, PendingOverlay } from "@/components/analysis/WizardPending";
 
 export default async function StepValuation({
   ticker,
@@ -70,12 +71,13 @@ export default async function StepValuation({
           the watchlist, or discard.
         </p>
         <form action={advanceStepAction.bind(null, ticker, "decision", null)}>
-          <button
-            type="submit"
-            className="rounded-lg bg-navy-900 px-5 py-2.5 text-sm font-medium text-white hover:bg-navy-800"
+          <PendingOverlay message="Preparando el paso de decisión…" />
+          <SubmitButton
+            pendingLabel="Procesando…"
+            className="rounded-lg bg-navy-900 px-5 py-2.5 text-sm font-medium text-white hover:bg-navy-800 disabled:opacity-60"
           >
             Continue to decision →
-          </button>
+          </SubmitButton>
         </form>
       </section>
     </>
