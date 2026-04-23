@@ -24,6 +24,11 @@ export type RelativeMetricSnapshot = {
 export type RelativeValuationSnapshot = {
   years_of_data: number;
   points_count: number;
+  // Period covered by the history (YYYY-MM-DD). Optional so legacy snapshots
+  // generated before these fields were added still parse; the UI degrades
+  // gracefully to showing just years_of_data when they're absent.
+  period_start?: string;
+  period_end?: string;
   pe: RelativeMetricSnapshot;
   fcf_yield: RelativeMetricSnapshot; // "price / FCF per share" convention — lower = cheaper
   // P/B ratio vs own history. Optional so snapshots generated before P/B was

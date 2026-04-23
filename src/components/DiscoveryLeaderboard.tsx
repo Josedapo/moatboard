@@ -27,8 +27,8 @@ const TIER_CHIP: Record<string, string> = {
 type FilterKey = "unseen" | "all" | "in_portfolio" | "watchlist" | "discarded";
 
 const FILTERS: { key: FilterKey; label: string }[] = [
-  { key: "unseen", label: "Sin ver" },
   { key: "all", label: "Todas" },
+  { key: "unseen", label: "Sin ver" },
   { key: "in_portfolio", label: "En cartera" },
   { key: "watchlist", label: "Watchlist" },
   { key: "discarded", label: "Descartadas" },
@@ -83,7 +83,7 @@ export default function DiscoveryLeaderboard({
 }: {
   rows: LeaderboardRow[];
 }) {
-  const [filter, setFilter] = useState<FilterKey>("unseen");
+  const [filter, setFilter] = useState<FilterKey>("all");
   const [query, setQuery] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [sortKey, setSortKey] = useState<SortKey>("conviction");

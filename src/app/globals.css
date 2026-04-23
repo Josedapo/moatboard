@@ -1,23 +1,94 @@
 @import "tailwindcss";
 
 @theme inline {
-  --color-navy-50: #f0f4f8;
-  --color-navy-100: #d9e2ec;
-  --color-navy-200: #bcccdc;
-  --color-navy-300: #9fb3c8;
-  --color-navy-400: #829ab1;
-  --color-navy-500: #627d98;
-  --color-navy-600: #486581;
-  --color-navy-700: #334e68;
-  --color-navy-800: #243b53;
-  --color-navy-900: #1e3a5f;
-  --color-navy-950: #102a43;
-  --color-emerald-500: #059669;
-  --color-emerald-600: #047857;
-  --color-amber-500: #d97706;
-  --font-sans: "Inter", system-ui, sans-serif;
+  /* ─── Paper palette (design system §1) ─── */
+  --color-paper: #faf7f1;
+  --color-paper-dim: #f3efe6;
+  --color-paper-sunk: #efeadd;
+  --color-rule: #d9d2c3;
+  --color-rule-soft: #e6dfd2;
+
+  /* Ink scale */
+  --color-ink: #1a2332;
+  --color-ink-70: #475569;
+  --color-ink-50: #64748b;
+  --color-ink-30: #94a3b8;
+
+  /* Tier / semantic colors — darker editorial versions, see §1 */
+  --color-emerald: #047857;
+  --color-teal: #0e7490;
+  --color-amber: #92400e;
+  --color-red: #b91c1c;
+
+  /* ─── Navy aliases for legacy components pending migration.
+     Map to the closest paper/ink equivalent so unmigrated surfaces
+     shift toward the editorial palette instead of clashing. Remove
+     these tokens once every component has migrated. ─── */
+  --color-navy-50: var(--color-paper-dim);
+  --color-navy-100: var(--color-rule-soft);
+  --color-navy-200: var(--color-rule);
+  --color-navy-300: var(--color-ink-30);
+  --color-navy-400: var(--color-ink-30);
+  --color-navy-500: var(--color-ink-50);
+  --color-navy-600: var(--color-ink-70);
+  --color-navy-700: var(--color-ink-70);
+  --color-navy-800: var(--color-ink);
+  --color-navy-900: var(--color-ink);
+  --color-navy-950: var(--color-ink);
+
+  /* Semantic emerald/red aliases — earlier versions used scale names */
+  --color-emerald-500: var(--color-emerald);
+  --color-emerald-600: var(--color-emerald);
+  --color-amber-500: var(--color-amber);
+
+  /* ─── Typography ─── */
+  --font-sans: var(--font-inter), "Inter", system-ui, sans-serif;
+  --font-display: var(--font-fraunces), "Fraunces", ui-serif, Georgia, serif;
 }
 
 body {
+  background-color: var(--color-paper);
+  color: var(--color-ink);
   font-family: var(--font-sans);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Editorial numeric styling — applied to Fraunces display contexts
+   via utility classes or component-scoped styles. */
+.font-display {
+  font-family: var(--font-display);
+}
+.oldstyle-nums {
+  font-variant-numeric: tabular-nums oldstyle-nums;
+}
+
+/* ─── Homepage essay (src/app/page.tsx) ───
+   Two-column body typeset with a thin column rule, Fraunces body text,
+   and a drop cap on the lead paragraph. Isolated here because the
+   CSS column properties aren't well served by Tailwind arbitrary
+   values and we want the rules declarative. */
+.essay-columns {
+  column-count: 2;
+  column-gap: 40px;
+  column-rule: 1px solid var(--color-rule-soft);
+}
+.essay-columns p {
+  font-family: var(--font-display);
+  font-weight: 400;
+  font-size: 16.5px;
+  line-height: 1.6;
+  color: var(--color-ink);
+  margin: 0 0 14px;
+}
+.essay-columns p.essay-lead::first-letter {
+  font-family: var(--font-display);
+  font-size: 68px;
+  font-weight: 300;
+  line-height: 0.9;
+  float: left;
+  padding: 6px 10px 0 0;
+  color: var(--color-ink);
+}
+.essay-columns p.essay-muted {
+  color: var(--color-ink-70);
 }

@@ -163,7 +163,16 @@ function ValuationToolkit({
     ),
   };
   if (relativeSnapshot) {
-    const subtitle = `${formatYears(relativeSnapshot.years_of_data)} · ${relativeSnapshot.points_count} points`;
+    const periodLabel = formatPeriodRange(
+      relativeSnapshot.period_start,
+      relativeSnapshot.period_end,
+    );
+    const subtitleParts = [
+      periodLabel,
+      formatYears(relativeSnapshot.years_of_data),
+      `${relativeSnapshot.points_count} points`,
+    ].filter((s): s is string => Boolean(s));
+    const subtitle = subtitleParts.join(" · ");
     toolNodes.pe = (
       <DistributionTool
         title="PE ratio · vs own history"
@@ -251,6 +260,28 @@ function ValuationToolkit({
 
 function formatYears(years: number): string {
   return years >= 1 ? `${years.toFixed(1)}y history` : "<1y history";
+}
+
+// Builds a "Mar 2019 – Apr 2026" label for the relative-valuation subtitle
+// so the user can see the actual window behind Min / Median / Max. Returns
+// null for legacy snapshots that lack period dates (the subtitle then falls
+// back to the years_of_data string alone).
+function formatPeriodRange(
+  start: string | undefined,
+  end: string | undefined,
+): string | null {
+  if (!start || !end) return null;
+  const s = parseIsoDate(start);
+  const e = parseIsoDate(end);
+  if (!s || !e) return null;
+  const fmt = (d: Date) =>
+    d.toLocaleDateString("en-US", { month: "short", year: "numeric" });
+  return `${fmt(s)} – ${fmt(e)}`;
+}
+
+function parseIsoDate(s: string): Date | null {
+  const d = new Date(s);
+  return Number.isFinite(d.getTime()) ? d : null;
 }
 
 // Passive disclosure: when the business's own multiple history is shorter
@@ -1288,7 +1319,8 @@ function ValuationGuideBlock({
         dcfTier={dcfTier}
         relativeSnapshot={relativeSnapshot}
         method={method}
-        recommendedTools={recommendedTools}
+        primaryTool={guide.primary_tool}
+        secondaryTool={guide.secondary_tool}
       />
 
       <FcfYieldVsTreasuryNote
@@ -1326,15 +1358,17 @@ function ReadingSignalBlock({
   dcfTier,
   relativeSnapshot,
   method,
-  recommendedTools,
+  primaryTool,
+  secondaryTool,
 }: {
   dcfTier: DcfTier;
   relativeSnapshot: RelativeValuationSnapshot | null;
   method: ValuationMethod;
-  // Subset of tools to surface here (typically primary + secondary from the
-  // guide). When null, all cells render — fallback for the rare case of no
-  // guide row.
-  recommendedTools: Set<ToolId> | null;
+  // Tools to surface, in display order: primary on the left, secondary on
+  // the right. Mirrors the Primary/Secondary ranking from the AI guide so
+  // the reader sees the same hierarchy above and below the reasoning block.
+  primaryTool: ToolId;
+  secondaryTool: ToolId | null;
 }) {
   const dcfLabel = MOS_TIER_LABELS[dcfTier];
   const dcfMethodLabel =
@@ -1364,37 +1398,43 @@ function ReadingSignalBlock({
       ? percentileToQuartileLabel(relativeSnapshot.pb.current_percentile)
       : null;
 
-  const showCell = (tool: ToolId): boolean =>
-    recommendedTools === null || recommendedTools.has(tool);
+  const cellFor = (tool: ToolId): React.ReactNode => {
+    switch (tool) {
+      case "dcf":
+        return (
+          <SignalCell
+            key="dcf"
+            tool={`Absolute valuation (${dcfMethodLabel})`}
+            value={dcfLabel}
+          />
+        );
+      case "pe":
+        return peQuartile ? (
+          <SignalCell key="pe" tool="PE vs own history" value={peQuartile} />
+        ) : null;
+      case "pfcf":
+        return pfcfQuartile ? (
+          <SignalCell
+            key="pfcf"
+            tool="P/FCF vs own history"
+            value={pfcfQuartile}
+          />
+        ) : null;
+      case "pb":
+        return pbQuartile ? (
+          <SignalCell key="pb" tool="P/B vs own history" value={pbQuartile} />
+        ) : null;
+      case "cash_yield":
+        return null;
+    }
+  };
 
   const cells: React.ReactNode[] = [];
-  if (showCell("dcf")) {
-    cells.push(
-      <SignalCell
-        key="dcf"
-        tool={`Absolute valuation (${dcfMethodLabel})`}
-        value={dcfLabel}
-      />,
-    );
-  }
-  if (showCell("pe") && peQuartile) {
-    cells.push(
-      <SignalCell key="pe" tool="PE vs own history" value={peQuartile} />,
-    );
-  }
-  if (showCell("pfcf") && pfcfQuartile) {
-    cells.push(
-      <SignalCell
-        key="pfcf"
-        tool="P/FCF vs own history"
-        value={pfcfQuartile}
-      />,
-    );
-  }
-  if (showCell("pb") && pbQuartile) {
-    cells.push(
-      <SignalCell key="pb" tool="P/B vs own history" value={pbQuartile} />,
-    );
+  const primaryCell = cellFor(primaryTool);
+  if (primaryCell) cells.push(primaryCell);
+  if (secondaryTool) {
+    const secondaryCell = cellFor(secondaryTool);
+    if (secondaryCell) cells.push(secondaryCell);
   }
 
   // No recommended tool produced a renderable signal — skip the block

@@ -6,50 +6,57 @@ import { startAnalysisAction, type ActionState } from "@/app/dashboard/actions";
 const initialState: ActionState = {};
 
 const STATUS_LABELS: Record<string, string> = {
-  watchlist: "moved it to your watchlist",
-  discarded: "discarded it",
-  outside_circle: "marked it as outside your circle of competence",
+  watchlist: "lo moviste a tu watchlist",
+  discarded: "lo descartaste",
+  outside_circle: "lo marcaste como fuera de tu círculo de competencia",
 };
 
 function formatDate(iso: string): string {
   return new Date(iso).toISOString().slice(0, 10);
 }
 
-export default function AnalyzeEntryForm() {
+type Variant = "sidebar" | "inline";
+
+// Editorial card · design-system.md §4.9 · analyze surface.
+// Two variants so the form fits both the narrow Dashboard sidebar (stacked
+// input + full-width button) and wide pages like Discovery (single-line
+// input + auto-width right-aligned button).
+export default function AnalyzeEntryForm({
+  variant = "sidebar",
+}: {
+  variant?: Variant;
+}) {
   const [state, formAction, pending] = useActionState(
     startAnalysisAction,
     initialState,
   );
 
   const prior = state.priorState;
+  const isInline = variant === "inline";
 
   return (
-    <div className="mb-10 rounded-xl border border-navy-200 bg-white p-6">
-      <h2 className="mb-2 text-lg font-semibold text-navy-900">
-        Analyze a new business
-      </h2>
-      <p className="mb-4 text-sm text-navy-600">
-        Enter a ticker to start a guided analysis: understand the business,
-        check for red flags, review quality and valuation, and decide whether
-        to invest, watch it, or move on.
+    <div className="border border-ink bg-paper p-5">
+      <p className="mb-3.5 font-display text-[13.5px] italic leading-[1.45] text-ink-70">
+        Introduce un ticker para empezar el análisis guiado: entender el negocio, detectar red flags, revisar calidad y valoración, decidir.
       </p>
 
       {prior && (
-        <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 p-4">
-          <p className="text-sm text-navy-800">
-            You already analyzed{" "}
-            <span className="font-semibold">{prior.ticker}</span> on{" "}
-            {formatDate(prior.lastTouchedAt)} and{" "}
+        <div className="mb-4 border-l-2 border-amber bg-paper-sunk p-3 text-[13px] text-ink">
+          <p>
+            Ya analizaste{" "}
+            <span className="font-display text-[14px]">{prior.ticker}</span>{" "}
+            el {formatDate(prior.lastTouchedAt)} y{" "}
             {STATUS_LABELS[prior.status] ?? prior.status}.
           </p>
           {prior.reasonMd && (
-            <p className="mt-2 text-sm text-navy-700">
-              <span className="font-medium">Reason:</span> {prior.reasonMd}
+            <p className="mt-2 text-[12px] text-ink-70">
+              <span className="uppercase tracking-[0.12em]">Razón:</span>{" "}
+              {prior.reasonMd}
             </p>
           )}
           {prior.reviewWhen && (
-            <p className="mt-1 text-sm text-navy-700">
-              <span className="font-medium">Review when:</span>{" "}
+            <p className="mt-1 text-[12px] text-ink-70">
+              <span className="uppercase tracking-[0.12em]">Revisar cuando:</span>{" "}
               {prior.reviewWhen}
             </p>
           )}
@@ -59,9 +66,11 @@ export default function AnalyzeEntryForm() {
             <button
               type="submit"
               disabled={pending}
-              className="rounded-lg bg-navy-900 px-4 py-2 text-sm font-medium text-white hover:bg-navy-800 disabled:opacity-50"
+              className="bg-ink px-3.5 py-2 font-sans text-[11px] font-medium uppercase tracking-[0.12em] text-paper disabled:opacity-50"
             >
-              {pending ? "Starting..." : `Re-analyze ${prior.ticker} anyway`}
+              {pending
+                ? "Iniciando..."
+                : `Re-analizar ${prior.ticker} de todas formas`}
             </button>
           </form>
         </div>
@@ -69,15 +78,19 @@ export default function AnalyzeEntryForm() {
 
       <form
         action={formAction}
-        className="flex flex-col gap-3 sm:flex-row sm:items-end"
+        className={
+          isInline
+            ? "flex items-stretch gap-3"
+            : "flex flex-col"
+        }
       >
-        <div className="flex-1">
-          <label
-            htmlFor="ticker"
-            className="mb-1 block text-sm font-medium text-navy-700"
-          >
-            Ticker
-          </label>
+        <div
+          className={
+            isInline
+              ? "flex-1 border-t border-ink pt-3"
+              : "mb-3.5 border-t border-ink pt-3"
+          }
+        >
           <input
             id="ticker"
             name="ticker"
@@ -86,19 +99,23 @@ export default function AnalyzeEntryForm() {
             placeholder="AAPL"
             maxLength={10}
             autoComplete="off"
-            className="w-full rounded-lg border border-navy-300 px-3 py-2 uppercase focus:border-navy-900 focus:outline-none"
+            className="w-full border-none bg-transparent p-0 font-display text-[22px] tracking-[0.05em] text-ink uppercase placeholder:normal-case placeholder:italic placeholder:text-ink-30 focus:outline-none"
           />
         </div>
         <button
           type="submit"
           disabled={pending}
-          className="rounded-lg bg-navy-900 px-5 py-2 text-sm font-medium text-white hover:bg-navy-800 disabled:opacity-50"
+          className={
+            isInline
+              ? "self-end bg-ink px-6 py-2.5 font-sans text-[11px] font-medium uppercase tracking-[0.12em] text-paper disabled:opacity-50"
+              : "w-full bg-ink px-3.5 py-2.5 font-sans text-[11px] font-medium uppercase tracking-[0.12em] text-paper disabled:opacity-50"
+          }
         >
-          {pending ? "Starting..." : "Start analysis"}
+          {pending ? "Iniciando..." : "Empezar"}
         </button>
       </form>
       {state.error && (
-        <p className="mt-3 text-sm text-red-600">{state.error}</p>
+        <p className="mt-3 text-[12.5px] text-red">{state.error}</p>
       )}
     </div>
   );

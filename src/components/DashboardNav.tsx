@@ -24,34 +24,62 @@ export default async function DashboardNav() {
     }
   }
 
+  const today = formatMastheadDate(new Date());
+
   return (
-    <nav className="border-b border-navy-100 bg-white">
-      <div className="mx-auto flex h-16 max-w-5xl items-center justify-between px-6">
-        <div className="flex items-center gap-8">
-          <Link href="/" className="text-xl font-bold text-navy-900">
+    <>
+      <header className="flex items-start justify-between border-b border-ink px-14 pt-7 pb-5">
+        <div className="leading-[1.1]">
+          <Link
+            href="/"
+            className="font-display text-[32px] font-normal italic leading-none tracking-[-0.01em] text-ink"
+          >
             Moatboard
           </Link>
-          <DashboardNavLinks inboxCount={inboxCount} />
+          <div className="mt-1.5 font-display text-[13px] italic font-normal text-ink-70">
+            Observatorio Personal de Inversión
+          </div>
         </div>
-        <div className="flex items-center gap-6">
-          {session?.user && (
-            <span className="text-sm text-navy-600">{session.user.email}</span>
-          )}
-          <form
-            action={async () => {
-              "use server";
-              await signOut({ redirectTo: "/" });
-            }}
+        <div className="mt-2 text-[11px] font-medium uppercase tracking-[0.12em] text-ink-70">
+          {today}
+        </div>
+      </header>
+
+      <nav className="flex items-center gap-8 border-b border-rule-soft bg-paper-dim px-14 py-3.5">
+        <DashboardNavLinks inboxCount={inboxCount} />
+        <span className="flex-1" />
+        {session?.user?.email && (
+          <span className="font-display text-[13px] italic text-ink-70">
+            {session.user.email}
+          </span>
+        )}
+        <form
+          action={async () => {
+            "use server";
+            await signOut({ redirectTo: "/" });
+          }}
+        >
+          <button
+            type="submit"
+            className="text-[11px] font-medium uppercase tracking-[0.12em] text-ink-70 hover:text-ink"
           >
-            <button
-              type="submit"
-              className="text-sm text-navy-600 hover:text-navy-900"
-            >
-              Sign out
-            </button>
-          </form>
-        </div>
-      </div>
-    </nav>
+            Salir
+          </button>
+        </form>
+      </nav>
+    </>
   );
+}
+
+function formatMastheadDate(d: Date): string {
+  // "Miércoles · 22 · Abril · 2026" — Spanish long form, caps via CSS.
+  const weekday = d.toLocaleDateString("es-ES", { weekday: "long" });
+  const day = d.getDate();
+  const month = d.toLocaleDateString("es-ES", { month: "long" });
+  const year = d.getFullYear();
+  return `${cap(weekday)} · ${day} · ${cap(month)} · ${year}`;
+}
+
+function cap(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
 }

@@ -68,7 +68,7 @@ export default async function DiscoveryPage() {
         </header>
 
         <section className="mb-6">
-          <AnalyzeEntryForm />
+          <AnalyzeEntryForm variant="inline" />
         </section>
 
         <section className="mb-6">

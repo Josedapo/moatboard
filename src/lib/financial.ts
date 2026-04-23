@@ -18,6 +18,10 @@ export type Quote = {
   fiftyTwoWeekHigh: number | null;
   sector: string | null;
   industry: string | null;
+  // Short exchange label ("NYSE", "NASDAQ", "AMEX"...) normalised from the
+  // cryptic yfinance codes (NYQ, NMS, ASE...). Null when yfinance doesn't
+  // surface an exchange code we recognise.
+  exchange: string | null;
   website: string | null;
   longBusinessSummary: string | null;
   // Next expected earnings date — extracted from yfinance calendarEvents.
@@ -117,6 +121,11 @@ export async function fetchQuoteAndFundamentals(
           fiftyTwoWeekHigh: sd?.fiftyTwoWeekHigh ?? null,
           sector: profile?.sector ?? null,
           industry: profile?.industry ?? null,
+          exchange: normaliseExchange(
+            (price as { exchange?: string; fullExchangeName?: string })
+              .exchange ?? null,
+            (price as { fullExchangeName?: string }).fullExchangeName ?? null,
+          ),
           website: profile?.website ?? null,
           longBusinessSummary: profile?.longBusinessSummary ?? null,
           nextEarningsDate,
@@ -347,6 +356,37 @@ export async function fetchMultiYearFundamentalsYfinance(
 function nullable(value: unknown): number | null {
   if (typeof value !== "number" || !Number.isFinite(value)) return null;
   return value;
+}
+
+// Normalise yfinance's cryptic exchange codes into a short label suitable
+// for the UI. First tries the `exchange` code (NYQ / NMS / ASE / ...);
+// falls back to parsing `fullExchangeName` ("NasdaqGS", "NYSE", ...) when
+// the code is unknown. Returns null when neither resolves cleanly so the
+// UI can skip rendering rather than showing noise.
+function normaliseExchange(
+  code: string | null,
+  fullName: string | null,
+): string | null {
+  const CODE_MAP: Record<string, string> = {
+    NYQ: "NYSE",
+    NMS: "NASDAQ",
+    NGM: "NASDAQ",
+    NCM: "NASDAQ",
+    NAS: "NASDAQ",
+    ASE: "AMEX",
+    PCX: "NYSE Arca",
+    BATS: "BATS",
+  };
+  if (code && CODE_MAP[code]) return CODE_MAP[code];
+  if (fullName) {
+    const lower = fullName.toLowerCase();
+    if (lower.startsWith("nasdaq")) return "NASDAQ";
+    if (lower.startsWith("nyse arca")) return "NYSE Arca";
+    if (lower.startsWith("nyse")) return "NYSE";
+    if (lower.startsWith("amex") || lower.includes("american stock"))
+      return "AMEX";
+  }
+  return code ?? null;
 }
 
 // --- Management signals ---

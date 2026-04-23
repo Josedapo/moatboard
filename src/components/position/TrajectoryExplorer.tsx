@@ -671,6 +671,21 @@ function DiffPanel({
         </div>
       </div>
 
+      {/* Context note — when the AI business understanding was regenerated
+          between the two snapshots the reader needs to know *before* they
+          start comparing: the narrative frame isn't the same on both sides.
+          Sits at the top for this reason. */}
+      {buVersionChanged && (
+        <div className="rounded-xl border border-navy-100 bg-navy-50/50 px-5 py-3">
+          <p className="text-sm text-navy-700">
+            {buNoteCopy(
+              earlier.business_understanding_version,
+              later.business_understanding_version,
+            )}
+          </p>
+        </div>
+      )}
+
       {/* Compromise (exit-thesis) card. Sits above Calidad because it's
           the first lens the user should read the diff through — "what did
           I say would make me exit?" — and because changes to it are
@@ -754,17 +769,23 @@ function DiffPanel({
         </div>
       </section>
 
-      {buVersionChanged && (
-        <section className="rounded-2xl border border-navy-100 bg-white px-6 py-4 shadow-sm">
-          <p className="text-sm text-navy-700">
-            Comprensión del negocio regenerada · v
-            {earlier.business_understanding_version} → v
-            {later.business_understanding_version}
-          </p>
-        </section>
-      )}
     </div>
   );
+}
+
+// Plain-language copy for the "Claude reescribió tu resumen" note that sits
+// above the comparison. Uses explicit wording instead of the version-diff
+// shorthand ("v1 → v3") so the reader understands what happened between the
+// two snapshots.
+function buNoteCopy(
+  earlierVersion: number | null,
+  laterVersion: number | null,
+): string {
+  if (earlierVersion === null || laterVersion === null) return "";
+  const regens = laterVersion - earlierVersion;
+  if (regens <= 0) return "";
+  const timesLabel = regens === 1 ? "1 vez" : `${regens} veces`;
+  return `Entre estos dos puntos Claude reescribió tu resumen del negocio ${timesLabel} (v${earlierVersion} → v${laterVersion}).`;
 }
 
 // Inline tier summary rendered inside the Calidad section header. Kept to
@@ -921,6 +942,14 @@ type ToolContext = {
   pe: DistributionMetric | null;
   pfcf: DistributionMetric | null;
   pb: DistributionMetric | null;
+  // Period covered by the relative distributions. Shared across pe / pfcf
+  // / pb because they're computed from the same underlying history. Null
+  // when the snapshot is legacy (saved before the period fields existed).
+  relativePeriod: {
+    start: string;
+    end: string;
+    years: number;
+  } | null;
 };
 
 function buildToolContext(snapshot: FundamentalsSnapshot): ToolContext {
@@ -947,6 +976,15 @@ function buildToolContext(snapshot: FundamentalsSnapshot): ToolContext {
     | null;
   const rel = assumptions?.relative_valuation;
 
+  const relativePeriod =
+    rel?.period_start && rel?.period_end
+      ? {
+          start: rel.period_start,
+          end: rel.period_end,
+          years: rel.years_of_data ?? 0,
+        }
+      : null;
+
   return {
     takenAt: snapshot.taken_at,
     price,
@@ -962,6 +1000,7 @@ function buildToolContext(snapshot: FundamentalsSnapshot): ToolContext {
     // swap — q1 of the yield becomes q3 of the multiple.
     pfcf: invertYieldDistribution(rel?.fcf_yield),
     pb: readDistribution(rel?.pb),
+    relativePeriod,
   };
 }
 
@@ -979,6 +1018,9 @@ type StoredRelativeSnapshot = {
   pe?: StoredRelMetric;
   fcf_yield?: StoredRelMetric;
   pb?: StoredRelMetric;
+  period_start?: string;
+  period_end?: string;
+  years_of_data?: number;
 };
 
 function readDistribution(
@@ -1197,9 +1239,27 @@ function RelativeToolCard({
 
   const fmt = (v: number) => `${v.toFixed(1)}${unitSuffix}`;
 
+  // Prefer the later snapshot's period (most relevant distribution), fall
+  // back to earlier if Hasta's didn't carry it. Legacy snapshots won't have
+  // it at all — subtitle stays hidden in that case.
+  const period =
+    later.context.relativePeriod ?? earlier.context.relativePeriod;
+  const periodLabel = period
+    ? formatPeriodRange(period.start, period.end)
+    : null;
+  const periodSubtitle =
+    period && periodLabel
+      ? `${periodLabel} · ${period.years.toFixed(1)}y history`
+      : null;
+
   return (
     <div className={`rounded-xl border p-4 ${frame}`}>
       <ToolHeader rank={rank} label={label} />
+      {periodSubtitle && (
+        <p className="mb-2 text-[11px] font-medium uppercase tracking-wider text-navy-500">
+          {periodSubtitle}
+        </p>
+      )}
 
       {anchors.length >= 2 ? (
         <RangeBar
@@ -1541,6 +1601,20 @@ function formatShortDate(value: string | Date): string {
   } catch {
     return typeof value === "string" ? value.slice(0, 10) : String(value);
   }
+}
+
+// "Mar 2019 – Apr 2026" — matches the subtitle used on the main Valuation
+// section so the reader sees the same period format in both surfaces.
+// Returns null when the dates don't parse.
+function formatPeriodRange(start: string, end: string): string | null {
+  const s = new Date(start);
+  const e = new Date(end);
+  if (!Number.isFinite(s.getTime()) || !Number.isFinite(e.getTime())) {
+    return null;
+  }
+  const fmt = (d: Date) =>
+    d.toLocaleDateString("en-US", { month: "short", year: "numeric" });
+  return `${fmt(s)} – ${fmt(e)}`;
 }
 
 // Bare circular indicator — just the glyph in a colored circle. Reusable

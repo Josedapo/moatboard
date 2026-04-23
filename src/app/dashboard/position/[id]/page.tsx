@@ -487,7 +487,7 @@ function buildPanels(args: {
           <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
             <div>
               <h2 className="text-xl font-bold text-navy-950">
-                Entender el negocio
+                Entiende el negocio
               </h2>
               <p className="mt-1 text-xs text-navy-500">
                 Versión {understanding.version} · generada el{" "}
@@ -781,12 +781,6 @@ function UnsupportedBusinessNotice() {
         be analyzable, it&apos;s often a ticker-classification issue that
         will be addressed over time.
       </p>
-      <Link
-        href="/about#coverage"
-        className="inline-flex items-center text-sm font-medium text-navy-900 hover:text-navy-700"
-      >
-        See what Moatboard covers &rarr;
-      </Link>
     </section>
   );
 }

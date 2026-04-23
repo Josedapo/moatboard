@@ -1,10 +1,10 @@
 import Link from "next/link";
 
-// Upcoming earnings releases block for the dashboard. Anticipation, not
-// alert — this is information ("in 12 days, V reports") not a call to
-// action. One row per position in portfolio + watchlist, ordered by
-// date asc. Tickers without a known earningsDate are not listed; the
-// honest thing is absence, not a "—".
+// Upcoming earnings releases for the sidebar. Anticipation, not alert —
+// this is information ("in 12 days, V reports") not a call to action.
+// One row per position in portfolio + watchlist, ordered by date asc.
+// Tickers without a known earningsDate are not listed; the honest
+// thing is absence, not a "—".
 //
 // Source: yfinance quoteSummary.calendarEvents.earnings.earningsDate[0].
 // It's an estimate until the company confirms via 8-K Item 2.02; the
@@ -18,70 +18,69 @@ export type UpcomingEarning = {
   daysAway: number;
 };
 
+// Editorial earnings list · design-system.md §4 / option-a v2.
+// No card chrome, no rounded corners — a list of rows separated by
+// rule-soft hairlines. Ticker in Fraunces, form tag in outlined caps,
+// date + relative label right-aligned in italic meta.
 export default function UpcomingEarnings({
   entries,
 }: {
   entries: UpcomingEarning[];
 }) {
-  return (
-    <section className="mb-8">
-      <h2 className="mb-3 text-xs font-semibold uppercase tracking-widest text-navy-500">
-        Próximas presentaciones
-      </h2>
+  if (entries.length === 0) {
+    return (
+      <p className="font-display text-[13.5px] italic leading-[1.5] text-ink-70">
+        Sin fechas confirmadas para tus tickers activos.
+      </p>
+    );
+  }
 
-      {entries.length === 0 ? (
-        <div className="rounded-xl border border-navy-100 bg-navy-50/40 px-5 py-4 text-sm text-navy-600">
-          Sin fechas confirmadas para tus tickers activos.
-        </div>
-      ) : (
-        <ul className="divide-y divide-navy-100 overflow-hidden rounded-xl border border-navy-100 bg-white">
-          {entries.map((e) => (
-            <li
-              key={e.ticker}
-              className="flex flex-wrap items-center justify-between gap-3 px-5 py-3"
-            >
-              <div className="flex flex-wrap items-baseline gap-2">
-                <span className="rounded-md bg-navy-900 px-2 py-0.5 text-xs font-bold text-white">
-                  {e.ticker}
-                </span>
-                {e.companyName && (
-                  <span className="text-sm text-navy-700">{e.companyName}</span>
-                )}
-              </div>
-              <div className="flex items-center gap-4">
-                <div className="text-right">
-                  <div className="text-sm font-semibold text-navy-900 tabular-nums">
-                    {formatDate(e.earningsDate)}
-                  </div>
-                  <div className="text-[11px] text-navy-500">
-                    {relativeLabel(e.daysAway)}
-                  </div>
-                </div>
-                {e.positionId !== null && (
-                  <Link
-                    href={`/dashboard/position/${e.positionId}`}
-                    className="text-xs text-navy-500 hover:text-navy-900"
-                  >
-                    Ficha →
-                  </Link>
-                )}
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
+  return (
+    <ul className="m-0 list-none p-0">
+      {entries.map((e) => {
+        const row = (
+          <span className="flex items-baseline justify-between gap-3 border-b border-rule-soft py-2.5 last:border-b-0">
+            <span className="inline-flex items-baseline gap-1.5">
+              <span className="font-display text-[16px]">{e.ticker}</span>
+              <span className="font-sans text-[9px] font-medium uppercase tracking-[0.1em] text-ink-70 border border-rule rounded-[2px] px-1.5 py-[1px]">
+                10-Q
+              </span>
+            </span>
+            <span className="text-right tabular-nums">
+              <span className="block text-[12px] text-ink">
+                {formatDate(e.earningsDate)}
+              </span>
+              <span className="block text-[11px] text-ink-50 mt-0.5">
+                {relativeLabel(e.daysAway)}
+              </span>
+            </span>
+          </span>
+        );
+        return (
+          <li key={e.ticker}>
+            {e.positionId !== null ? (
+              <Link
+                href={`/dashboard/position/${e.positionId}`}
+                className="block no-underline text-ink"
+              >
+                {row}
+              </Link>
+            ) : (
+              row
+            )}
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 
 function formatDate(iso: string): string {
   try {
     const d = new Date(iso);
-    return d.toLocaleDateString("es-ES", {
-      day: "numeric",
-      month: "short",
-      year: "numeric",
-    });
+    return d
+      .toLocaleDateString("es-ES", { day: "numeric", month: "short" })
+      .replace(".", "");
   } catch {
     return iso.slice(0, 10);
   }

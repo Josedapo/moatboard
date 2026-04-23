@@ -130,6 +130,8 @@ export async function computeRelativeValuationContext(
   const snapshot: RelativeValuationSnapshot = {
     years_of_data: Number(history.yearsOfData.toFixed(2)),
     points_count: history.points.length,
+    period_start: history.points[0].date,
+    period_end: history.points[history.points.length - 1].date,
     pe: {
       current: currentPe,
       median: peStats.median,
