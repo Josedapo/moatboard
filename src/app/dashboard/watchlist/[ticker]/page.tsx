@@ -3,17 +3,25 @@ import { notFound } from "next/navigation";
 import { auth } from "@/auth";
 import { getTickerState } from "@/lib/tickerStates";
 import { fetchQuoteAndFundamentals } from "@/lib/financial";
+import { ensureDraftPosition } from "@/lib/positions";
+import { ensureAnalysis, ensureValuation } from "@/lib/positionFlow";
+import { ensureValuationGuide } from "@/lib/valuationGuides";
 import {
   listSignalsForTicker,
   inferNextReportType,
 } from "@/lib/reviewSignals";
 import { getCurrentUnderstanding } from "@/lib/businessUnderstanding";
 import { getRedFlags } from "@/lib/redFlags";
-import { getMoatAssessment } from "@/lib/moats";
+import type {
+  RelativeValuationSnapshot,
+  Valuation,
+} from "@/lib/valuations";
 import DashboardNav from "@/components/DashboardNav";
 import PresentationsPanel from "@/components/position/PresentationsPanel";
 import BusinessUnderstandingView from "@/components/shared/BusinessUnderstandingView";
 import RedFlagsList from "@/components/shared/RedFlagsList";
+import MoatboardAnalysisView from "@/components/MoatboardAnalysis";
+import ValuationSection from "@/components/Valuation";
 import { reanalyzeTickerAction } from "../../actions";
 
 // Dedicated per-ticker view for watchlist entries. Same informational
@@ -44,19 +52,73 @@ export default async function WatchlistTickerPage({ params }: Props) {
   // discarded/outside_circle, or 404 when the user has no record.
   if (!state || state.status !== "watchlist") notFound();
 
+  // Get-or-create a draft position for this watchlisted ticker so the
+  // existing ensureAnalysis / ensureValuation infrastructure can hang
+  // its per-position artefacts off a real row. Drafts have no
+  // transactions and stay hidden from the Dashboard. First visit
+  // creates the draft + populates caches (moat, valuation_guide);
+  // subsequent visits reuse them with zero AI calls.
+  const draftPosition = await ensureDraftPosition(session.user.id, ticker);
+
   const [
-    { quote },
+    { quote, fundamentals },
     signals,
     understanding,
     redFlags,
-    moat,
   ] = await Promise.all([
     fetchQuoteAndFundamentals(ticker),
     listSignalsForTicker({ userId: session.user.id, ticker }),
     getCurrentUnderstanding(ticker),
     getRedFlags(ticker),
-    getMoatAssessment(ticker),
   ]);
+
+  // Scorecard + valuation: deterministic computations (+ cached AI on
+  // moat and valuation guide, per-ticker 365d TTL). ensureAnalysis /
+  // ensureValuation return early on DB hit, so re-visiting a watchlist
+  // ticker is instant once the caches are warm.
+  let analysis = null;
+  let analysisError: string | null = null;
+  try {
+    analysis = await ensureAnalysis(draftPosition.id, ticker);
+  } catch (err) {
+    analysisError =
+      err instanceof Error ? err.message : "Failed to load scorecard";
+  }
+
+  let valuation: Valuation | null = null;
+  let valuationError: string | null = null;
+  try {
+    valuation = await ensureValuation(
+      draftPosition.id,
+      ticker,
+      quote,
+      fundamentals,
+    );
+  } catch (err) {
+    valuationError =
+      err instanceof Error ? err.message : "Failed to compute valuation";
+  }
+
+  let valuationGuide = null;
+  if (valuation) {
+    const snapshot = (
+      valuation.assumptions as { relative_valuation?: RelativeValuationSnapshot }
+    ).relative_valuation;
+    const ready = (s: RelativeValuationSnapshot["pe"] | undefined) =>
+      !!s &&
+      s.current !== null &&
+      s.median !== null &&
+      s.q1 !== null &&
+      s.q3 !== null &&
+      s.min !== null &&
+      s.max !== null;
+    valuationGuide = await ensureValuationGuide(ticker, quote, fundamentals, {
+      pe: ready(snapshot?.pe),
+      pfcf: ready(snapshot?.fcf_yield),
+      pb: ready(snapshot?.pb),
+    }).catch(() => null);
+  }
+
 
   const nextEarningsDaysAway = quote?.nextEarningsDate
     ? daysUntil(quote.nextEarningsDate)
@@ -143,14 +205,45 @@ export default async function WatchlistTickerPage({ params }: Props) {
           nextReportType={nextReportType}
         />
 
-        {/* Qualitative analysis (read-only) — surfaces the ticker-level
-            AI caches that survive beyond a specific position: business
-            understanding, red flags, moat assessment. Scorecard and
-            valuation are intentionally not rendered here because they
-            are per-position (the draft position is deleted when a
-            ticker lands on watchlist). Re-analyze button above recreates
-            them on demand. */}
-        {(understanding || redFlags || moat) && (
+        {/* Scorecard + moat + valuation — rendered off the draft
+            position we ensure above. `hideRegenerate` keeps the
+            watchlist view read-only; regenerating requires going
+            through the wizard via "Re-analizar" above. */}
+        {analysis && (
+          <section className="mt-8">
+            <h2 className="mb-4 text-xs font-semibold uppercase tracking-wider text-navy-500">
+              Calidad del negocio
+            </h2>
+            <MoatboardAnalysisView
+              positionId={draftPosition.id}
+              ticker={ticker}
+              analysis={analysis}
+              fundamentals={fundamentals}
+              loadError={analysisError}
+              hideRegenerate
+            />
+          </section>
+        )}
+
+        {valuation && (
+          <section className="mt-8">
+            <h2 className="mb-4 text-xs font-semibold uppercase tracking-wider text-navy-500">
+              Valoración
+            </h2>
+            <ValuationSection
+              positionId={draftPosition.id}
+              valuation={valuation}
+              guide={valuationGuide}
+              loadError={valuationError}
+              hideRegenerate
+            />
+          </section>
+        )}
+
+        {/* Qualitative analysis — business understanding + red flags.
+            The moat now renders as part of the Calidad section above,
+            so it's no longer duplicated here. */}
+        {(understanding || redFlags) && (
           <section className="mt-8">
             <h2 className="mb-4 text-xs font-semibold uppercase tracking-wider text-navy-500">
               Análisis cualitativo
@@ -191,44 +284,16 @@ export default async function WatchlistTickerPage({ params }: Props) {
                 <RedFlagsList flags={redFlags.flags} />
               </section>
             )}
-
-            {moat && (
-              <section className="mb-6 rounded-2xl border border-navy-100 bg-white p-6 shadow-sm">
-                <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
-                  <h3 className="text-xl font-bold text-navy-950">
-                    Moat
-                  </h3>
-                  <div className="flex gap-2 text-[10px] font-semibold uppercase tracking-wider">
-                    <span
-                      className={`rounded-full px-2.5 py-0.5 ring-1 ${
-                        moat.strength === "strong"
-                          ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
-                          : moat.strength === "weak"
-                            ? "bg-red-50 text-red-700 ring-red-200"
-                            : "bg-navy-50 text-navy-700 ring-navy-200"
-                      }`}
-                    >
-                      {moat.strength}
-                    </span>
-                    <span className="rounded-full bg-navy-50 px-2.5 py-0.5 text-navy-700 ring-1 ring-navy-200">
-                      {moat.archetype.replace(/_/g, " ")}
-                    </span>
-                  </div>
-                </div>
-                <p className="text-sm leading-relaxed text-navy-700">
-                  {moat.reasoning}
-                </p>
-              </section>
-            )}
           </section>
         )}
 
-        {!understanding && !redFlags && !moat && (
+        {!understanding && !redFlags && (
           <section className="mt-8 rounded-2xl border border-dashed border-navy-200 bg-navy-50/30 p-6 text-center">
             <p className="text-sm text-navy-600">
-              Este ticker aún no tiene análisis cualitativo en caché. Pulsa{" "}
+              Este ticker aún no tiene <em>Entender el negocio</em> ni{" "}
+              <em>Red flags</em> cualitativas en caché. Pulsa{" "}
               <span className="font-medium text-navy-900">Re-analizar</span>{" "}
-              arriba para generarlo.
+              arriba para generarlas.
             </p>
           </section>
         )}

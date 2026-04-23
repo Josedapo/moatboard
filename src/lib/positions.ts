@@ -128,6 +128,22 @@ export async function createPosition({
   return rows[0];
 }
 
+// Get-or-create a draft position for a ticker the user is currently
+// watching (watchlist ficha). Lets the scorecard + valuation views
+// hang off a real position_id so the existing ensureAnalysis /
+// ensureValuation infrastructure works unchanged. Drafts have no
+// transactions so they stay hidden from the Dashboard (which filters
+// by `EXISTS transactions`), and the same draft is reused if the user
+// later promotes the ticker to "in_portfolio" via the wizard.
+export async function ensureDraftPosition(
+  userId: string | number,
+  ticker: string,
+): Promise<Position> {
+  const existing = await getDraftPositionByTicker(userId, ticker);
+  if (existing) return existing;
+  return createPosition({ userId, ticker });
+}
+
 // Creates the position AND its first buy transaction in a single CTE so the
 // two rows are always consistent. If UNIQUE(user_id, ticker) fires (user
 // already has a position in this ticker), Postgres raises and the caller
