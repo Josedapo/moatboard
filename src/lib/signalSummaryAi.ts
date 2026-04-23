@@ -13,7 +13,7 @@
 //   - Cached forever in review_signals.summary_md (filings are
 //     immutable), regenerate only when the user asks.
 
-import Anthropic from "@anthropic-ai/sdk";
+import { callText } from "@/lib/claudeClient";
 import {
   EVENT_TYPE_LABEL,
   SOURCE_LABEL,
@@ -23,14 +23,6 @@ import type {
   SignalSource,
 } from "@/lib/signalClassifier";
 import { fetchFilingText } from "@/lib/secDocument";
-
-const MODEL = "claude-sonnet-4-6";
-
-let _client: Anthropic | null = null;
-function getClient(): Anthropic {
-  if (!_client) _client = new Anthropic();
-  return _client;
-}
 
 export type SignalSummary = {
   summary_md: string;
@@ -65,20 +57,14 @@ export async function summariseFiling({
     truncated,
   });
 
-  const response = await getClient().messages.create({
-    model: MODEL,
-    max_tokens: 1200,
-    messages: [{ role: "user", content: prompt }],
-  });
-
-  const textBlock = response.content.find((b) => b.type === "text");
-  if (!textBlock || textBlock.type !== "text") {
-    throw new Error("No text response from Claude");
+  const { text: output, model } = await callText(prompt, { maxTokens: 1200 });
+  if (!output || output.trim().length === 0) {
+    throw new Error("Empty response from Claude");
   }
 
   return {
-    summary_md: textBlock.text.trim(),
-    model: MODEL,
+    summary_md: output.trim(),
+    model,
     truncated,
   };
 }

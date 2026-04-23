@@ -12,15 +12,13 @@
 // UI caller decides whether to surface a notice in that case; this
 // module just flags it via the return value.
 
-import Anthropic from "@anthropic-ai/sdk";
+import { callJson } from "@/lib/claudeClient";
 import type { Quote, Fundamentals } from "@/lib/financial";
 import type {
   RedFlag,
   RedFlagCategory,
   RedFlagSeverity,
 } from "@/lib/redFlags";
-
-const MODEL = "claude-sonnet-4-6";
 
 // Filing input shared with businessUnderstandingAi — the fields are
 // identical because both features use the same 10-K. Declared here
@@ -35,12 +33,6 @@ export type RedFlagsFilingInput = {
   reportDate: string | null;
   url: string;
 };
-
-let _client: Anthropic | null = null;
-function getClient(): Anthropic {
-  if (!_client) _client = new Anthropic();
-  return _client;
-}
 
 const CATEGORIES: RedFlagCategory[] = [
   "auditor",
@@ -137,59 +129,13 @@ export async function generateRedFlags(
   const prompt = buildPrompt(ticker, quote, fundamentals, filing);
 
   // Use Anthropic's tool_use for structured output. The schema guarantees
-  // valid JSON (no unescaped quotes / bare newlines in free-form strings),
-  // which is the failure mode we hit when the prompt was plain-JSON.
+  // In remote mode callJson uses Anthropic's tool_use for guaranteed
+  // valid JSON (the unescaped-quotes-in-free-text failure mode plain JSON
+  // suffered from). In local mode the schema is injected in the prompt
+  // and Opus parses the output.
   // max_tokens is generous because each flag carries a source_excerpt
   // (~100-300 chars) on top of detail, and 8 flags × 4 fields adds up.
-  const response = await getClient().messages.create({
-    model: MODEL,
-    max_tokens: 4000,
-    tools: [
-      {
-        name: "submit_red_flags",
-        description: "Submit the list of qualitative red flags identified for the company.",
-        input_schema: {
-          type: "object",
-          properties: {
-            flags: {
-              type: "array",
-              description: "Between 0 and 8 red flags. Empty array is valid for a clean company.",
-              items: {
-                type: "object",
-                properties: {
-                  category: { type: "string", enum: CATEGORIES },
-                  severity: { type: "string", enum: SEVERITIES },
-                  summary: { type: "string", description: "One short Spanish sentence — what the flag is." },
-                  detail: { type: "string", description: "2-4 Spanish sentences — why it matters." },
-                  source_excerpt: {
-                    type: "string",
-                    description: "Literal English text from the filing that supports this flag (100-300 chars). Optional but preferred when filing is available.",
-                  },
-                  source_item: {
-                    type: "string",
-                    description: "The 10-K section where the excerpt lives (e.g. Item 1A, Item 3). Optional.",
-                  },
-                },
-                required: ["category", "severity", "summary", "detail"],
-              },
-            },
-          },
-          required: ["flags"],
-        },
-      },
-    ],
-    tool_choice: { type: "tool", name: "submit_red_flags" },
-    messages: [{ role: "user", content: prompt }],
-  });
-
-  const toolUse = response.content.find((b) => b.type === "tool_use");
-  if (!toolUse || toolUse.type !== "tool_use") {
-    throw new Error(
-      `Claude did not return a tool_use block (stop_reason=${response.stop_reason}, blocks=${response.content.map((b) => b.type).join(",")})`,
-    );
-  }
-
-  const input = toolUse.input as {
+  const { data: input, model } = await callJson<{
     flags?: Array<{
       category?: string;
       severity?: string;
@@ -198,15 +144,45 @@ export async function generateRedFlags(
       source_excerpt?: string;
       source_item?: string;
     }>;
-  };
+  }>(prompt, {
+    schemaName: "submit_red_flags",
+    schemaDescription: "Submit the list of qualitative red flags identified for the company.",
+    maxTokens: 4000,
+    jsonSchema: {
+      type: "object",
+      properties: {
+        flags: {
+          type: "array",
+          description: "Between 0 and 8 red flags. Empty array is valid for a clean company.",
+          items: {
+            type: "object",
+            properties: {
+              category: { type: "string", enum: CATEGORIES },
+              severity: { type: "string", enum: SEVERITIES },
+              summary: { type: "string", description: "One short Spanish sentence — what the flag is." },
+              detail: { type: "string", description: "2-4 Spanish sentences — why it matters." },
+              source_excerpt: {
+                type: "string",
+                description: "Literal English text from the filing that supports this flag (100-300 chars). Optional but preferred when filing is available.",
+              },
+              source_item: {
+                type: "string",
+                description: "The 10-K section where the excerpt lives (e.g. Item 1A, Item 3). Optional.",
+              },
+            },
+            required: ["category", "severity", "summary", "detail"],
+          },
+        },
+      },
+      required: ["flags"],
+    },
+  });
 
   if (!Array.isArray(input.flags)) {
     console.error(
-      `Red flags tool_use payload lacked flags array. stop_reason=${response.stop_reason}. Raw input: ${JSON.stringify(toolUse.input).slice(0, 600)}`,
+      `Red flags payload lacked flags array. Raw input: ${JSON.stringify(input).slice(0, 600)}`,
     );
-    throw new Error(
-      `Red flags tool_use missing \`flags\` array (stop_reason=${response.stop_reason})`,
-    );
+    throw new Error("Red flags output missing `flags` array");
   }
 
   const flags: RedFlag[] = input.flags
@@ -246,5 +222,5 @@ export async function generateRedFlags(
       return flag;
     });
 
-  return { flags, model: MODEL };
+  return { flags, model };
 }

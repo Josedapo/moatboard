@@ -18,7 +18,7 @@
 //   2. `answerFollowupQuestion` — single-turn Q&A against an existing summary,
 //      appended to the record via `appendFollowupQA`.
 
-import Anthropic from "@anthropic-ai/sdk";
+import { callJson, callText } from "@/lib/claudeClient";
 import type { Quote, Fundamentals } from "@/lib/financial";
 import type {
   BusinessUnderstanding,
@@ -37,14 +37,6 @@ export type UnderstandingFilingInput = {
   reportDate: string | null;
   url: string;
 };
-
-const MODEL = "claude-sonnet-4-6";
-
-let _client: Anthropic | null = null;
-function getClient(): Anthropic {
-  if (!_client) _client = new Anthropic();
-  return _client;
-}
 
 // Structured summary: an ordered list of sections each with a title and
 // 1-3 short paragraphs. Avoids pulling in a markdown renderer dependency —
@@ -186,76 +178,59 @@ export async function generateBusinessUnderstanding(
 ): Promise<{ generated: GeneratedUnderstanding; model: string }> {
   const prompt = buildGenerationPrompt(ticker, quote, fundamentals, filing);
 
-  // tool_use guarantees valid JSON — free-form Spanish paragraphs and
-  // Q&A answers are too risky to serialize through "return JSON" prompts
-  // (unescaped quotes / bare newlines break JSON.parse).
-  // 5 sections × paragraphs + 5-7 Q&A with concrete answers easily
-  // crosses 4k tokens; 8000 is the comfort cushion.
-  const response = await getClient().messages.create({
-    model: MODEL,
-    max_tokens: 8000,
-    tools: [
-      {
-        name: "submit_business_understanding",
-        description: "Submit the structured business understanding.",
-        input_schema: {
-          type: "object",
-          properties: {
-            sections: {
-              type: "array",
-              description: "Exactly 5 sections with the fixed titles in order.",
-              items: {
-                type: "object",
-                properties: {
-                  title: { type: "string" },
-                  paragraphs: {
-                    type: "array",
-                    items: { type: "string" },
-                  },
-                },
-                required: ["title", "paragraphs"],
-              },
-            },
-            questions_and_answers: {
-              type: "array",
-              description: "5-7 concrete investor questions with answers.",
-              items: {
-                type: "object",
-                properties: {
-                  question: { type: "string" },
-                  answer: { type: "string" },
-                },
-                required: ["question", "answer"],
-              },
-            },
-          },
-          required: ["sections", "questions_and_answers"],
-        },
-      },
-    ],
-    tool_choice: { type: "tool", name: "submit_business_understanding" },
-    messages: [{ role: "user", content: prompt }],
-  });
-
-  const toolUse = response.content.find((b) => b.type === "tool_use");
-  if (!toolUse || toolUse.type !== "tool_use") {
-    throw new Error(
-      `Claude did not return a tool_use block (stop_reason=${response.stop_reason}, blocks=${response.content.map((b) => b.type).join(",")})`,
-    );
-  }
-
-  const input = toolUse.input as {
+  // In remote mode callJson uses Anthropic's tool_use to guarantee valid
+  // JSON. In local mode it injects the schema into the prompt and parses
+  // Opus's text output — Opus 4.7 is reliable enough at format adherence
+  // for the two known callers (understanding + red flags) to ride this
+  // path without regressing the quote-escaping bug tool_use originally
+  // solved. 5 sections + 5-7 Q&A easily clear 4k tokens; 8000 is cushion.
+  const { data: input, model } = await callJson<{
     sections?: Array<{ title?: string; paragraphs?: unknown }>;
     questions_and_answers?: Array<{ question?: string; answer?: string }>;
-  };
+  }>(prompt, {
+    schemaName: "submit_business_understanding",
+    schemaDescription: "Submit the structured business understanding.",
+    maxTokens: 8000,
+    jsonSchema: {
+      type: "object",
+      properties: {
+        sections: {
+          type: "array",
+          description: "Exactly 5 sections with the fixed titles in order.",
+          items: {
+            type: "object",
+            properties: {
+              title: { type: "string" },
+              paragraphs: {
+                type: "array",
+                items: { type: "string" },
+              },
+            },
+            required: ["title", "paragraphs"],
+          },
+        },
+        questions_and_answers: {
+          type: "array",
+          description: "5-7 concrete investor questions with answers.",
+          items: {
+            type: "object",
+            properties: {
+              question: { type: "string" },
+              answer: { type: "string" },
+            },
+            required: ["question", "answer"],
+          },
+        },
+      },
+      required: ["sections", "questions_and_answers"],
+    },
+  });
 
   if (!Array.isArray(input.sections) || input.sections.length < 3) {
     console.error(
-      `Understanding tool_use missing sections. stop_reason=${response.stop_reason}. Raw: ${JSON.stringify(toolUse.input).slice(0, 600)}`,
+      `Understanding output missing sections. Raw: ${JSON.stringify(input).slice(0, 600)}`,
     );
-    throw new Error(
-      `Generated summary sections missing or too few (stop_reason=${response.stop_reason})`,
-    );
+    throw new Error("Generated summary sections missing or too few");
   }
 
   const sections: SummarySection[] = input.sections
@@ -276,10 +251,10 @@ export async function generateBusinessUnderstanding(
     input.questions_and_answers.length < 3
   ) {
     console.error(
-      `Understanding Q&A list too short. stop_reason=${response.stop_reason}. qa_length=${input.questions_and_answers?.length ?? "undefined"}. Raw input preview: ${JSON.stringify(input).slice(0, 800)}`,
+      `Understanding Q&A list too short. qa_length=${input.questions_and_answers?.length ?? "undefined"}. Raw input preview: ${JSON.stringify(input).slice(0, 800)}`,
     );
     throw new Error(
-      `Generated Q&A list is missing or too short (stop_reason=${response.stop_reason}, length=${input.questions_and_answers?.length ?? 0})`,
+      `Generated Q&A list is missing or too short (length=${input.questions_and_answers?.length ?? 0})`,
     );
   }
 
@@ -315,7 +290,7 @@ export async function generateBusinessUnderstanding(
       questions_and_answers: qa,
       sources,
     },
-    model: MODEL,
+    model,
   };
 }
 
@@ -326,21 +301,12 @@ export async function answerFollowupQuestion(
 ): Promise<{ answer: string; model: string }> {
   const prompt = buildFollowupPrompt(ticker, understanding, question);
 
-  const response = await getClient().messages.create({
-    model: MODEL,
-    max_tokens: 800,
-    messages: [{ role: "user", content: prompt }],
-  });
-
-  const textBlock = response.content.find((b) => b.type === "text");
-  if (!textBlock || textBlock.type !== "text") {
-    throw new Error("No text response from Claude");
-  }
-  const answer = textBlock.text.trim();
+  const { text, model } = await callText(prompt, { maxTokens: 800 });
+  const answer = text.trim();
   if (answer.length < 10) {
     throw new Error("Follow-up answer was empty or too short");
   }
-  return { answer, model: MODEL };
+  return { answer, model };
 }
 
 function formatPct(value: number | null | undefined): string {

@@ -11,7 +11,7 @@
 // - Only recommend tools that are actually available (caller passes the
 //   list — P/B gets excluded when book value is negative).
 
-import Anthropic from "@anthropic-ai/sdk";
+import { callText } from "@/lib/claudeClient";
 import type { Quote, Fundamentals } from "@/lib/financial";
 
 export type ToolId = "dcf" | "pe" | "pfcf" | "pb" | "cash_yield";
@@ -22,14 +22,6 @@ export type ValuationGuideEvaluation = {
   cautious: ToolId | null;
   reasoning: string;
 };
-
-const MODEL = "claude-sonnet-4-6";
-
-let _client: Anthropic | null = null;
-function getClient(): Anthropic {
-  if (!_client) _client = new Anthropic();
-  return _client;
-}
 
 export async function assessValuationGuide(
   ticker: string,
@@ -110,18 +102,10 @@ Output strict JSON, no preamble. CRITICAL: primary, secondary, and cautious must
   "reasoning": "2-3 frases en ESPAÑOL explicando por qué estas prioridades aplican a ESTE negocio en concreto. Cita la economía del negocio (ej: 'los márgenes altos de servicios enmascaran las necesidades de capex', 'las provisiones distorsionan los earnings reported trimestre a trimestre', 'el modelo asset-light hace que book value sea poco informativo'). Usa lenguaje condicional: 'suele ser más informativo', 'typically primary', 'menos fiable para'. NUNCA escribas 'usa X', 'deberías', 'comprar', 'vender', 'hold', 'overvalued', 'undervalued'. Tono cercano, directo. Jerga financiera (DCF, PE, P/FCF, P/B, capex, book value, SBC, FCF, ROIC) en inglés; el resto en español natural."
 }`;
 
-  const response = await getClient().messages.create({
-    model: MODEL,
-    max_tokens: 600,
-    messages: [{ role: "user", content: prompt }],
-  });
-  const textBlock = response.content.find((b) => b.type === "text");
-  if (!textBlock || textBlock.type !== "text") {
-    throw new Error("No text response from Claude");
-  }
-  const raw = textBlock.text.trim();
-  const m = raw.match(/\{[\s\S]*\}/);
-  if (!m) throw new Error(`Could not find JSON: ${raw.slice(0, 200)}`);
+  const { text: raw, model } = await callText(prompt, { maxTokens: 600 });
+  const trimmed = raw.trim();
+  const m = trimmed.match(/\{[\s\S]*\}/);
+  if (!m) throw new Error(`Could not find JSON: ${trimmed.slice(0, 200)}`);
   const parsed = JSON.parse(m[0]) as ValuationGuideEvaluation;
 
   // Validate: primary must be in the allowed list.
@@ -154,7 +138,7 @@ Output strict JSON, no preamble. CRITICAL: primary, secondary, and cautious must
     throw new Error("AI returned empty reasoning");
   }
 
-  return { evaluation: parsed, model: MODEL };
+  return { evaluation: parsed, model };
 }
 
 function formatPct(value: number | null | undefined): string {

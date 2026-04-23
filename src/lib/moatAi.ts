@@ -1,4 +1,4 @@
-import Anthropic from "@anthropic-ai/sdk";
+import { callText } from "@/lib/claudeClient";
 import type {
   Quote,
   Fundamentals,
@@ -12,14 +12,6 @@ export type MoatEvaluation = {
   archetype: MoatArchetype;
   reasoning: string;
 };
-
-const MODEL = "claude-sonnet-4-6";
-
-let _client: Anthropic | null = null;
-function getClient(): Anthropic {
-  if (!_client) _client = new Anthropic();
-  return _client;
-}
 
 const ARCHETYPES: MoatArchetype[] = [
   "brand",
@@ -125,21 +117,12 @@ export async function assessMoat(
 ): Promise<{ evaluation: MoatEvaluation; model: string }> {
   const prompt = buildPrompt(ticker, quote, fundamentals, multiYear);
 
-  const response = await getClient().messages.create({
-    model: MODEL,
-    max_tokens: 600,
-    messages: [{ role: "user", content: prompt }],
-  });
+  const { text: raw, model } = await callText(prompt, { maxTokens: 600 });
 
-  const textBlock = response.content.find((b) => b.type === "text");
-  if (!textBlock || textBlock.type !== "text") {
-    throw new Error("No text response from Claude");
-  }
-
-  const raw = textBlock.text.trim();
-  const jsonMatch = raw.match(/\{[\s\S]*\}/);
+  const trimmed = raw.trim();
+  const jsonMatch = trimmed.match(/\{[\s\S]*\}/);
   if (!jsonMatch) {
-    throw new Error(`Could not find JSON in response: ${raw.slice(0, 200)}`);
+    throw new Error(`Could not find JSON in response: ${trimmed.slice(0, 200)}`);
   }
 
   const parsed = JSON.parse(jsonMatch[0]) as MoatEvaluation;
@@ -157,7 +140,7 @@ export async function assessMoat(
     throw new Error("Missing moat reasoning");
   }
 
-  return { evaluation: parsed, model: MODEL };
+  return { evaluation: parsed, model };
 }
 
 function formatPct(value: number | null | undefined): string {

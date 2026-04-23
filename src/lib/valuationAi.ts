@@ -1,4 +1,4 @@
-import Anthropic from "@anthropic-ai/sdk";
+import { callText } from "@/lib/claudeClient";
 import type { Quote, Fundamentals } from "@/lib/financial";
 
 // DCF assumptions (growth / terminal / discount) are NOT AI-suggested.
@@ -14,14 +14,6 @@ export type MultiplesEstimate = {
   sector_multiple_used: number;
   reasoning: string;
 };
-
-const MODEL = "claude-sonnet-4-6";
-
-let _client: Anthropic | null = null;
-function getClient(): Anthropic {
-  if (!_client) _client = new Anthropic();
-  return _client;
-}
 
 export async function estimateWithMultiples(
   ticker: string,
@@ -59,18 +51,10 @@ OUTPUT (strict JSON, no preamble):
   "reasoning": "1-2 frases en español explicando el múltiplo elegido y por qué DCF no aplicaba."
 }`;
 
-  const response = await getClient().messages.create({
-    model: MODEL,
-    max_tokens: 600,
-    messages: [{ role: "user", content: prompt }],
-  });
-  const textBlock = response.content.find((b) => b.type === "text");
-  if (!textBlock || textBlock.type !== "text") {
-    throw new Error("No text response from Claude");
-  }
-  const raw = textBlock.text.trim();
-  const m = raw.match(/\{[\s\S]*\}/);
-  if (!m) throw new Error(`Could not find JSON: ${raw.slice(0, 200)}`);
+  const { text: raw } = await callText(prompt, { maxTokens: 600 });
+  const trimmed = raw.trim();
+  const m = trimmed.match(/\{[\s\S]*\}/);
+  if (!m) throw new Error(`Could not find JSON: ${trimmed.slice(0, 200)}`);
   const parsed = JSON.parse(m[0]) as MultiplesEstimate;
 
   if (!Number.isFinite(parsed.intrinsic_value) || parsed.intrinsic_value <= 0) {

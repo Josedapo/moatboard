@@ -7,7 +7,7 @@
 - **Hosting:** Vercel (auto-deploy from GitHub `Josedapo/moatboard` on push to `main`)
 - **Database:** Vercel Postgres (Neon) via `@neondatabase/serverless`
 - **Auth:** NextAuth.js v5 (Auth.js beta) — Google OAuth only (magic link not configured)
-- **AI:** Anthropic SDK — model `claude-sonnet-4-6` everywhere, lazy-instantiated
+- **AI:** Dual-mode caller in `src/lib/claudeClient.ts`. `MOATBOARD_AI_MODE=local` (Joseda's laptop) spawns the Claude Code CLI with `ANTHROPIC_API_KEY` stripped so it routes through the Max subscription (Opus 4.7 by default, no API spend). `MOATBOARD_AI_MODE=remote` (default · production on Vercel) uses `@anthropic-ai/sdk` + Sonnet 4.6. Two helpers: `callText` for prose and `callJson` for structured output. In remote mode `callJson` uses Anthropic's `tool_use` for guaranteed valid JSON; in local mode the schema is injected into the prompt and Opus's text output is parsed — Opus 4.7 is reliable enough at format adherence that the two typed callers (`businessUnderstandingAi`, `redFlagsAi`) ride that path without regressing the quote-escaping bug we originally solved with tool_use.
 - **Financial data:** `yahoo-finance2` v3 (instantiated as `new YahooFinance({ suppressNotices: ["yahooSurvey"] })`)
 - **Analytics:** GA4 (planned, not yet wired)
 
@@ -323,10 +323,17 @@ AUTH_GOOGLE_SECRET=...
 AUTH_SECRET=...                  # openssl rand -base64 32
 AUTH_URL=http://localhost:3000   # production: https://www.moatboard.com
 DATABASE_URL=postgresql://...    # Neon pooled connection string
-ANTHROPIC_API_KEY=sk-ant-...
+ANTHROPIC_API_KEY=sk-ant-...         # used by remote mode (production) and any direct SDK calls
 SEC_USER_AGENT=Name Email            # SEC EDGAR requires a declarative UA
 CRON_SECRET=...                      # Vercel Cron Bearer token (production only; set locally only if testing protected mode)
+
+# Dual-mode Claude caller — see src/lib/claudeClient.ts
+MOATBOARD_AI_MODE=local              # local-only. Omit or set to 'remote' for API path. Vercel uses 'remote' by not setting this.
+CLAUDE_CLI_PATH=/Users/joseda/.local/bin/claude   # optional, only if CLI lives elsewhere
+CLAUDE_CLI_MODEL=opus                # optional, defaults to "opus" (the Max alias for the current Opus)
 ```
+
+**Verification:** after changing anything in the dual-mode path run `node scripts/smoke-claude-client.mjs` — smoke test hits the CLI for both a text completion and a JSON-schema completion, fails loud if either breaks. The script does NOT touch the DB.
 
 ## Sanity-check Tickers
 

@@ -1,4 +1,4 @@
-import Anthropic from "@anthropic-ai/sdk";
+import { callText } from "@/lib/claudeClient";
 import type { Quote, Fundamentals } from "@/lib/financial";
 import type {
   Tier,
@@ -6,14 +6,6 @@ import type {
   MoatStrength,
   MoatArchetype,
 } from "@/lib/verdict";
-
-const MODEL = "claude-sonnet-4-6";
-
-let _client: Anthropic | null = null;
-function getClient(): Anthropic {
-  if (!_client) _client = new Anthropic();
-  return _client;
-}
 
 const TIER_FRAMING: Record<Tier, string> = {
   exceptional:
@@ -142,18 +134,8 @@ export async function composeVerdictNarrative(args: {
 }): Promise<string> {
   const prompt = buildPrompt(args);
 
-  const response = await getClient().messages.create({
-    model: MODEL,
-    max_tokens: 250,
-    messages: [{ role: "user", content: prompt }],
-  });
-
-  const textBlock = response.content.find((b) => b.type === "text");
-  if (!textBlock || textBlock.type !== "text") {
-    throw new Error("No text response from Claude");
-  }
-
-  const narrative = textBlock.text.trim();
+  const { text } = await callText(prompt, { maxTokens: 250 });
+  const narrative = text.trim();
   if (narrative.length === 0) {
     throw new Error("Empty narrative");
   }

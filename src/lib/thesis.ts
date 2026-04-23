@@ -1,4 +1,4 @@
-import Anthropic from "@anthropic-ai/sdk";
+import { callText } from "@/lib/claudeClient";
 import type {
   Quote,
   Fundamentals,
@@ -41,14 +41,6 @@ export const THESIS_FIELD_ORDER: (keyof ThesisContent)[] = [
   "what_to_watch",
   "risk_factors",
 ];
-
-// Lazy: avoid running browser-detection at module load time so this file
-// can be imported (for types/constants) by client components.
-let _client: Anthropic | null = null;
-function getClient(): Anthropic {
-  if (!_client) _client = new Anthropic();
-  return _client;
-}
 
 function buildPrompt(
   ticker: string,
@@ -208,21 +200,11 @@ export async function generateThesis(
     verdictReason,
   );
 
-  const response = await getClient().messages.create({
-    model: "claude-sonnet-4-6",
-    max_tokens: 2000,
-    messages: [{ role: "user", content: prompt }],
-  });
-
-  const textBlock = response.content.find((b) => b.type === "text");
-  if (!textBlock || textBlock.type !== "text") {
-    throw new Error("No text response from Claude");
-  }
-
-  const raw = textBlock.text.trim();
-  const jsonMatch = raw.match(/\{[\s\S]*\}/);
+  const { text: raw } = await callText(prompt, { maxTokens: 2000 });
+  const trimmed = raw.trim();
+  const jsonMatch = trimmed.match(/\{[\s\S]*\}/);
   if (!jsonMatch) {
-    throw new Error(`Could not find JSON in response: ${raw.slice(0, 200)}`);
+    throw new Error(`Could not find JSON in response: ${trimmed.slice(0, 200)}`);
   }
 
   const parsed = JSON.parse(jsonMatch[0]) as ThesisContent;
