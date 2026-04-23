@@ -23,13 +23,18 @@ const TABS: Array<{ id: PositionTabId; label: string }> = [
 // passed as a record; only the active panel is mounted in the DOM.
 // Default active tab is "razonamiento" (anti-trading: re-anchor before
 // re-litigating). Optional per-tab badge prop carries an integer badge
-// (e.g. count of new signals for Presentaciones).
+// (e.g. count of new signals for Presentaciones). `labelOverrides`
+// lets callers rename a tab without touching the internal id — used by
+// the watchlist ficha, which relabels the first tab "Observación"
+// because it has no position to show "Overview" KPIs for.
 export default function PositionTabs({
   panels,
   badges,
+  labelOverrides,
 }: {
   panels: Record<PositionTabId, React.ReactNode>;
   badges?: Partial<Record<PositionTabId, number>>;
+  labelOverrides?: Partial<Record<PositionTabId, string>>;
 }) {
   const [active, setActive] = useState<PositionTabId>("razonamiento");
 
@@ -56,7 +61,7 @@ export default function PositionTabs({
                   : "-mb-px inline-flex items-center gap-1.5 border-b-2 border-transparent px-4 py-2.5 text-sm font-medium text-navy-500 hover:text-navy-900"
               }
             >
-              <span>{tab.label}</span>
+              <span>{labelOverrides?.[tab.id] ?? tab.label}</span>
               {badge !== undefined && badge > 0 && (
                 <span
                   className={

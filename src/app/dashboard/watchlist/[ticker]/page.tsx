@@ -17,6 +17,7 @@ import type {
   Valuation,
 } from "@/lib/valuations";
 import DashboardNav from "@/components/DashboardNav";
+import PositionTabs from "@/components/position/PositionTabs";
 import PresentationsPanel from "@/components/position/PresentationsPanel";
 import BusinessUnderstandingView from "@/components/shared/BusinessUnderstandingView";
 import RedFlagsList from "@/components/shared/RedFlagsList";
@@ -24,11 +25,13 @@ import MoatboardAnalysisView from "@/components/MoatboardAnalysis";
 import ValuationSection from "@/components/Valuation";
 import { reanalyzeTickerAction } from "../../actions";
 
-// Dedicated per-ticker view for watchlist entries. Same informational
-// surface as the Presentaciones tab on a live position (next earnings
-// + SEC signal timeline) so the user can reason about a candidate
-// before committing capital. Watchlist tickers don't have a position
-// ficha — this is their equivalent.
+// Dedicated per-ticker view for watchlist entries. Mirrors the live
+// position ficha's tabbed layout (Overview / Negocio / Calidad /
+// Valoración / Señales) so there's no visual break when the user
+// moves between a watchlisted ticker and one they own. Since there's
+// no position yet, the first tab is relabelled "Observación" and
+// shows the watchlist-specific context (why it's watched, when to
+// revisit, next earnings) instead of portfolio KPIs and operations.
 
 type Props = { params: Promise<{ ticker: string }> };
 
@@ -52,12 +55,9 @@ export default async function WatchlistTickerPage({ params }: Props) {
   // discarded/outside_circle, or 404 when the user has no record.
   if (!state || state.status !== "watchlist") notFound();
 
-  // Get-or-create a draft position for this watchlisted ticker so the
-  // existing ensureAnalysis / ensureValuation infrastructure can hang
-  // its per-position artefacts off a real row. Drafts have no
-  // transactions and stay hidden from the Dashboard. First visit
-  // creates the draft + populates caches (moat, valuation_guide);
-  // subsequent visits reuse them with zero AI calls.
+  // Get-or-create a draft position for this watchlisted ticker so
+  // ensureAnalysis / ensureValuation work against a real position_id.
+  // Drafts have no transactions and stay hidden from the Dashboard.
   const draftPosition = await ensureDraftPosition(session.user.id, ticker);
 
   const [
@@ -72,10 +72,10 @@ export default async function WatchlistTickerPage({ params }: Props) {
     getRedFlags(ticker),
   ]);
 
-  // Scorecard + valuation: deterministic computations (+ cached AI on
-  // moat and valuation guide, per-ticker 365d TTL). ensureAnalysis /
-  // ensureValuation return early on DB hit, so re-visiting a watchlist
-  // ticker is instant once the caches are warm.
+  // Badge count for the Señales tab: just the "new" signals for this
+  // ticker, computed from the array we already have so no extra query.
+  const newSignalsCount = signals.filter((s) => s.status === "new").length;
+
   let analysis = null;
   let analysisError: string | null = null;
   try {
@@ -119,11 +119,9 @@ export default async function WatchlistTickerPage({ params }: Props) {
     }).catch(() => null);
   }
 
-
   const nextEarningsDaysAway = quote?.nextEarningsDate
     ? daysUntil(quote.nextEarningsDate)
     : null;
-
   const nextReportType = quote?.nextEarningsDate
     ? await inferNextReportType({
         userId: session.user.id,
@@ -131,6 +129,136 @@ export default async function WatchlistTickerPage({ params }: Props) {
         nextEarningsDate: quote.nextEarningsDate,
       }).catch(() => null)
     : null;
+
+  // ─── Tab panels ───
+
+  const observacion = (
+    <div className="space-y-6">
+      {state.reason_md && (
+        <section className="rounded-2xl border border-navy-100 bg-white p-6 shadow-sm">
+          <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-navy-500">
+            Por qué está en watchlist
+          </h3>
+          <p className="whitespace-pre-line text-sm leading-relaxed text-navy-800">
+            {state.reason_md}
+          </p>
+        </section>
+      )}
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        {state.review_when && (
+          <section className="rounded-2xl border border-navy-100 bg-white p-6 shadow-sm">
+            <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-navy-500">
+              Revisar cuando
+            </div>
+            <div className="text-sm text-navy-800">{state.review_when}</div>
+          </section>
+        )}
+        {quote?.nextEarningsDate && (
+          <section className="rounded-2xl border border-navy-100 bg-white p-6 shadow-sm">
+            <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-navy-500">
+              Próxima presentación
+            </div>
+            <div className="text-sm text-navy-800">
+              <span className="tabular-nums">
+                {formatDateLong(quote.nextEarningsDate)}
+              </span>
+              {nextEarningsDaysAway !== null && (
+                <span className="ml-2 text-navy-500">
+                  {relativeDaysLabel(nextEarningsDaysAway)}
+                </span>
+              )}
+              {nextReportType && (
+                <span className="ml-2 inline-block rounded border border-navy-200 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-navy-600">
+                  {nextReportType}
+                </span>
+              )}
+            </div>
+          </section>
+        )}
+      </div>
+
+      <section className="rounded-2xl border border-dashed border-navy-200 bg-navy-50/30 p-6">
+        <p className="text-sm text-navy-700">
+          Este ticker está en observación. Si la tesis cambia —
+          valoración cae a un rango razonable, una señal SEC aclara una
+          duda, la trimestral confirma una mejora — pasa por{" "}
+          <span className="font-medium text-navy-900">Re-analizar</span>{" "}
+          arriba para iniciar el wizard completo de decisión.
+        </p>
+      </section>
+    </div>
+  );
+
+  const negocio = (
+    <div className="space-y-6">
+      {understanding ? (
+        <section className="rounded-2xl border border-navy-100 bg-white p-6 shadow-sm">
+          <div className="mb-4">
+            <h2 className="text-xl font-bold text-navy-950">
+              Entiende el negocio
+            </h2>
+            <p className="mt-1 text-xs text-navy-500">
+              Versión {understanding.version} · generada el{" "}
+              {formatDateLong(understanding.generated_at)}
+            </p>
+          </div>
+          <BusinessUnderstandingView understanding={understanding} />
+        </section>
+      ) : (
+        <EmptyHint
+          text="Aún no hay resumen del negocio en caché. Pulsa Re-analizar arriba para generarlo."
+        />
+      )}
+
+      {redFlags ? (
+        <section className="rounded-2xl border border-navy-100 bg-white p-6 shadow-sm">
+          <div className="mb-4">
+            <h2 className="text-xl font-bold text-navy-950">
+              Red flags cualitativas
+            </h2>
+            <p className="mt-1 text-xs text-navy-500">
+              Generadas el {formatDateLong(redFlags.generated_at)}
+            </p>
+          </div>
+          <RedFlagsList flags={redFlags.flags} />
+        </section>
+      ) : (
+        <EmptyHint text="Sin red flags cualitativas en caché todavía." />
+      )}
+    </div>
+  );
+
+  const calidad = (
+    <MoatboardAnalysisView
+      positionId={draftPosition.id}
+      ticker={ticker}
+      analysis={analysis}
+      fundamentals={fundamentals}
+      loadError={analysisError}
+      hideRegenerate
+    />
+  );
+
+  const valoracion = (
+    <ValuationSection
+      positionId={draftPosition.id}
+      valuation={valuation}
+      guide={valuationGuide}
+      loadError={valuationError}
+      hideRegenerate
+    />
+  );
+
+  const presentaciones = (
+    <PresentationsPanel
+      positionId={null}
+      signals={signals}
+      nextEarningsDate={quote?.nextEarningsDate ?? null}
+      nextEarningsDaysAway={nextEarningsDaysAway}
+      nextReportType={nextReportType}
+    />
+  );
 
   return (
     <div className="flex min-h-screen flex-col bg-navy-50/40">
@@ -168,143 +296,81 @@ export default async function WatchlistTickerPage({ params }: Props) {
             <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-800">
               Watchlist
             </span>
+            {quote?.regularMarketPrice !== null &&
+              quote?.regularMarketPrice !== undefined && (
+                <span className="ml-auto text-xl font-semibold tabular-nums text-navy-900">
+                  ${quote.regularMarketPrice.toFixed(2)}
+                </span>
+              )}
           </div>
-          {quote?.sector && (
+          {(quote?.sector || quote?.industry) && (
             <div className="mt-3 flex flex-wrap gap-2">
-              <span className="rounded-full bg-navy-100 px-3 py-1 text-xs font-medium text-navy-700">
-                {quote.sector}
-              </span>
-              {quote.industry && (
+              {quote?.sector && (
+                <span className="rounded-full bg-navy-100 px-3 py-1 text-xs font-medium text-navy-700">
+                  {quote.sector}
+                </span>
+              )}
+              {quote?.industry && (
                 <span className="rounded-full bg-navy-100 px-3 py-1 text-xs font-medium text-navy-700">
                   {quote.industry}
                 </span>
               )}
             </div>
           )}
-          {state.review_when && (
-            <div className="mt-4 text-sm text-navy-700">
-              <span className="font-medium">Revisar cuando:</span>{" "}
-              {state.review_when}
-            </div>
-          )}
-          {state.reason_md && (
-            <div className="mt-3 rounded-md border-l-2 border-navy-200 bg-navy-50/30 px-3 py-2 text-sm leading-relaxed text-navy-700">
-              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-navy-500">
-                Por qué está en watchlist
-              </div>
-              <div className="whitespace-pre-line">{state.reason_md}</div>
-            </div>
-          )}
         </header>
 
-        <PresentationsPanel
-          positionId={null}
-          signals={signals}
-          nextEarningsDate={quote?.nextEarningsDate ?? null}
-          nextEarningsDaysAway={nextEarningsDaysAway}
-          nextReportType={nextReportType}
+        <PositionTabs
+          panels={{
+            razonamiento: observacion,
+            negocio,
+            calidad,
+            valoracion,
+            presentaciones,
+          }}
+          labelOverrides={{ razonamiento: "Observación" }}
+          badges={{ presentaciones: newSignalsCount }}
         />
-
-        {/* Scorecard + moat + valuation — rendered off the draft
-            position we ensure above. `hideRegenerate` keeps the
-            watchlist view read-only; regenerating requires going
-            through the wizard via "Re-analizar" above. */}
-        {analysis && (
-          <section className="mt-8">
-            <h2 className="mb-4 text-xs font-semibold uppercase tracking-wider text-navy-500">
-              Calidad del negocio
-            </h2>
-            <MoatboardAnalysisView
-              positionId={draftPosition.id}
-              ticker={ticker}
-              analysis={analysis}
-              fundamentals={fundamentals}
-              loadError={analysisError}
-              hideRegenerate
-            />
-          </section>
-        )}
-
-        {valuation && (
-          <section className="mt-8">
-            <h2 className="mb-4 text-xs font-semibold uppercase tracking-wider text-navy-500">
-              Valoración
-            </h2>
-            <ValuationSection
-              positionId={draftPosition.id}
-              valuation={valuation}
-              guide={valuationGuide}
-              loadError={valuationError}
-              hideRegenerate
-            />
-          </section>
-        )}
-
-        {/* Qualitative analysis — business understanding + red flags.
-            The moat now renders as part of the Calidad section above,
-            so it's no longer duplicated here. */}
-        {(understanding || redFlags) && (
-          <section className="mt-8">
-            <h2 className="mb-4 text-xs font-semibold uppercase tracking-wider text-navy-500">
-              Análisis cualitativo
-            </h2>
-
-            {understanding && (
-              <section className="mb-6 rounded-2xl border border-navy-100 bg-white p-6 shadow-sm">
-                <div className="mb-4">
-                  <h3 className="text-xl font-bold text-navy-950">
-                    Entiende el negocio
-                  </h3>
-                  <p className="mt-1 text-xs text-navy-500">
-                    Versión {understanding.version} · generada el{" "}
-                    {new Date(understanding.generated_at).toLocaleDateString(
-                      "es-ES",
-                      { year: "numeric", month: "long", day: "numeric" },
-                    )}
-                  </p>
-                </div>
-                <BusinessUnderstandingView understanding={understanding} />
-              </section>
-            )}
-
-            {redFlags && (
-              <section className="mb-6 rounded-2xl border border-navy-100 bg-white p-6 shadow-sm">
-                <div className="mb-4">
-                  <h3 className="text-xl font-bold text-navy-950">
-                    Red flags cualitativas
-                  </h3>
-                  <p className="mt-1 text-xs text-navy-500">
-                    Generadas el{" "}
-                    {new Date(redFlags.generated_at).toLocaleDateString(
-                      "es-ES",
-                      { year: "numeric", month: "long", day: "numeric" },
-                    )}
-                  </p>
-                </div>
-                <RedFlagsList flags={redFlags.flags} />
-              </section>
-            )}
-          </section>
-        )}
-
-        {!understanding && !redFlags && (
-          <section className="mt-8 rounded-2xl border border-dashed border-navy-200 bg-navy-50/30 p-6 text-center">
-            <p className="text-sm text-navy-600">
-              Este ticker aún no tiene <em>Entender el negocio</em> ni{" "}
-              <em>Red flags</em> cualitativas en caché. Pulsa{" "}
-              <span className="font-medium text-navy-900">Re-analizar</span>{" "}
-              arriba para generarlas.
-            </p>
-          </section>
-        )}
       </main>
     </div>
   );
 }
 
-// Module-level helper — React 19 purity rule rejects Date.now() inside
-// the server component render.
+// ─── Helpers ───
+
 function daysUntil(value: string | Date): number {
   const t = value instanceof Date ? value.getTime() : new Date(value).getTime();
   return Math.round((t - Date.now()) / (1000 * 60 * 60 * 24));
+}
+
+function relativeDaysLabel(days: number): string {
+  if (days < 0) {
+    const d = Math.abs(days);
+    return `hace ${d} ${d === 1 ? "día" : "días"}`;
+  }
+  if (days === 0) return "hoy";
+  if (days === 1) return "mañana";
+  if (days < 31) return `en ${days} días`;
+  const months = Math.round(days / 30);
+  return `en ${months} ${months === 1 ? "mes" : "meses"}`;
+}
+
+function formatDateLong(iso: string | Date): string {
+  try {
+    const d = iso instanceof Date ? iso : new Date(iso);
+    return d.toLocaleDateString("es-ES", {
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    });
+  } catch {
+    return typeof iso === "string" ? iso.slice(0, 10) : String(iso);
+  }
+}
+
+function EmptyHint({ text }: { text: string }) {
+  return (
+    <section className="rounded-2xl border border-dashed border-navy-200 bg-navy-50/30 p-6 text-center">
+      <p className="text-sm text-navy-600">{text}</p>
+    </section>
+  );
 }
