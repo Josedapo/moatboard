@@ -16,24 +16,20 @@ export default async function HistoryPage() {
     return null;
   }
 
-  const [discarded, outsideCircle, livedPositionsMap] = await Promise.all([
+  const [discarded, livedPositionsMap] = await Promise.all([
     listTickerStatesEnriched({
       userId: session.user.id,
       status: "discarded",
     }),
-    listTickerStatesEnriched({
-      userId: session.user.id,
-      status: "outside_circle",
-    }),
     listLivedPositionIdsByTicker(session.user.id),
   ]);
 
-  const total = discarded.length + outsideCircle.length;
+  const total = discarded.length;
 
   // Yahoo quotes in parallel for the friendly company name. Cheap at
   // history scale; not worth caching. Map → plain object so it serializes
   // cleanly to the Client Component.
-  const allTickers = [...discarded, ...outsideCircle].map((i) => i.ticker);
+  const allTickers = discarded.map((i) => i.ticker);
   const companyNames = Object.fromEntries(
     await Promise.all(
       allTickers.map(async (ticker) => {
@@ -56,7 +52,7 @@ export default async function HistoryPage() {
           <h1 className="text-3xl font-bold text-navy-950">History</h1>
           <p className="mt-2 text-navy-600">
             {total === 0
-              ? "Nothing here yet. Tickers you discard or mark as outside your circle of competence will appear here."
+              ? "Nothing here yet. Tickers you discard will appear here."
               : `${total} ${total === 1 ? "ticker" : "tickers"} parked.`}
           </p>
         </header>
@@ -73,7 +69,6 @@ export default async function HistoryPage() {
         ) : (
           <HistoryFilters
             discarded={discarded}
-            outsideCircle={outsideCircle}
             companyNames={companyNames}
             livedPositions={livedPositions}
           />

@@ -1,11 +1,7 @@
 import { sql } from "@/lib/db";
 import type { Tier } from "@/lib/verdict";
 
-export type TickerStatus =
-  | "in_portfolio"
-  | "watchlist"
-  | "discarded"
-  | "outside_circle";
+export type TickerStatus = "in_portfolio" | "watchlist" | "discarded";
 
 export type TickerState = {
   id: number;
@@ -14,7 +10,7 @@ export type TickerState = {
   status: TickerStatus;
   reason_md: string | null;
   review_when: string | null;
-  // Set when a non-portfolio state (discarded/watchlist/outside_circle) is
+  // Set when a non-portfolio state (discarded/watchlist) is
   // overwritten by an Invest decision — preserves the prior reason_md so the
   // position page can show "you had discarded this on X because Y before
   // changing your mind". NULL when the ticker has never been bought, or when

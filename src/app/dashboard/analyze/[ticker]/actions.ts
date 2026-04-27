@@ -263,8 +263,8 @@ export async function decideInvestAction(
   });
 
   // Preserve the prior reason if this ticker had been parked (discarded /
-  // watchlist / outside_circle) before — surfaced on the position page as
-  // "you had X this on YYYY-MM-DD because Z before changing your mind".
+  // watchlist) before — surfaced on the position page as "you had X this
+  // on YYYY-MM-DD because Z before changing your mind".
   const prior = await getTickerState({ userId, ticker: upper });
   const priorReasonOnInvestMd =
     prior && prior.status !== "in_portfolio" && prior.reason_md
@@ -377,20 +377,27 @@ export async function markOutsideCircleAction(
   if (!active) redirect(`/dashboard`);
 
   const reason = String(formData.get("reason") ?? "").trim();
+  // "Outside circle" is now a sub-case of "discarded" with a pre-filled
+  // reason prefix. The wizard exit ramp keeps its UX (button + textarea);
+  // the persisted state is unified to discarded so /history doesn't have
+  // to special-case a fourth status.
+  const prefixedReason = reason
+    ? `Fuera del círculo de competencia · ${reason}`
+    : "Fuera del círculo de competencia";
 
   const canonicalOutside = await getCanonicalTicker(upper);
   await upsertTickerState({
     userId,
     ticker: canonicalOutside,
-    status: "outside_circle",
-    reasonMd: reason || null,
+    status: "discarded",
+    reasonMd: prefixedReason,
   });
 
   // Keep the draft so the partial Quality analysis stays cached. Marking
   // outside-circle doesn't mean "forget everything" — it just records
   // that the user shouldn't invest without first closing the gap.
 
-  await completeSession({ sessionId: active.id, outcome: "outside_circle" });
+  await completeSession({ sessionId: active.id, outcome: "discarded" });
 
   revalidatePath("/dashboard");
   redirect(`/dashboard`);

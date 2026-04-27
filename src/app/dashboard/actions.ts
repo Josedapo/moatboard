@@ -118,9 +118,9 @@ export async function startAnalysisAction(
 }
 
 // Re-enter the wizard for a ticker that already has a non-portfolio state
-// (watchlist/discarded/outside_circle). Skips the reminder shown by the entry
-// form because the caller (watchlist/history page) is already showing the
-// prior decision in context.
+// (watchlist/discarded). Skips the reminder shown by the entry form because
+// the caller (watchlist/history page) is already showing the prior decision
+// in context.
 export async function reanalyzeTickerAction(formData: FormData) {
   formData.append("confirmReanalysis", "true");
   await startAnalysisAction({}, formData);

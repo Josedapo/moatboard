@@ -56,7 +56,7 @@ export default async function WatchlistTickerPage({ params }: Props) {
     ticker,
   });
   // Only watchlist entries render here. Redirect to history for
-  // discarded/outside_circle, or 404 when the user has no record.
+  // discarded, or 404 when the user has no record.
   if (!state || state.status !== "watchlist") notFound();
 
   // Get-or-create a draft position for this watchlisted ticker so

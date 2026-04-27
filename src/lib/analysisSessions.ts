@@ -12,7 +12,6 @@ export type AnalysisOutcome =
   | "invested"
   | "watchlist"
   | "discarded"
-  | "outside_circle"
   | "abandoned";
 
 export type UnderstoodFlag =

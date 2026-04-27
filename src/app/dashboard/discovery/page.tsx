@@ -56,7 +56,7 @@ export default async function DiscoveryPage() {
               Ver fondos →
             </Link>
           </div>
-          <p className="mt-2 max-w-3xl text-sm text-navy-600">
+          <p className="mt-2 text-sm text-navy-600">
             Empresas que aparecen en la cartera de los {meta.fundsCovered} fondos
             curados, ordenadas por conviction score (suma ponderada por tier
             del peso que cada fondo le da a la posición). Punto de partida
@@ -74,7 +74,7 @@ export default async function DiscoveryPage() {
         </header>
 
         <section className="mb-6">
-          <AnalyzeEntryForm variant="inline" />
+          <DiscoveryRecentFilingsPanel filings={recentFilings} />
         </section>
 
         <section className="mb-6">
@@ -85,15 +85,15 @@ export default async function DiscoveryPage() {
         </section>
 
         <section className="mb-6">
-          <DiscoveryRecentFilingsPanel filings={recentFilings} />
-        </section>
-
-        <section className="mb-6">
           <DiscoveryNewEntrants
             entrants={delta.newEntrants}
             latestQuarter={delta.latestQuarter}
             priorQuarter={delta.priorQuarter}
           />
+        </section>
+
+        <section className="mb-6">
+          <AnalyzeEntryForm variant="inline" />
         </section>
 
         <DiscoveryLeaderboard rows={rows} />

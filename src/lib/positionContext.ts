@@ -7,9 +7,8 @@ import type { AnalysisSession, UnderstoodFlag } from "@/lib/analysisSessions";
 // Each field is non-null only when the condition holds — render the strip
 // only when at least one is set.
 export type DecisionContext = {
-  // Prior reason from a discarded / watchlist / outside_circle state that
-  // was overwritten when the user invested. Preserved on ticker_states by
-  // decideInvestAction.
+  // Prior reason from a discarded / watchlist state that was overwritten
+  // when the user invested. Preserved on ticker_states by decideInvestAction.
   priorReasonOnInvestMd: string | null;
   // The most recent invested session reached the Decision step with a
   // non-default understood_flag. We surface 'doubts_resolved' as a calm

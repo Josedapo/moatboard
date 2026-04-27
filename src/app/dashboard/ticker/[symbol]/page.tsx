@@ -7,7 +7,7 @@
 // per-state pages each have their own URL semantic:
 //
 //   in_portfolio                    → /dashboard/position/[id]
-//   discarded / outside_circle      → /dashboard/position/[id] (closed view)
+//   discarded                       → /dashboard/position/[id] (closed view)
 //   watchlist                       → /dashboard/watchlist/[ticker]
 //   no state, but has analysis      → /dashboard/position/[id] (draft)
 //   no state, no analysis           → /dashboard/analyze/[ticker]
@@ -42,10 +42,10 @@ export default async function TickerDispatchPage({ params }: Props) {
     redirect(`/dashboard/watchlist/${ticker}`);
   }
 
-  // Any other state (in_portfolio / discarded / outside_circle) — or
-  // no state but a cached position from a prior wizard session —
-  // resolves to the position page, which renders for both live
-  // (transactions) and draft (anchor for cached analysis) rows.
+  // Any other state (in_portfolio / discarded) — or no state but a
+  // cached position from a prior wizard session — resolves to the
+  // position page, which renders for both live (transactions) and
+  // draft (anchor for cached analysis) rows.
   const rows = (await sql`
     SELECT id FROM positions
      WHERE user_id = ${userId} AND ticker = ${ticker}

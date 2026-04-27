@@ -81,10 +81,6 @@ const STATE_STYLE: Record<
     label: "Descartada",
     chip: "bg-navy-100 text-navy-600",
   },
-  outside_circle: {
-    label: "Fuera del círculo",
-    chip: "bg-navy-100 text-navy-600",
-  },
 };
 
 type SortKey =
@@ -104,7 +100,6 @@ const STATE_RANK: Record<string, number> = {
   in_portfolio: 3,
   watchlist: 2,
   discarded: 1,
-  outside_circle: 0,
 };
 
 // Higher = better. Sort desc surfaces exceptional first; un-analyzed rows
@@ -163,13 +158,7 @@ export default function DiscoveryLeaderboard({
         return false;
       if (filter === "watchlist" && r.ticker_state !== "watchlist")
         return false;
-      if (
-        filter === "discarded" &&
-        !(
-          r.ticker_state === "discarded" ||
-          r.ticker_state === "outside_circle"
-        )
-      )
+      if (filter === "discarded" && r.ticker_state !== "discarded")
         return false;
       if (q && !r.ticker.includes(q) && !r.issuer_name.toUpperCase().includes(q))
         return false;
@@ -251,11 +240,7 @@ export default function DiscoveryLeaderboard({
       if (!r.ticker_state) c.unseen += 1;
       else if (r.ticker_state === "in_portfolio") c.in_portfolio += 1;
       else if (r.ticker_state === "watchlist") c.watchlist += 1;
-      else if (
-        r.ticker_state === "discarded" ||
-        r.ticker_state === "outside_circle"
-      )
-        c.discarded += 1;
+      else if (r.ticker_state === "discarded") c.discarded += 1;
     }
     return c;
   }, [rows]);

@@ -11,10 +11,6 @@ const STATE_STYLE: Record<string, { label: string; chip: string }> = {
   },
   watchlist: { label: "Watchlist", chip: "bg-amber-100 text-amber-800" },
   discarded: { label: "Descartada", chip: "bg-navy-100 text-navy-600" },
-  outside_circle: {
-    label: "Fuera del círculo",
-    chip: "bg-navy-100 text-navy-600",
-  },
 };
 
 export default function FundHoldingsTable({

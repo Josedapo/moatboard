@@ -8,7 +8,6 @@ const initialState: ActionState = {};
 const STATUS_LABELS: Record<string, string> = {
   watchlist: "lo moviste a tu watchlist",
   discarded: "lo descartaste",
-  outside_circle: "lo marcaste como fuera de tu círculo de competencia",
 };
 
 function formatDate(iso: string): string {
@@ -37,7 +36,7 @@ export default function AnalyzeEntryForm({
   return (
     <div className="border border-ink bg-paper p-5">
       <p className="mb-3.5 font-display text-[13.5px] italic leading-[1.45] text-ink-70">
-        Introduce un ticker para empezar el análisis guiado: entender el negocio, detectar red flags, revisar calidad y valoración, decidir.
+        Introduce un ticker para empezar el análisis guiado:
       </p>
 
       {prior && (

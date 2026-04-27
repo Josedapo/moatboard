@@ -443,10 +443,11 @@ CREATE TABLE IF NOT EXISTS qualitative_red_flags (
 -- Ticker state, per-user: where does this ticker sit in the user's workflow?
 -- Status values:
 --   · 'in_portfolio'    — user owns at least one share (has a positions row + buy transaction)
---   · 'watchlist'       — user wants to revisit later; `review_when` captures the trigger
---   · 'discarded'       — user looked at it and decided against investing; `reason_md` explains why
---   · 'outside_circle'  — user admitted they don't understand the business well enough to evaluate
---                         (exit ramp at the understanding step); `reason_md` captures the gap
+--   · 'watchlist'       — user wants to revisit later; `reason_md` captures the trigger
+--                         (price level, tier upgrade, awaited event, etc.)
+--   · 'discarded'       — user looked at it and decided against investing; `reason_md` explains why.
+--                         This includes "outside circle of competence" (the wizard's "no entiendo el
+--                         negocio" exit pre-fills `reason_md` accordingly).
 --
 -- When a ticker is re-introduced to the analysis flow, an existing row here
 -- surfaces context ("you analyzed this on 2026-03-10 and discarded because X")
@@ -456,7 +457,7 @@ CREATE TABLE IF NOT EXISTS ticker_states (
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   ticker VARCHAR(10) NOT NULL,
   status VARCHAR(20) NOT NULL CHECK (status IN (
-    'in_portfolio', 'watchlist', 'discarded', 'outside_circle'
+    'in_portfolio', 'watchlist', 'discarded'
   )),
   reason_md TEXT,
   review_when TEXT,
@@ -500,7 +501,7 @@ CREATE TABLE IF NOT EXISTS analysis_sessions (
   last_active_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   completed_at TIMESTAMPTZ,
   outcome VARCHAR(20) CHECK (outcome IS NULL OR outcome IN (
-    'invested', 'watchlist', 'discarded', 'outside_circle', 'abandoned'
+    'invested', 'watchlist', 'discarded', 'abandoned'
   )),
   business_understanding_version INTEGER,
   understood_flag VARCHAR(15) CHECK (understood_flag IS NULL OR understood_flag IN (

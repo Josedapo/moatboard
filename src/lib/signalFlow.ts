@@ -92,10 +92,10 @@ export async function ensureSignalsForTicker({
 }
 
 // Resolve the set of tickers the user cares about — live portfolio
-// (positions with net shares > 0) ∪ watchlist. Discarded and
-// outside_circle tickers are deliberately excluded per the agent
-// recommendation: if the user wants to resurrect a discarded ticker,
-// opening it manually is the trigger, not a passive alert feed.
+// (positions with net shares > 0) ∪ watchlist. Discarded tickers are
+// deliberately excluded per the agent recommendation: if the user wants
+// to resurrect a discarded ticker, opening it manually is the trigger,
+// not a passive alert feed.
 export async function listActiveTickersForUser(
   userId: string | number,
 ): Promise<string[]> {

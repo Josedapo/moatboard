@@ -132,18 +132,19 @@ export default function StepDecision({ ticker }: { ticker: string }) {
               htmlFor="watchlist_reason"
               className="mb-1 block text-sm font-medium text-navy-700"
             >
-              Razonamiento y cuándo revisar
+              Razonamiento y trigger de revisión
             </label>
             <p className="mb-2 text-xs text-navy-500">
               ¿Por qué la aparcas y qué tendría que pasar para que la retomes?
-              Todo en un mismo texto — el trigger de revisión es parte del
-              razonamiento.
+              El trigger puede ser de precio o múltiplo, de calidad (esperar a
+              que suba de tier), o de cualquier evento concreto que esperas.
+              Todo en un mismo texto.
             </p>
             <textarea
               id="watchlist_reason"
               name="reason"
               rows={5}
-              placeholder="Calidad fuerte pero P/E en percentil 92 de su propia historia. Revisamos tras earnings de Q2 2026, o cuando el percentil caiga por debajo de 50."
+              placeholder="Ejemplos:&#10;· Calidad fuerte pero P/E en percentil 92 de su propia historia. Revisamos cuando el percentil caiga por debajo de 50.&#10;· Negocio que me gusta pero hoy es Good. Avísame si sube a Exceptional con un próximo 10-K.&#10;· Pendiente de la decisión regulatoria de la FTC sobre la fusión X."
               className="w-full rounded-lg border border-navy-300 px-3 py-2 focus:border-navy-900 focus:outline-none"
             />
           </div>

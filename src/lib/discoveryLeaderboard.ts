@@ -31,7 +31,7 @@ export type LeaderboardRow = {
   conviction_score: number;
   total_value_usd: number;
   fund_breakdown: FundInPosition[];
-  ticker_state: string | null; // in_portfolio / watchlist / discarded / outside_circle / null
+  ticker_state: string | null; // in_portfolio / watchlist / discarded / null
   // Quality verdict: prefers the user's own analysis (deeper) when it
   // exists, falls back to the agent's pre-analysis (covers the ~230
   // tickers that pass the gate without requiring the user to have

@@ -8,7 +8,6 @@ const STATE_LABEL: Record<string, string> = {
   in_portfolio: "En cartera",
   watchlist: "Watchlist",
   discarded: "Descartada",
-  outside_circle: "Fuera del círculo",
 };
 
 // Collapsible "new entrants" panel — tickers that appear in ≥5 curated
