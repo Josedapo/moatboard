@@ -59,6 +59,7 @@ export default async function StepValuation({
     <>
       <ValuationSection
         positionId={draftPositionId}
+        ticker={ticker}
         valuation={valuation}
         guide={guide}
         loadError={loadError}

@@ -36,10 +36,16 @@ export type AnalysisSession = {
 
 // Canonical step order. Used to compute furthest_step as max(prev, new) when
 // advancing, and to decide which steps are clickable in the indicator.
+//
+// Quality runs first so that tickers failing the scorecard tier bar are
+// discarded before spending Claude tokens on Understanding + Red flags
+// (both of which read the full 10-K). The "Moatboard can't analyze this
+// business" gate (<5 applicable dimensions) now also fires at step 1,
+// avoiding AI calls entirely for unsupported businesses.
 export const STEP_ORDER: AnalysisStep[] = [
+  "quality",
   "understanding",
   "red_flags",
-  "quality",
   "valuation",
   "decision",
   "completed",
@@ -99,8 +105,8 @@ export async function startSession({
   const existing = await getActiveSession({ userId, ticker });
   if (existing) return existing;
   const rows = (await sql`
-    INSERT INTO analysis_sessions (user_id, ticker, current_step)
-    VALUES (${userId}, ${ticker.toUpperCase()}, 'understanding')
+    INSERT INTO analysis_sessions (user_id, ticker, current_step, furthest_step)
+    VALUES (${userId}, ${ticker.toUpperCase()}, 'quality', 'quality')
     RETURNING id, user_id, ticker, current_step, furthest_step, started_at, last_active_at,
               completed_at, outcome, business_understanding_version, understood_flag
   `) as unknown as AnalysisSession[];

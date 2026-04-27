@@ -4,9 +4,14 @@ import Link from "next/link";
 import { useMemo, useState, useTransition } from "react";
 import { reanalyzeTickerAction } from "@/app/dashboard/actions";
 import type {
+  BusinessTier,
   LeaderboardRow,
   FundInPosition,
 } from "@/lib/discoveryLeaderboard";
+import {
+  BusinessTierChip,
+  FlagsBadge,
+} from "@/components/shared/BusinessSignalChips";
 
 const TIER_LABEL: Record<string, string> = {
   A: "Quality Compounders",
@@ -28,7 +33,7 @@ type FilterKey = "unseen" | "all" | "in_portfolio" | "watchlist" | "discarded";
 
 const FILTERS: { key: FilterKey; label: string }[] = [
   { key: "all", label: "Todas" },
-  { key: "unseen", label: "Sin ver" },
+  { key: "unseen", label: "Sin analizar" },
   { key: "in_portfolio", label: "En cartera" },
   { key: "watchlist", label: "Watchlist" },
   { key: "discarded", label: "Descartadas" },
@@ -59,6 +64,7 @@ const STATE_STYLE: Record<
 type SortKey =
   | "ticker"
   | "issuer"
+  | "tier"
   | "conviction"
   | "n_funds"
   | "state";
@@ -73,6 +79,15 @@ const STATE_RANK: Record<string, number> = {
   watchlist: 2,
   discarded: 1,
   outside_circle: 0,
+};
+
+// Higher = better. Sort desc surfaces exceptional first; un-analyzed rows
+// (null tier) go to the end because 0 is below any tier.
+const TIER_RANK: Record<BusinessTier, number> = {
+  exceptional: 4,
+  good: 3,
+  mediocre: 2,
+  poor: 1,
 };
 
 // Client wrapper for the leaderboard: client-side filter + sort across
@@ -144,6 +159,14 @@ export default function DiscoveryLeaderboard({
           return (a.conviction_score - b.conviction_score) * mult;
         case "n_funds":
           return (a.n_funds - b.n_funds) * mult;
+        case "tier": {
+          const ra = a.business_tier ? TIER_RANK[a.business_tier] : 0;
+          const rb = b.business_tier ? TIER_RANK[b.business_tier] : 0;
+          if (ra !== rb) return (ra - rb) * mult;
+          // Secondary: conviction desc so within a tier band the
+          // strongest-conviction name surfaces first.
+          return b.conviction_score - a.conviction_score;
+        }
         case "state": {
           const ra = STATE_RANK[a.ticker_state ?? ""] ?? 0;
           const rb = STATE_RANK[b.ticker_state ?? ""] ?? 0;
@@ -215,11 +238,11 @@ export default function DiscoveryLeaderboard({
         />
       </div>
 
-      <div className="overflow-hidden rounded-2xl border border-navy-100 bg-white">
+      <div className="overflow-x-auto rounded-2xl border border-navy-100 bg-white">
         <table className="w-full border-collapse text-sm">
           <thead className="border-b border-navy-100 bg-navy-50 text-xs uppercase tracking-wider text-navy-600">
             <tr>
-              <th className="px-4 py-3 text-left font-semibold">#</th>
+              <th className="px-3 py-3 text-left font-semibold">#</th>
               <SortableHeader
                 label="Ticker"
                 active={sortKey === "ticker"}
@@ -235,6 +258,14 @@ export default function DiscoveryLeaderboard({
                 align="left"
               />
               <SortableHeader
+                label="Tier"
+                active={sortKey === "tier"}
+                dir={sortDir}
+                onClick={() => handleSort("tier")}
+                align="left"
+              />
+              <th className="px-3 py-3 text-left font-semibold">Flags</th>
+              <SortableHeader
                 label="Conviction"
                 active={sortKey === "conviction"}
                 dir={sortDir}
@@ -248,7 +279,7 @@ export default function DiscoveryLeaderboard({
                 onClick={() => handleSort("n_funds")}
                 align="right"
               />
-              <th className="px-4 py-3 text-left font-semibold">
+              <th className="px-3 py-3 text-left font-semibold">
                 <span className="inline-flex items-center gap-1">
                   Tiers
                   <TiersInfoPopover />
@@ -261,14 +292,14 @@ export default function DiscoveryLeaderboard({
                 onClick={() => handleSort("state")}
                 align="left"
               />
-              <th className="px-4 py-3 text-right font-semibold"></th>
+              <th className="px-3 py-3 text-right font-semibold"></th>
             </tr>
           </thead>
           <tbody>
             {filtered.length === 0 && (
               <tr>
                 <td
-                  colSpan={8}
+                  colSpan={10}
                   className="px-4 py-8 text-center text-sm text-navy-500"
                 >
                   Sin resultados.
@@ -312,8 +343,8 @@ function LeaderboardTableRow({
   return (
     <>
       <tr className={rowClass} onClick={onToggle}>
-        <td className="px-4 py-3 text-xs text-navy-400">{rank}</td>
-        <td className="px-4 py-3">
+        <td className="px-3 py-3 text-xs text-navy-400">{rank}</td>
+        <td className="px-3 py-3">
           <span className="inline-flex items-center gap-2">
             <span
               aria-hidden
@@ -330,19 +361,29 @@ function LeaderboardTableRow({
             </span>
           </span>
         </td>
-        <td className="px-4 py-3 text-sm text-navy-700">
+        <td className="px-3 py-3 text-sm text-navy-700">
           {row.issuer_name}
         </td>
-        <td className="px-4 py-3 text-right font-mono text-sm tabular-nums text-navy-900">
+        <td className="px-3 py-3">
+          <BusinessTierChip tier={row.business_tier} />
+        </td>
+        <td className="px-3 py-3">
+          <FlagsBadge
+            analyzed={row.business_tier !== null}
+            serious={row.serious_flag_count}
+            watch={row.watch_flag_count}
+          />
+        </td>
+        <td className="px-3 py-3 text-right font-mono text-sm tabular-nums text-navy-900">
           {row.conviction_score.toFixed(1)}
         </td>
-        <td className="px-4 py-3 text-right font-mono text-sm tabular-nums text-navy-700">
+        <td className="px-3 py-3 text-right font-mono text-sm tabular-nums text-navy-700">
           {row.n_funds}
         </td>
-        <td className="px-4 py-3">
+        <td className="px-3 py-3">
           <TierBreakdown row={row} />
         </td>
-        <td className="px-4 py-3">
+        <td className="px-3 py-3">
           {stateStyle ? (
             <span
               className={`inline-flex rounded-md px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${stateStyle.chip}`}
@@ -351,12 +392,12 @@ function LeaderboardTableRow({
             </span>
           ) : (
             <span className="text-[10px] uppercase tracking-wider text-navy-400">
-              Sin ver
+              Sin analizar
             </span>
           )}
         </td>
         <td
-          className="px-4 py-3 text-right"
+          className="px-3 py-3 text-right"
           onClick={(e) => e.stopPropagation()}
         >
           <AnalyzeButton ticker={row.ticker} />
@@ -364,7 +405,7 @@ function LeaderboardTableRow({
       </tr>
       {isExpanded && (
         <tr className="border-b border-navy-100 bg-navy-50/40">
-          <td colSpan={8} className="px-6 py-4">
+          <td colSpan={10} className="px-6 py-4">
             <FundBreakdownGrouped funds={row.fund_breakdown} />
           </td>
         </tr>
@@ -481,7 +522,7 @@ function SortableHeader({
   const alignCell = align === "right" ? "text-right" : "text-left";
   const alignFlex = align === "right" ? "justify-end" : "justify-start";
   return (
-    <th className={`px-4 py-3 font-semibold ${alignCell}`}>
+    <th className={`px-3 py-3 font-semibold ${alignCell}`}>
       <button
         type="button"
         onClick={onClick}

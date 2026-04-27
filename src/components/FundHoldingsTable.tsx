@@ -178,7 +178,11 @@ function HoldingRow({
         )}
       </td>
       <td className="px-4 py-3 text-right">
-        {holding.ticker ? <AnalyzeButton ticker={holding.ticker} /> : null}
+        {holding.ticker ? (
+          <AnalyzeButton
+            ticker={holding.canonical_ticker ?? holding.ticker}
+          />
+        ) : null}
       </td>
     </tr>
   );

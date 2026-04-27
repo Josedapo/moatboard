@@ -94,7 +94,7 @@ export default async function StepUnderstanding({ ticker }: { ticker: string }) 
             </div>
             <form action={regenerateUnderstandingAction.bind(null, ticker)}>
               <PendingOverlay
-                message="Claude está leyendo el nuevo 10-K…"
+                message="Moatboard está leyendo el nuevo 10-K…"
               />
               <SubmitButton
                 pendingLabel="Regenerando…"
@@ -131,7 +131,7 @@ export default async function StepUnderstanding({ ticker }: { ticker: string }) 
             )}
           </div>
           <form action={regenerateUnderstandingAction.bind(null, ticker)}>
-            <PendingOverlay message="Claude está regenerando el resumen…" />
+            <PendingOverlay message="Moatboard está regenerando el resumen…" />
             <SubmitButton
               pendingLabel="Regenerando…"
               className="text-sm font-medium text-navy-600 hover:text-navy-900 disabled:opacity-60"
@@ -147,14 +147,12 @@ export default async function StepUnderstanding({ ticker }: { ticker: string }) 
       <FollowupChat ticker={ticker} />
 
       <section className="rounded-2xl border border-navy-100 bg-white p-6 shadow-sm">
-        <h3 className="mb-2 text-base font-semibold text-navy-900">
-          ¿Entiendes el negocio?
-        </h3>
-        <p className="mb-4 text-sm text-navy-600">
-          Sin comprensión clara, los números no importan. Buffett: nunca
-          inviertas en un negocio que no entiendas.
+        <p className="mb-4 text-sm text-navy-700">
+          Sin comprensión clara, los números no importan. Si entiendes el
+          negocio, continúa a las red flags. Si no, márcalo fuera del círculo
+          de competencia para no volver a perder tiempo analizándolo.
         </p>
-        <div className="grid gap-3 sm:grid-cols-3">
+        <div className="flex flex-wrap gap-3">
           <form
             action={advanceStepAction.bind(
               null,
@@ -163,12 +161,12 @@ export default async function StepUnderstanding({ ticker }: { ticker: string }) 
               "understood",
             )}
           >
-            <PendingOverlay message="Claude está revisando los red flags del 10-K…" />
+            <PendingOverlay message="Moatboard está revisando los red flags del 10-K…" />
             <SubmitButton
               pendingLabel="Procesando…"
-              className="w-full rounded-lg bg-navy-900 px-4 py-3 text-sm font-medium text-white hover:bg-navy-800 disabled:opacity-60"
+              className="rounded-lg bg-navy-900 px-5 py-2.5 text-sm font-medium text-white hover:bg-navy-800 disabled:opacity-60"
             >
-              Sí, lo entiendo
+              Sí, lo entiendo →
             </SubmitButton>
           </form>
           <form
@@ -179,10 +177,10 @@ export default async function StepUnderstanding({ ticker }: { ticker: string }) 
               "doubts_resolved",
             )}
           >
-            <PendingOverlay message="Claude está revisando los red flags del 10-K…" />
+            <PendingOverlay message="Moatboard está revisando los red flags del 10-K…" />
             <SubmitButton
               pendingLabel="Procesando…"
-              className="w-full rounded-lg border border-navy-300 bg-white px-4 py-3 text-sm font-medium text-navy-700 hover:border-navy-900 disabled:opacity-60"
+              className="rounded-lg border border-navy-300 bg-white px-5 py-2.5 text-sm font-medium text-navy-700 hover:border-navy-900 disabled:opacity-60"
             >
               Con dudas, pero continúo
             </SubmitButton>
@@ -195,7 +193,7 @@ export default async function StepUnderstanding({ ticker }: { ticker: string }) 
             />
             <button
               type="submit"
-              className="w-full rounded-lg border border-red-200 bg-white px-4 py-3 text-sm font-medium text-red-700 hover:border-red-500"
+              className="rounded-lg border border-red-200 bg-white px-5 py-2.5 text-sm font-medium text-red-700 hover:border-red-500"
             >
               No lo entiendo
             </button>

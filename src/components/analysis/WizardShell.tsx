@@ -8,10 +8,11 @@ import {
 
 // Ordered step labels for the indicator. "completed" is terminal and not
 // rendered — the page redirects elsewhere when the session is completed.
+// Quality runs first so the scorecard can short-circuit further AI spend.
 const STEP_ORDER: { key: AnalysisStep; label: string }[] = [
+  { key: "quality", label: "Quality" },
   { key: "understanding", label: "Understand" },
   { key: "red_flags", label: "Red flags" },
-  { key: "quality", label: "Quality" },
   { key: "valuation", label: "Valuation" },
   { key: "decision", label: "Decision" },
 ];

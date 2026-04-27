@@ -286,7 +286,24 @@ function readTag(block: string, tag: string): string | null {
     "i",
   );
   const m = re.exec(block);
-  return m ? m[1].trim() : null;
+  if (!m) return null;
+  return decodeXmlText(m[1]).trim();
+}
+
+// Strips CDATA wrappers and decodes the XML predefined entities that real
+// 13F filings use in issuer names: `&amp;` for ampersands (SS&C, Brown &
+// Brown), `&apos;` for apostrophes (Macy's, L'Oreal), and occasional
+// numeric refs. Without this, text leaks into the UI as "SS&amp;C".
+function decodeXmlText(raw: string): string {
+  return raw
+    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
+    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))
+    .replace(/&apos;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
 }
 
 function padCik(cik: string): string {

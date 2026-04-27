@@ -49,15 +49,9 @@ export default function AnalyzeEntryForm({
             {STATUS_LABELS[prior.status] ?? prior.status}.
           </p>
           {prior.reasonMd && (
-            <p className="mt-2 text-[12px] text-ink-70">
+            <p className="mt-2 whitespace-pre-wrap text-[12px] text-ink-70">
               <span className="uppercase tracking-[0.12em]">Razón:</span>{" "}
               {prior.reasonMd}
-            </p>
-          )}
-          {prior.reviewWhen && (
-            <p className="mt-1 text-[12px] text-ink-70">
-              <span className="uppercase tracking-[0.12em]">Revisar cuando:</span>{" "}
-              {prior.reviewWhen}
             </p>
           )}
           <form action={formAction} className="mt-3">

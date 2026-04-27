@@ -97,7 +97,7 @@ export default async function StepRedFlags({ ticker }: { ticker: string }) {
             )}
           </div>
           <form action={regenerateRedFlagsAction.bind(null, ticker)}>
-            <PendingOverlay message="Claude está re-escaneando el 10-K…" />
+            <PendingOverlay message="Moatboard está re-escaneando el 10-K…" />
             <SubmitButton
               pendingLabel="Regenerando…"
               className="text-sm font-medium text-navy-600 hover:text-navy-900 disabled:opacity-60"
@@ -112,19 +112,18 @@ export default async function StepRedFlags({ ticker }: { ticker: string }) {
 
       <section className="rounded-2xl border border-navy-100 bg-white p-6 shadow-sm">
         <p className="mb-4 text-sm text-navy-700">
-          Si las red flags no bloquean tu interés, continúa a la evaluación
-          de calidad. Si alguna es grave, salta directamente a la decisión
-          para descartar la empresa o moverla a la watchlist sin gastar más
-          análisis.
+          Si las red flags no bloquean tu interés, continúa a la valoración.
+          Si alguna es grave, salta directamente a la decisión para
+          descartar la empresa o moverla a la watchlist.
         </p>
         <div className="flex flex-wrap gap-3">
-          <form action={advanceStepAction.bind(null, ticker, "quality", null)}>
-            <PendingOverlay message="Claude está evaluando la calidad del negocio…" />
+          <form action={advanceStepAction.bind(null, ticker, "valuation", null)}>
+            <PendingOverlay message="Moatboard está preparando la valoración…" />
             <SubmitButton
               pendingLabel="Procesando…"
               className="rounded-lg bg-navy-900 px-5 py-2.5 text-sm font-medium text-white hover:bg-navy-800 disabled:opacity-60"
             >
-              Continuar al análisis de calidad →
+              Continuar a la valoración →
             </SubmitButton>
           </form>
           <form action={advanceStepAction.bind(null, ticker, "decision", null)}>

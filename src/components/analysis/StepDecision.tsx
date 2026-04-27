@@ -127,41 +127,27 @@ export default function StepDecision({ ticker }: { ticker: string }) {
           Avoids a dead-cajón list that grows and never gets reviewed.
         </p>
         <form action={decideWatchlistAction.bind(null, ticker)}>
-          <div className="space-y-4">
-            <div>
-              <label
-                htmlFor="watchlist_reason"
-                className="mb-1 block text-sm font-medium text-navy-700"
-              >
-                Reason
-              </label>
-              <input
-                id="watchlist_reason"
-                name="reason"
-                type="text"
-                required
-                minLength={5}
-                placeholder="Quality strong, but P/E at 92nd percentile vs own history"
-                className="w-full rounded-lg border border-navy-300 px-3 py-2 focus:border-navy-900 focus:outline-none"
-              />
-            </div>
-            <div>
-              <label
-                htmlFor="review_when"
-                className="mb-1 block text-sm font-medium text-navy-700"
-              >
-                When to revisit
-              </label>
-              <input
-                id="review_when"
-                name="review_when"
-                type="text"
-                required
-                minLength={2}
-                placeholder="After Q2 2026 earnings, or when PE percentile drops below 50"
-                className="w-full rounded-lg border border-navy-300 px-3 py-2 focus:border-navy-900 focus:outline-none"
-              />
-            </div>
+          <div>
+            <label
+              htmlFor="watchlist_reason"
+              className="mb-1 block text-sm font-medium text-navy-700"
+            >
+              Razonamiento y cuándo revisar
+            </label>
+            <p className="mb-2 text-xs text-navy-500">
+              ¿Por qué la aparcas y qué tendría que pasar para que la retomes?
+              Todo en un mismo texto — el trigger de revisión es parte del
+              razonamiento.
+            </p>
+            <textarea
+              id="watchlist_reason"
+              name="reason"
+              rows={5}
+              required
+              minLength={5}
+              placeholder="Calidad fuerte pero P/E en percentil 92 de su propia historia. Revisamos tras earnings de Q2 2026, o cuando el percentil caiga por debajo de 50."
+              className="w-full rounded-lg border border-navy-300 px-3 py-2 focus:border-navy-900 focus:outline-none"
+            />
           </div>
           <button
             type="submit"

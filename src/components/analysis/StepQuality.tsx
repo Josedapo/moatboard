@@ -84,17 +84,20 @@ export default async function StepQuality({
 
       <section className="mb-6 rounded-2xl border border-navy-100 bg-white p-6 shadow-sm">
         <p className="mb-4 text-sm text-navy-700">
-          If the quality meets your bar, continue to the valuation. If it
-          doesn&apos;t, skip ahead to the decision and watchlist or discard.
+          Si la calidad cumple tu listón, continúa a entender el negocio.
+          Si no, salta a la decisión y ponla en watchlist o descártala —
+          así no gastas análisis en una empresa que ya has filtrado.
         </p>
         <div className="flex flex-wrap gap-3">
-          <form action={advanceStepAction.bind(null, ticker, "valuation", null)}>
-            <PendingOverlay message="Claude está calculando la valoración…" />
+          <form
+            action={advanceStepAction.bind(null, ticker, "understanding", null)}
+          >
+            <PendingOverlay message="Moatboard está leyendo el 10-K…" />
             <SubmitButton
               pendingLabel="Procesando…"
               className="rounded-lg bg-navy-900 px-5 py-2.5 text-sm font-medium text-white hover:bg-navy-800 disabled:opacity-60"
             >
-              Continue to valuation →
+              Continuar a entender el negocio →
             </SubmitButton>
           </form>
           <form action={advanceStepAction.bind(null, ticker, "decision", null)}>
@@ -102,7 +105,7 @@ export default async function StepQuality({
               type="submit"
               className="rounded-lg border border-navy-300 bg-white px-5 py-2.5 text-sm font-medium text-navy-700 hover:border-navy-900"
             >
-              Skip to decision
+              Saltar a la decisión
             </button>
           </form>
         </div>

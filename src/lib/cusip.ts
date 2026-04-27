@@ -125,7 +125,11 @@ async function resolveBatch(cusips: string[]): Promise<CusipResolution[]> {
     // extended ticker strings (multi-class shares, foreign issuers).
     // Null them rather than truncate: a truncated ticker looks valid
     // but would misroute the analyze wizard.
-    const rawTicker = best?.ticker ?? null;
+    //
+    // OpenFIGI uses slash separators for share classes (BRK/A, BRK/B).
+    // Yahoo Finance uses hyphens (BRK-A, BRK-B). Normalize at ingest so
+    // Discovery displays and analyze-links use the same canonical form.
+    const rawTicker = best?.ticker?.replace(/\//g, "-") ?? null;
     const ticker = rawTicker && rawTicker.length <= 10 ? rawTicker : null;
     results.push({
       cusip,

@@ -17,11 +17,18 @@ export const metadata = {
 
 export default async function AnalyzePage({
   params,
+  searchParams,
 }: {
   params: Promise<{ ticker: string }>;
+  searchParams: Promise<{ aliasNotice?: string }>;
 }) {
   const { ticker: rawTicker } = await params;
   const ticker = rawTicker.toUpperCase();
+  const { aliasNotice: rawAliasNotice } = await searchParams;
+  const aliasNotice =
+    rawAliasNotice && /^[A-Z-]{1,10}$/.test(rawAliasNotice.toUpperCase())
+      ? rawAliasNotice.toUpperCase()
+      : null;
 
   const session = await auth();
   if (!session?.user?.id) return null; // proxy redirects
@@ -85,6 +92,16 @@ export default async function AnalyzePage({
         furthestStep={active.furthest_step}
         companyName={quote?.longName ?? null}
       >
+        {aliasNotice && (
+          <p className="mb-6 border-l-2 border-navy-300 bg-navy-50/40 px-4 py-3 text-sm italic text-navy-700">
+            {aliasNotice} y {ticker} son el mismo negocio
+            {quote?.longName ? ` (${quote.longName})` : ""}, distintas
+            clases de acciones. Moatboard analiza el negocio bajo {ticker}{" "}
+            para no duplicar trabajo. Si compras una clase u otra,
+            regístrala con su ticker real para que el coste y el precio
+            sean correctos.
+          </p>
+        )}
         {body}
       </WizardShell>
     </>

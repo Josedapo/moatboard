@@ -11,9 +11,9 @@ import {
   type UnderstoodFlag,
 } from "@/lib/analysisSessions";
 import { getTickerState, upsertTickerState } from "@/lib/tickerStates";
+import { getCanonicalTicker } from "@/lib/tickerAliases";
 import {
   getDraftPositionByTicker,
-  deletePosition,
   updatePositionPreCommitment,
 } from "@/lib/positions";
 import { createTransaction } from "@/lib/positionTransactions";
@@ -281,9 +281,13 @@ export async function decideInvestAction(
         ? operationNote
         : null;
 
+  // ticker_states is keyed under canonical (one entry per business);
+  // positions stays under the actual purchased share class for cost
+  // basis correctness.
+  const canonical = await getCanonicalTicker(upper);
   await upsertTickerState({
     userId,
-    ticker: upper,
+    ticker: canonical,
     status: "in_portfolio",
     reasonMd,
     priorReasonOnInvestMd,
@@ -307,25 +311,24 @@ export async function decideWatchlistAction(
   if (!active) redirect(`/dashboard`);
 
   const reason = String(formData.get("reason") ?? "").trim();
-  const reviewWhen = String(formData.get("review_when") ?? "").trim();
   if (reason.length < 5) {
     throw new Error("Reason required (e.g. 'too expensive, PE at 92nd percentile')");
   }
-  if (reviewWhen.length < 2) {
-    throw new Error("Review-when required (e.g. 'after Q2 2026 earnings')");
-  }
 
+  const canonical = await getCanonicalTicker(upper);
   await upsertTickerState({
     userId,
-    ticker: upper,
+    ticker: canonical,
     status: "watchlist",
     reasonMd: reason,
-    reviewWhen,
+    reviewWhen: null,
   });
 
-  // Clean up the draft — we're not holding it.
-  const draft = await getDraftPositionByTicker(userId, upper);
-  if (draft) await deletePosition(draft.id, userId);
+  // Keep the draft position alive. It's the anchor for the cached
+  // moatboard_analyses / valuations / moat row — deleting it would
+  // cascade those away and Discovery would lose the tier chip. Drafts
+  // are already hidden from Dashboard (WHERE EXISTS transactions), so
+  // leaving one behind has no user-visible cost.
 
   await completeSession({ sessionId: active.id, outcome: "watchlist" });
 
@@ -349,15 +352,16 @@ export async function decideDiscardAction(
     throw new Error("Reason required");
   }
 
+  const canonicalDiscard = await getCanonicalTicker(upper);
   await upsertTickerState({
     userId,
-    ticker: upper,
+    ticker: canonicalDiscard,
     status: "discarded",
     reasonMd: reason,
   });
 
-  const draft = await getDraftPositionByTicker(userId, upper);
-  if (draft) await deletePosition(draft.id, userId);
+  // Keep the draft for cached-analysis persistence (see watchlist path).
+  // If the ticker resurfaces later, the verdict is still there.
 
   await completeSession({ sessionId: active.id, outcome: "discarded" });
 
@@ -380,15 +384,17 @@ export async function markOutsideCircleAction(
 
   const reason = String(formData.get("reason") ?? "").trim();
 
+  const canonicalOutside = await getCanonicalTicker(upper);
   await upsertTickerState({
     userId,
-    ticker: upper,
+    ticker: canonicalOutside,
     status: "outside_circle",
     reasonMd: reason || null,
   });
 
-  const draft = await getDraftPositionByTicker(userId, upper);
-  if (draft) await deletePosition(draft.id, userId);
+  // Keep the draft so the partial Quality analysis stays cached. Marking
+  // outside-circle doesn't mean "forget everything" — it just records
+  // that the user shouldn't invest without first closing the gap.
 
   await completeSession({ sessionId: active.id, outcome: "outside_circle" });
 

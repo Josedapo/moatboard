@@ -16,7 +16,7 @@ import { useFormStatus } from "react-dom";
 // Usage pattern (inside any <form action={serverAction}>):
 //
 //   <form action={advanceStepAction.bind(null, ticker, "red_flags", "understood")}>
-//     <PendingOverlay message="Claude está leyendo el 10-K…" />
+//     <PendingOverlay message="Moatboard está leyendo el 10-K…" />
 //     <SubmitButton className="…">Sí, lo entiendo</SubmitButton>
 //   </form>
 
@@ -64,7 +64,7 @@ export function PendingOverlay({
     >
       <div className="max-w-md px-8 text-center">
         <p className="font-display text-[26px] font-light italic leading-[1.15] text-ink">
-          {message ?? "Claude está pensando."}
+          {message ?? "Moatboard está pensando."}
         </p>
         <p className="mt-4 font-display text-[14px] italic leading-[1.55] text-ink-70">
           {hint ??
