@@ -693,6 +693,13 @@ CREATE TABLE IF NOT EXISTS discovery_pre_analyses (
     status IN ('covered', 'not_covered', 'pending', 'error')
   ),
   -- Quality outputs (populated only when status='covered').
+  -- The tier is an OPINION derived from the scorecard_summary +
+  -- moat_strength + moat_archetype according to the rules of
+  -- `tier_preset`. The data layer (scorecard_summary, moat fields)
+  -- is OBJECTIVE. Separating them lets future presets ('akre_quality',
+  -- 'smith_growth', etc.) recompute tier on read without re-running
+  -- the expensive 10-K + AI pipeline. v1 ships with one preset only.
+  tier_preset VARCHAR(40) NOT NULL DEFAULT 'moatboard_default',
   tier VARCHAR(15) CHECK (
     tier IS NULL OR tier IN ('exceptional', 'good', 'mediocre', 'poor')
   ),

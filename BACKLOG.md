@@ -54,6 +54,35 @@ Phase 7 Sessions 1-3 + cron semanal 13F + cross-signals shipped. Pendiente:
 
 ---
 
+## Quality criteria presets
+
+**Status:** arquitectura preparada (2026-04-27), implementación deferida hasta que tenga sentido productizar.
+
+**Decisión:** si Moatboard sale de personal-tool, los criterios de tier (qué es Exceptional / Good / Mediocre / Poor) deberían ser **presets cerrados** elegibles por el usuario, no sliders abiertos. La razón: Moatboard tiene voz fuerte (Buffett-Munger-Smith-Akre); sliders abiertos diluyen esa voz. Presets ofrecen variedad sin perder opinión.
+
+**Presets candidatos** (todos primary-source-anchored):
+- `moatboard_default` — el composite actual (umbrales por dimensión + reglas de tier en `scorecard.ts` + `verdict.ts`). Único preset shipped.
+- `buffett_classic` — Buffett 1987 letter (Fortune screen ROE>20% + no <15% en 10y, debt low, simple business). Más estricto.
+- `akre_quality` — Akre three-legged stool (ROIC sostenido + reinvestment runway + management). Pondera más capital allocation.
+- `smith_growth` — Terry Smith *Investing for Growth* (gross margin estable, FCF margin >20%, ROCE alto, no acquisitions de hostia). Pondera más cash conversion.
+- `sleep_monopoly` — Nick Sleep Nomad (cost-leaders compartiendo escala con clientes). Solo aplica a un puñado.
+
+**Arquitectura ya en sitio:**
+- `discovery_pre_analyses.tier_preset` (default `'moatboard_default'`) hace explícito qué interpretación produjo el tier persistido.
+- `scorecard_summary` JSONB ya guarda los datos crudos suficientes (`median`, `worstYear`, `quality`, `latestValue`, `yearsUsed` por dimensión) para recomputar tier desde otro preset sin re-correr el pipeline 10-K + AI.
+- Los datos de Capa 1 (scorecard, moat, red flags) son user-agnostic. Solo Capa 2 (tier + applicable_dimensions gate + verdict prose) cambia entre presets.
+
+**Cuando se implemente:**
+1. Tabla `quality_criteria_presets` con thresholds + reglas (o hard-coded en `lib/presets/`).
+2. Tabla `user_preferences` con `tier_preset` per-user.
+3. Refactor `scorecard.ts` para aceptar preset (hoy hardcodea Moatboard default).
+4. UI: selector compacto en /dashboard (Settings ligero).
+5. Cron pre-analysis ejecuta los N presets activos; persiste una fila por preset.
+
+**No bloqueante hoy.** Personal-tool con un solo preset funciona perfecto.
+
+---
+
 ## Ideas sin plan
 
 Items que se mencionaron en alguna sesión pero no llegaron a plan formal:

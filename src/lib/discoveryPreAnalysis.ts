@@ -20,11 +20,38 @@ import type { Tier, MoatStrength, MoatArchetype, ScorecardSummary } from "@/lib/
 
 export type PreAnalysisStatus = "covered" | "not_covered" | "pending" | "error";
 
+// Architecture: this table separates two distinct concerns.
+//
+//   CAPA 1 — OBJETIVA (data, expensive to compute, shared cache):
+//     scorecard_summary (raw multi-year medians + worst years per
+//     dimension), moat_strength + moat_archetype + reasoning, red
+//     flags counts, 10-K accession. These come from reading the
+//     filing — they don't depend on the user's investment philosophy.
+//
+//   CAPA 2 — OPINIÓN (interpretation, cheap to recompute):
+//     tier (Exceptional/Good/Mediocre/Poor) + applicable_dimensions
+//     gate, derived from scorecard + moat according to a SET OF RULES
+//     called a preset. Today the only preset is 'moatboard_default'
+//     (the Buffett-Munger-Smith-Akre composite the rest of the codebase
+//     implements). Future presets will recompute tier on read from the
+//     cached scorecard_summary without re-running the 10-K pipeline.
+//
+// The split is why pre-analysis stays useful even if Moatboard later
+// ships per-user quality presets: the costly bits (10-K download +
+// moat AI + red flags AI) are user-agnostic; only the cheap final
+// derivation is preset-aware.
+
+export const CURRENT_TIER_PRESET = "moatboard_default";
+
 export type DiscoveryPreAnalysis = {
   ticker: string;
   status: PreAnalysisStatus;
+  // CAPA 2 — opinion derived from CAPA 1 + tier_preset rules.
+  tier_preset: string;
   tier: Tier | null;
   applicable_dimensions: number | null;
+  // CAPA 1 — objective data extracted from the filing. Sufficient to
+  // recompute tier under a different preset without re-running AI.
   scorecard_summary: ScorecardSummary | null;
   moat_strength: MoatStrength | null;
   moat_archetype: MoatArchetype | null;
@@ -129,8 +156,8 @@ export async function getPreAnalysis(
 ): Promise<DiscoveryPreAnalysis | null> {
   const canonical = await getCanonicalTicker(ticker);
   const rows = (await sql`
-    SELECT ticker, status, tier, applicable_dimensions, scorecard_summary,
-           moat_strength, moat_archetype,
+    SELECT ticker, status, tier_preset, tier, applicable_dimensions,
+           scorecard_summary, moat_strength, moat_archetype,
            has_serious_red_flags, serious_red_flags_count, watch_red_flags_count,
            last_10k_accession, last_10k_period_end,
            not_covered_reason, error_message,
@@ -144,8 +171,8 @@ export async function getPreAnalysis(
 
 export async function listAllPreAnalyses(): Promise<DiscoveryPreAnalysis[]> {
   const rows = (await sql`
-    SELECT ticker, status, tier, applicable_dimensions, scorecard_summary,
-           moat_strength, moat_archetype,
+    SELECT ticker, status, tier_preset, tier, applicable_dimensions,
+           scorecard_summary, moat_strength, moat_archetype,
            has_serious_red_flags, serious_red_flags_count, watch_red_flags_count,
            last_10k_accession, last_10k_period_end,
            not_covered_reason, error_message,
@@ -178,14 +205,14 @@ export async function saveCoveredPreAnalysis(
   const scorecard = JSON.stringify(input.scorecardSummary);
   const rows = (await sql`
     INSERT INTO discovery_pre_analyses (
-      ticker, status, tier, applicable_dimensions, scorecard_summary,
+      ticker, status, tier_preset, tier, applicable_dimensions, scorecard_summary,
       moat_strength, moat_archetype,
       has_serious_red_flags, serious_red_flags_count, watch_red_flags_count,
       last_10k_accession, last_10k_period_end,
       not_covered_reason, error_message,
       evaluated_at, evaluated_with_model
     ) VALUES (
-      ${canonical}, 'covered', ${input.tier}, ${input.applicableDimensions}, ${scorecard}::jsonb,
+      ${canonical}, 'covered', ${CURRENT_TIER_PRESET}, ${input.tier}, ${input.applicableDimensions}, ${scorecard}::jsonb,
       ${input.moatStrength}, ${input.moatArchetype},
       ${input.hasSeriousRedFlags}, ${input.seriousRedFlagsCount}, ${input.watchRedFlagsCount},
       ${input.last10kAccession}, ${input.last10kPeriodEnd},
@@ -194,6 +221,7 @@ export async function saveCoveredPreAnalysis(
     )
     ON CONFLICT (ticker) DO UPDATE SET
       status = 'covered',
+      tier_preset = EXCLUDED.tier_preset,
       tier = EXCLUDED.tier,
       applicable_dimensions = EXCLUDED.applicable_dimensions,
       scorecard_summary = EXCLUDED.scorecard_summary,
@@ -208,8 +236,8 @@ export async function saveCoveredPreAnalysis(
       error_message = NULL,
       evaluated_at = NOW(),
       evaluated_with_model = EXCLUDED.evaluated_with_model
-    RETURNING ticker, status, tier, applicable_dimensions, scorecard_summary,
-              moat_strength, moat_archetype,
+    RETURNING ticker, status, tier_preset, tier, applicable_dimensions,
+              scorecard_summary, moat_strength, moat_archetype,
               has_serious_red_flags, serious_red_flags_count, watch_red_flags_count,
               last_10k_accession, last_10k_period_end,
               not_covered_reason, error_message,
