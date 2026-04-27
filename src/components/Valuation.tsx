@@ -369,6 +369,7 @@ function ImpliedReturnView({
   return (
     <div className="space-y-5">
       <ImpliedReturnCalculator
+        positionId={positionId}
         ticker={ticker}
         currentPrice={currentPrice}
         assumptions={assumptions}

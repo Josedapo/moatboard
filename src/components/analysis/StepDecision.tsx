@@ -143,8 +143,6 @@ export default function StepDecision({ ticker }: { ticker: string }) {
               id="watchlist_reason"
               name="reason"
               rows={5}
-              required
-              minLength={5}
               placeholder="Calidad fuerte pero P/E en percentil 92 de su propia historia. Revisamos tras earnings de Q2 2026, o cuando el percentil caiga por debajo de 50."
               className="w-full rounded-lg border border-navy-300 px-3 py-2 focus:border-navy-900 focus:outline-none"
             />
@@ -177,8 +175,6 @@ export default function StepDecision({ ticker }: { ticker: string }) {
               id="discard_reason"
               name="reason"
               rows={3}
-              required
-              minLength={5}
               placeholder="Quality mediocre, D/E too high, sector I don't follow closely enough…"
               className="w-full rounded-lg border border-navy-300 px-3 py-2 focus:border-navy-900 focus:outline-none"
             />

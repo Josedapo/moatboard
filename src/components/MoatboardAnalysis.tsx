@@ -133,9 +133,13 @@ export default function MoatboardAnalysis({
                   hint={card.hint}
                   value={card.value}
                   quality={card.quality}
+                  latestValue={card.latestValue}
+                  median={card.median}
+                  higherIsBetter={card.higherIsBetter}
                 />
               ))}
             </ScorecardGroup>
+            <HiddenDimensionsNote analysis={analysis} />
 
             <div>
               <h4 className="mb-2 text-[10px] font-medium uppercase tracking-wider text-navy-400">
@@ -171,6 +175,160 @@ export default function MoatboardAnalysis({
   );
 }
 
+// Per-dimension default reason for being hidden. Used as fallback when
+// the scorecard hasn't attached a more specific note (sector neutral,
+// insufficient history). Keys mirror ScorecardSummary.dimensions.
+const DIMENSION_INFO: Array<{
+  key: keyof import("@/lib/verdict").ScorecardSummary["dimensions"];
+  label: string;
+  applicableNote: string;
+  // Lookup the matching MultiYearScore key (for note retrieval).
+  multiYearKey?: keyof import("@/lib/verdict").ScorecardSummary["multiYear"];
+}> = [
+  {
+    key: "returnOnInvestedCapital",
+    label: "ROIC",
+    applicableNote: "Solo se mide en negocios producto (no aplica a balance sheet o REITs)",
+    multiYearKey: "returnOnInvestedCapital",
+  },
+  {
+    key: "grossMargin",
+    label: "Gross Margin",
+    applicableNote: "Solo se mide en negocios producto",
+    multiYearKey: "grossMargin",
+  },
+  {
+    key: "fcfMargin",
+    label: "FCF Margin",
+    applicableNote: "Solo se mide en negocios producto",
+    multiYearKey: "fcfMargin",
+  },
+  {
+    key: "operatingMargins",
+    label: "Operating Margin",
+    applicableNote: "Sin datos suficientes",
+    multiYearKey: "operatingMargin",
+  },
+  {
+    key: "shareCountTrend",
+    label: "Share Count Trend",
+    applicableNote: "Sin datos suficientes",
+    multiYearKey: "shareCountTrend",
+  },
+  {
+    key: "revenueGrowth",
+    label: "Revenue Growth",
+    applicableNote: "Sin datos suficientes",
+    multiYearKey: "revenueGrowth",
+  },
+  {
+    key: "debtToEquity",
+    label: "Debt / Equity",
+    applicableNote: "Solo se mide en negocios producto",
+  },
+  {
+    key: "returnOnEquity",
+    label: "ROE (multi-year)",
+    applicableNote: "Solo se mide en bancos / aseguradoras / mortgage REITs",
+    multiYearKey: "returnOnEquity",
+  },
+  {
+    key: "returnOnAssets",
+    label: "ROA (multi-year)",
+    applicableNote: "Solo se mide en bancos / aseguradoras / mortgage REITs",
+    multiYearKey: "returnOnAssets",
+  },
+  {
+    key: "bookValuePerShareCagr",
+    label: "BV/share CAGR",
+    applicableNote: "Solo se mide en bancos / aseguradoras / mortgage REITs",
+    multiYearKey: "bookValuePerShareCagr",
+  },
+  {
+    key: "affoPayoutRatio",
+    label: "AFFO Payout Ratio",
+    applicableNote: "Solo se mide en equity REITs",
+  },
+  {
+    key: "netDebtToEbitda",
+    label: "Net Debt / EBITDA",
+    applicableNote: "Solo se mide en equity REITs",
+  },
+  {
+    key: "affoPerShareCagr",
+    label: "AFFO/share CAGR",
+    applicableNote: "Solo se mide en equity REITs",
+    multiYearKey: "affoPerShareCagr",
+  },
+];
+
+// Translate the English "note" attached to a MultiYearScore by the scorer
+// to user-facing Spanish copy. The English notes come from scorecard.ts
+// and are kept short + factual; here we localize.
+function localizeNote(note: string): string {
+  if (note === "Not a quality signal for this sector") {
+    return "No es señal de calidad en este sector";
+  }
+  if (note === "Insufficient history (<3 years)") {
+    return "Histórico insuficiente (menos de 3 años)";
+  }
+  return note;
+}
+
+function HiddenDimensionsNote({
+  analysis,
+}: {
+  analysis: Analysis | null;
+}) {
+  if (!analysis?.scorecard_summary) return null;
+  const s = analysis.scorecard_summary;
+
+  type Hidden = { label: string; reason: string };
+  const hidden: Hidden[] = [];
+  for (const info of DIMENSION_INFO) {
+    if (s.dimensions[info.key] !== "neutral") continue;
+    let reason = info.applicableNote;
+    if (info.multiYearKey) {
+      const note = s.multiYear[info.multiYearKey]?.note;
+      if (note) reason = localizeNote(note);
+    } else if (info.key === "debtToEquity") {
+      const note = s.notes?.debtToEquity;
+      if (note) reason = localizeNote(note);
+    }
+    hidden.push({ label: info.label, reason });
+  }
+
+  if (hidden.length === 0) return null;
+
+  // Group dimensions sharing the same reason to keep the note compact.
+  const grouped = new Map<string, string[]>();
+  for (const h of hidden) {
+    if (!grouped.has(h.reason)) grouped.set(h.reason, []);
+    grouped.get(h.reason)!.push(h.label);
+  }
+
+  return (
+    <div className="rounded-md border border-navy-100 bg-navy-50/40 px-4 py-3">
+      <div className="text-[10px] font-medium uppercase tracking-wider text-navy-500">
+        Dimensiones no medidas para este negocio
+      </div>
+      <div className="mt-1.5 space-y-1">
+        {Array.from(grouped.entries()).map(([reason, labels]) => (
+          <div
+            key={reason}
+            className="text-[11px] leading-relaxed text-navy-600"
+          >
+            <span className="font-medium text-navy-700">
+              {labels.join(" · ")}
+            </span>
+            <span className="ml-1.5 italic text-navy-500">— {reason}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function verdictBoxStyles(tier: Tier): string {
   switch (tier) {
     case "exceptional":
@@ -189,6 +347,15 @@ type ScoredCard = {
   hint: string;
   value: string;
   quality: "strong" | "acceptable" | "weak" | "neutral";
+  // Triangulation hint props — passed straight through to ScorecardCard.
+  // latestValue is fraction (e.g. 0.192 for 19.2%), same convention as
+  // median. isCagr=true when median is actually a CAGR (revenue growth,
+  // BV/share, AFFO/share, share count). higherIsBetter false for share
+  // count, AFFO payout, Net Debt/EBITDA, Debt/Equity.
+  latestValue?: number | null;
+  median?: number | null;
+  isCagr?: boolean;
+  higherIsBetter?: boolean;
 };
 
 // Build the list of scored cards to render in Business Quality. The logic:
@@ -213,18 +380,24 @@ function buildScoredCards({
       hint: multiYearHint(s.multiYear.returnOnInvestedCapital),
       value: formatPct(s.multiYear.returnOnInvestedCapital.median),
       quality: s.dimensions.returnOnInvestedCapital,
+      latestValue: s.multiYear.returnOnInvestedCapital.latestValue,
+      median: s.multiYear.returnOnInvestedCapital.median,
     });
     cards.push({
       label: "Gross Margin",
       hint: multiYearHint(s.multiYear.grossMargin),
       value: formatPct(s.multiYear.grossMargin?.median ?? null),
       quality: s.dimensions.grossMargin ?? "neutral",
+      latestValue: s.multiYear.grossMargin?.latestValue,
+      median: s.multiYear.grossMargin?.median,
     });
     cards.push({
       label: "FCF Margin",
       hint: multiYearHint(s.multiYear.fcfMargin),
       value: formatPct(s.multiYear.fcfMargin.median),
       quality: s.dimensions.fcfMargin,
+      latestValue: s.multiYear.fcfMargin.latestValue,
+      median: s.multiYear.fcfMargin.median,
     });
     cards.push({
       label: "Operating Margin",
@@ -233,12 +406,18 @@ function buildScoredCards({
         s.multiYear.operatingMargin?.median ?? fundamentals.operatingMargins,
       ),
       quality: s.dimensions.operatingMargins,
+      latestValue: s.multiYear.operatingMargin?.latestValue,
+      median: s.multiYear.operatingMargin?.median,
     });
     cards.push({
       label: "Share Count Trend",
       hint: shareCountHint(s.multiYear.shareCountTrend),
       value: formatCagr(s.multiYear.shareCountTrend.median),
       quality: s.dimensions.shareCountTrend,
+      latestValue: s.multiYear.shareCountTrend.latestValue,
+      median: s.multiYear.shareCountTrend.median,
+      isCagr: true,
+      higherIsBetter: false, // share count: lower (buybacks) = better
     });
     cards.push({
       label: "Revenue Growth",
@@ -250,6 +429,9 @@ function buildScoredCards({
         s.multiYear.revenueGrowth?.median ?? fundamentals.revenueGrowth,
       ),
       quality: s.dimensions.revenueGrowth,
+      latestValue: s.multiYear.revenueGrowth?.latestValue,
+      median: s.multiYear.revenueGrowth?.median,
+      isCagr: true,
     });
     // Bank / insurer-specific dimensions — neutral on non-bank businesses.
     if (s.multiYear.returnOnEquity) {
@@ -258,6 +440,8 @@ function buildScoredCards({
         hint: multiYearHint(s.multiYear.returnOnEquity),
         value: formatPct(s.multiYear.returnOnEquity.median),
         quality: s.dimensions.returnOnEquity ?? "neutral",
+        latestValue: s.multiYear.returnOnEquity.latestValue,
+        median: s.multiYear.returnOnEquity.median,
       });
     }
     if (s.multiYear.returnOnAssets) {
@@ -266,6 +450,8 @@ function buildScoredCards({
         hint: multiYearHint(s.multiYear.returnOnAssets),
         value: formatPct(s.multiYear.returnOnAssets.median),
         quality: s.dimensions.returnOnAssets ?? "neutral",
+        latestValue: s.multiYear.returnOnAssets.latestValue,
+        median: s.multiYear.returnOnAssets.median,
       });
     }
     if (s.multiYear.bookValuePerShareCagr) {
@@ -274,6 +460,9 @@ function buildScoredCards({
         hint: bookValueCagrHint(s.multiYear.bookValuePerShareCagr),
         value: formatCagr(s.multiYear.bookValuePerShareCagr.median),
         quality: s.dimensions.bookValuePerShareCagr ?? "neutral",
+        latestValue: s.multiYear.bookValuePerShareCagr.latestValue,
+        median: s.multiYear.bookValuePerShareCagr.median,
+        isCagr: true,
       });
     }
     // REIT-specific dimensions — neutral on non-real-estate businesses.
@@ -299,6 +488,9 @@ function buildScoredCards({
         hint: bookValueCagrHint(s.multiYear.affoPerShareCagr),
         value: formatCagr(s.multiYear.affoPerShareCagr.median),
         quality: s.dimensions.affoPerShareCagr ?? "neutral",
+        latestValue: s.multiYear.affoPerShareCagr.latestValue,
+        median: s.multiYear.affoPerShareCagr.median,
+        isCagr: true,
       });
     }
   }

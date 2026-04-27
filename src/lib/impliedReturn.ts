@@ -40,6 +40,7 @@
 // for lower quality compensate the higher variance on those tiers.
 
 import type { Tier } from "@/lib/verdict";
+import type { ImpliedReturnStoredAssumptions } from "@/lib/valuations";
 
 // Tier thresholds. Anchored on:
 //   - Buffett: "the price you pay determines your rate of return"
@@ -254,6 +255,149 @@ export function deriveBaseMultiple(
     return snapshot?.current ?? null;
   }
   return snapshot.current <= snapshot.median ? snapshot.current : snapshot.median;
+}
+
+// Inverse of deriveBaseMultiple / deriveStressMultiple — given a user-
+// supplied terminal multiple, return the equivalent annualized signed
+// change over 10 years. Used by the override server action to convert
+// "Joseda asume 2.0x P/B al año 10" into the persisted %/año form.
+//
+// Returns 0 (no change) when inputs are unusable rather than throwing —
+// the caller then treats it as "no override" semantically.
+export function multipleToAnnualizedChange(
+  currentMultiple: number,
+  terminalMultiple: number,
+): number {
+  if (
+    !Number.isFinite(currentMultiple) ||
+    !Number.isFinite(terminalMultiple) ||
+    currentMultiple <= 0 ||
+    terminalMultiple <= 0
+  ) {
+    return 0;
+  }
+  return Math.pow(terminalMultiple / currentMultiple, 1 / 10) - 1;
+}
+
+// Re-derive the implied-return assumptions at a fresh market cap (today's
+// price × shares outstanding). The persisted assumptions row freezes the
+// snapshot from the last regenerate; this helper produces a "live" version
+// that re-prices the FCF yield + the multiple-change derivation against
+// today's quote, so verdict chips and the calculator's Conclusión zone
+// reflect today rather than days/weeks ago.
+//
+// What changes:
+//   - fcf_yield (and market_cap)        ← directly price-sensitive
+//   - multiple_current                   ← scales linearly with price
+//   - multiple_change_base / _stress     ← re-derived against new current
+//   - multiple_base / _stress_terminal   ← derived from the new rates
+//   - base/stress/optimistic_cagr        ← new from the formula
+//   - passes_*, verdict, verdict_reason  ← new from the decision rule
+//
+// What stays:
+//   - growth (anchors, base, stress, optimistic, driver, cap_applied)
+//   - multiple_label / source / median / q1 (regime data, not price)
+//   - peer_median (cross-sectional anchor — yearly hardcoded table)
+//   - quality_tier, threshold, floor, treasury_yield
+//   - cross_check, relative_valuation
+//   - overrides (multiple_change_*_override, growth_*_override) — respected
+//     verbatim; user intent freezes when they set them
+//
+// Returns the stored assumptions unchanged when inputs are unusable.
+export function deriveLiveImpliedReturn(
+  stored: ImpliedReturnStoredAssumptions,
+  currentMarketCap: number,
+): ImpliedReturnStoredAssumptions {
+  if (
+    !Number.isFinite(currentMarketCap) ||
+    currentMarketCap <= 0 ||
+    !stored.fcf_ttm ||
+    stored.fcf_ttm <= 0 ||
+    !stored.market_cap ||
+    stored.market_cap <= 0
+  ) {
+    return stored;
+  }
+
+  const liveFcfYield = stored.fcf_ttm / currentMarketCap;
+  const priceRatio = currentMarketCap / stored.market_cap;
+
+  const persistedCurrent = stored.multiple_current ?? null;
+  const liveCurrent =
+    persistedCurrent !== null && persistedCurrent > 0
+      ? persistedCurrent * priceRatio
+      : null;
+
+  const median = stored.multiple_median ?? null;
+  const q1 = stored.multiple_q1 ?? null;
+
+  // Multiple change — recompute against live current unless the user has
+  // an override active. Override semantics: stored as annualized rate at
+  // the time of edit; we keep the rate verbatim. (User's intent at override
+  // time was a specific terminal Nx; if a future iteration stores terminals
+  // instead of rates, this helper would reconvert here.)
+  const liveBaseChange =
+    stored.multiple_change_base_override !== null &&
+    stored.multiple_change_base_override !== undefined
+      ? stored.multiple_change_base_override
+      : liveCurrent !== null && median !== null && median > 0
+        ? liveCurrent > median
+          ? Math.pow(median / liveCurrent, 1 / 10) - 1
+          : 0
+        : stored.multiple_change_base;
+
+  const liveStressChange =
+    stored.multiple_change_stress_override !== null &&
+    stored.multiple_change_stress_override !== undefined
+      ? stored.multiple_change_stress_override
+      : liveCurrent !== null && q1 !== null && q1 > 0
+        ? liveCurrent > q1
+          ? Math.pow(q1 / liveCurrent, 1 / 10) - 1
+          : 0
+        : stored.multiple_change_stress;
+
+  // Growth — overrides respected verbatim; otherwise persisted auto values.
+  const effectiveGrowthBase =
+    stored.growth_base_override ?? stored.growth.base;
+  const effectiveGrowthStress =
+    stored.growth_stress_override ?? stored.growth.stress;
+
+  const result = computeImpliedReturn({
+    fcfYield: liveFcfYield,
+    growthBase: effectiveGrowthBase,
+    growthStress: effectiveGrowthStress,
+    multipleChangeBase: liveBaseChange,
+    multipleChangeStress: liveStressChange,
+    qualityTier: stored.quality_tier,
+    treasuryYield: stored.treasury_yield,
+  });
+
+  const liveBaseTerminal =
+    liveCurrent !== null
+      ? liveCurrent * Math.pow(1 + liveBaseChange, 10)
+      : (stored.multiple_base_terminal ?? null);
+  const liveStressTerminal =
+    liveCurrent !== null
+      ? liveCurrent * Math.pow(1 + liveStressChange, 10)
+      : (stored.multiple_stress_terminal ?? null);
+
+  return {
+    ...stored,
+    fcf_yield: liveFcfYield,
+    market_cap: currentMarketCap,
+    multiple_change_base: liveBaseChange,
+    multiple_change_stress: liveStressChange,
+    multiple_current: liveCurrent,
+    multiple_base_terminal: liveBaseTerminal,
+    multiple_stress_terminal: liveStressTerminal,
+    base_cagr: result.baseCAGR,
+    stress_cagr: result.stressCAGR,
+    optimistic_cagr: result.optimisticCAGR,
+    passes_attractiveness: result.passesAttractiveness,
+    passes_no_disaster: result.passesNoDisaster,
+    verdict: result.verdict,
+    verdict_reason: result.reason,
+  };
 }
 
 // What multiple does the stress case end up at? = Q1 of own history if

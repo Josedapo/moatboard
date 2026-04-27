@@ -65,6 +65,7 @@ import {
 } from "@/lib/impliedReturn";
 import { selectPrimaryMultipleSnapshot } from "@/lib/multipleSelection";
 import { ensureValuationGuide } from "@/lib/valuationGuides";
+import { getPeerMedian } from "@/lib/peerMedians";
 import type { Tier } from "@/lib/verdict";
 
 export async function ensureAnalysis(
@@ -265,6 +266,25 @@ export async function computeAndSaveValuation(
   const sharesOutstanding = quote.sharesOutstanding;
   const marketCap = quote.marketCap;
 
+  // Carry-forward existing user overrides so regenerations don't silently
+  // discard manual edits. The override fields live on assumptions JSONB;
+  // when present, they bypass the auto-derivation downstream. Only the
+  // dedicated server action (updateImpliedReturnOverrideAction) clears
+  // them by setting to null.
+  const existingValuation = await getValuationByPositionId(positionId);
+  const existingAssumptions =
+    existingValuation?.method === "implied_return"
+      ? (existingValuation.assumptions as ImpliedReturnStoredAssumptions)
+      : null;
+  const carriedBaseOverride =
+    existingAssumptions?.multiple_change_base_override ?? null;
+  const carriedStressOverride =
+    existingAssumptions?.multiple_change_stress_override ?? null;
+  const carriedGrowthBaseOverride =
+    existingAssumptions?.growth_base_override ?? null;
+  const carriedGrowthStressOverride =
+    existingAssumptions?.growth_stress_override ?? null;
+
   // Resolve the quality tier — needed for the implied-return threshold.
   // Caller can pass it; otherwise we read from moatboard_analyses; final
   // fallback is 'good' (middle-of-the-road threshold of 14% so the verdict
@@ -357,17 +377,52 @@ export async function computeAndSaveValuation(
     industry,
   });
   const primarySnapshot = primaryMultiple?.snapshot ?? null;
-  const multipleChangeBase = deriveMultipleChangeBase(primarySnapshot);
-  const multipleChangeStress = deriveMultipleChangeStress(primarySnapshot);
-  const baseTerminalMultiple = deriveBaseMultiple(primarySnapshot);
-  const stressTerminalMultiple = deriveStressMultiple(primarySnapshot);
+  const autoMultipleChangeBase = deriveMultipleChangeBase(primarySnapshot);
+  const autoMultipleChangeStress = deriveMultipleChangeStress(primarySnapshot);
+  const autoBaseTerminalMultiple = deriveBaseMultiple(primarySnapshot);
+  const autoStressTerminalMultiple = deriveStressMultiple(primarySnapshot);
+
+  // Peer median (cross-sectional anchor) — informational only, drives
+  // the disclaimer in the calculator UI when the current multiple
+  // significantly exceeds peer norm. Does NOT change the verdict math.
+  const peerMedian = primaryMultiple
+    ? getPeerMedian({
+        sector,
+        industry,
+        multipleLabel: primaryMultiple.label,
+      })
+    : null;
+
+  // Apply overrides if Joseda manually edited the terminal multiple in
+  // a prior turn. The override is the persisted %/año; we use it
+  // directly instead of the auto-derived value. Terminal multiple shown
+  // in UI is computed from current * (1+override)^10 so it reflects
+  // exactly what the user typed.
+  const effectiveBaseChange = carriedBaseOverride ?? autoMultipleChangeBase;
+  const effectiveStressChange =
+    carriedStressOverride ?? autoMultipleChangeStress;
+  const baseTerminalMultiple =
+    carriedBaseOverride !== null && primaryMultiple?.current
+      ? primaryMultiple.current * Math.pow(1 + carriedBaseOverride, 10)
+      : autoBaseTerminalMultiple;
+  const stressTerminalMultiple =
+    carriedStressOverride !== null && primaryMultiple?.current
+      ? primaryMultiple.current * Math.pow(1 + carriedStressOverride, 10)
+      : autoStressTerminalMultiple;
+
+  // Growth overrides applied: when Joseda has manually set a growth_*_override,
+  // it replaces the auto-derived growth.base / growth.stress in the
+  // CAGR computation. The auto values stay in the persisted growth.* fields
+  // so the UI can show "auto: X% · manual: Y%".
+  const effectiveGrowthBase = carriedGrowthBaseOverride ?? growth.base;
+  const effectiveGrowthStress = carriedGrowthStressOverride ?? growth.stress;
 
   const impliedReturn = computeImpliedReturn({
     fcfYield,
-    growthBase: growth.base,
-    growthStress: growth.stress,
-    multipleChangeBase,
-    multipleChangeStress,
+    growthBase: effectiveGrowthBase,
+    growthStress: effectiveGrowthStress,
+    multipleChangeBase: effectiveBaseChange,
+    multipleChangeStress: effectiveStressChange,
     qualityTier: resolvedTier,
     treasuryYield: treasury.currentPct,
   });
@@ -390,6 +445,9 @@ export async function computeAndSaveValuation(
     fcf_ttm: fcf,
     market_cap: marketCap ?? 0,
     growth: {
+      // base/stress here are the AUTO-derived values (from sustainable
+      // growth computation). The UI reads effective via growth_*_override
+      // ?? growth.base. base_cagr / stress_cagr already reflect effective.
       base: growth.base,
       stress: growth.stress,
       optimistic: growth.optimistic,
@@ -398,8 +456,12 @@ export async function computeAndSaveValuation(
       note: growth.note,
       anchors: growth.anchors,
     },
-    multiple_change_base: multipleChangeBase,
-    multiple_change_stress: multipleChangeStress,
+    growth_base_override: carriedGrowthBaseOverride,
+    growth_stress_override: carriedGrowthStressOverride,
+    multiple_change_base: effectiveBaseChange,
+    multiple_change_stress: effectiveStressChange,
+    multiple_change_base_override: carriedBaseOverride,
+    multiple_change_stress_override: carriedStressOverride,
     multiple_label: primaryMultiple?.label,
     multiple_source: primaryMultiple?.source,
     multiple_current: primaryMultiple?.current ?? null,
@@ -407,6 +469,10 @@ export async function computeAndSaveValuation(
     multiple_q1: primaryMultiple?.q1 ?? null,
     multiple_base_terminal: baseTerminalMultiple,
     multiple_stress_terminal: stressTerminalMultiple,
+    peer_median: peerMedian?.value ?? null,
+    peer_median_label: primaryMultiple?.label,
+    peer_median_source: peerMedian?.source ?? null,
+    peer_median_match_key: peerMedian?.matchKey ?? null,
     quality_tier: resolvedTier,
     threshold: impliedReturn.threshold,
     floor: impliedReturn.floor,

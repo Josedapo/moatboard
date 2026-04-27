@@ -38,7 +38,12 @@ import {
   getValuationByPositionId,
   saveValuation,
   type DcfStoredAssumptions,
+  type ImpliedReturnStoredAssumptions,
 } from "@/lib/valuations";
+import {
+  computeImpliedReturn,
+  multipleToAnnualizedChange,
+} from "@/lib/impliedReturn";
 import {
   createTransaction,
   getCostBasis,
@@ -331,6 +336,198 @@ export async function updateValuationAssumptionsAction({
   });
 
   revalidatePath(`/dashboard/position/${positionId}`);
+}
+
+// ─── Implied Return — multiple change override ───────────────────────────
+//
+// User edit of the terminal multiple in the base and/or stress scenario.
+// Inputs are in Nx form (the user's mental model: "I assume the
+// multiple lands at 2.0x P/B"). null clears that scenario back to auto-
+// derived. Both fields independent — passing only one preserves the
+// other's existing state. Pure server-side recompute, no AI.
+
+export async function updateImpliedReturnOverrideAction({
+  positionId,
+  baseTerminalMultiple,
+  stressTerminalMultiple,
+  baseGrowth,
+  stressGrowth,
+}: {
+  positionId: number;
+  baseTerminalMultiple?: number | null;
+  stressTerminalMultiple?: number | null;
+  // Growth overrides are signed decimals (0.12 = 12%/year). null = reset.
+  baseGrowth?: number | null;
+  stressGrowth?: number | null;
+}) {
+  await assertPositionOwner(positionId);
+  const valuation = await getValuationByPositionId(positionId);
+  if (!valuation) {
+    throw new Error(
+      "No valuation found for this position. Run valuation first.",
+    );
+  }
+  if (valuation.method !== "implied_return") {
+    throw new Error(
+      "Override editable only applies to implied-return valuations.",
+    );
+  }
+
+  const stored = valuation.assumptions as ImpliedReturnStoredAssumptions;
+  const currentMultiple = stored.multiple_current ?? null;
+  if (currentMultiple === null || currentMultiple <= 0) {
+    throw new Error(
+      "Cannot override: the current multiple is unavailable for this ticker.",
+    );
+  }
+
+  // Validate inputs. Allow null (reset) or positive number ≤ 10× the
+  // current multiple (sanity guard against fat-finger inputs like 200x).
+  const validate = (
+    v: number | null | undefined,
+    label: string,
+  ): number | null => {
+    if (v === null || v === undefined) return null;
+    if (!Number.isFinite(v) || v <= 0) {
+      throw new Error(`${label} must be a positive number or null to reset.`);
+    }
+    if (v > currentMultiple * 10) {
+      throw new Error(
+        `${label} (${v}x) is implausibly high vs current ${currentMultiple.toFixed(1)}x. Refusing to save.`,
+      );
+    }
+    return v;
+  };
+  const baseTerm = validate(baseTerminalMultiple, "Base terminal multiple");
+  const stressTerm = validate(
+    stressTerminalMultiple,
+    "Stress terminal multiple",
+  );
+
+  // Convert each Nx → annualized signed decimal. null → null (reset).
+  // Note: "only one passed" semantic — if a field is undefined we keep
+  // the existing override; if null we clear it.
+  const newBaseOverride =
+    baseTerminalMultiple === undefined
+      ? (stored.multiple_change_base_override ?? null)
+      : baseTerm === null
+        ? null
+        : multipleToAnnualizedChange(currentMultiple, baseTerm);
+  const newStressOverride =
+    stressTerminalMultiple === undefined
+      ? (stored.multiple_change_stress_override ?? null)
+      : stressTerm === null
+        ? null
+        : multipleToAnnualizedChange(currentMultiple, stressTerm);
+
+  // Growth overrides — same undefined/null/value semantics as multiples.
+  // Validate range: −10% to +30% per year (growth above 30% is implausible
+  // for a 10-year horizon; below −10% is liquidation territory).
+  const validateGrowth = (
+    v: number | null | undefined,
+    label: string,
+  ): number | null => {
+    if (v === null || v === undefined) return null;
+    if (!Number.isFinite(v)) {
+      throw new Error(`${label} must be a finite number or null to reset.`);
+    }
+    if (v < -0.1 || v > 0.3) {
+      throw new Error(
+        `${label} (${(v * 100).toFixed(1)}%) está fuera del rango razonable (−10% a 30%). Refusing to save.`,
+      );
+    }
+    return v;
+  };
+  const baseGrowthValid = validateGrowth(baseGrowth, "Base growth override");
+  const stressGrowthValid = validateGrowth(
+    stressGrowth,
+    "Stress growth override",
+  );
+  const newGrowthBaseOverride =
+    baseGrowth === undefined
+      ? (stored.growth_base_override ?? null)
+      : baseGrowthValid;
+  const newGrowthStressOverride =
+    stressGrowth === undefined
+      ? (stored.growth_stress_override ?? null)
+      : stressGrowthValid;
+
+  // Auto-derived values are persisted in the change fields when no
+  // override existed. To recover them, derive from current/median/q1
+  // exactly as positionFlow.ts does. Since the existing change fields
+  // already reflect "effective" (override or auto), we need to re-derive
+  // when an override is being cleared and there was previously one set.
+  const median = stored.multiple_median ?? null;
+  const q1 = stored.multiple_q1 ?? null;
+  const autoBaseChange =
+    median !== null && median > 0 && currentMultiple > median
+      ? Math.pow(median / currentMultiple, 1 / 10) - 1
+      : 0;
+  const autoStressChange =
+    q1 !== null && q1 > 0 && q1 < currentMultiple
+      ? Math.pow(q1 / currentMultiple, 1 / 10) - 1
+      : 0;
+
+  const effectiveBaseChange = newBaseOverride ?? autoBaseChange;
+  const effectiveStressChange = newStressOverride ?? autoStressChange;
+
+  // Effective growth: override (if non-null) or the auto-derived value
+  // already persisted in stored.growth.base/stress.
+  const effectiveGrowthBase = newGrowthBaseOverride ?? stored.growth.base;
+  const effectiveGrowthStress = newGrowthStressOverride ?? stored.growth.stress;
+
+  // Recompute terminals to reflect the new effective changes.
+  const newBaseTerminal = currentMultiple * Math.pow(1 + effectiveBaseChange, 10);
+  const newStressTerminal =
+    currentMultiple * Math.pow(1 + effectiveStressChange, 10);
+
+  // Re-run the implied return formula with the new effective values.
+  const impliedReturn = computeImpliedReturn({
+    fcfYield: stored.fcf_yield,
+    growthBase: effectiveGrowthBase,
+    growthStress: effectiveGrowthStress,
+    multipleChangeBase: effectiveBaseChange,
+    multipleChangeStress: effectiveStressChange,
+    qualityTier: stored.quality_tier,
+    treasuryYield: stored.treasury_yield,
+  });
+
+  const newAssumptions: ImpliedReturnStoredAssumptions = {
+    ...stored,
+    multiple_change_base: effectiveBaseChange,
+    multiple_change_stress: effectiveStressChange,
+    multiple_change_base_override: newBaseOverride,
+    multiple_change_stress_override: newStressOverride,
+    multiple_base_terminal: newBaseTerminal,
+    multiple_stress_terminal: newStressTerminal,
+    growth_base_override: newGrowthBaseOverride,
+    growth_stress_override: newGrowthStressOverride,
+    base_cagr: impliedReturn.baseCAGR,
+    stress_cagr: impliedReturn.stressCAGR,
+    optimistic_cagr: impliedReturn.optimisticCAGR,
+    passes_attractiveness: impliedReturn.passesAttractiveness,
+    passes_no_disaster: impliedReturn.passesNoDisaster,
+    verdict: impliedReturn.verdict,
+    verdict_reason: impliedReturn.reason,
+  };
+
+  await saveValuation({
+    positionId,
+    method: "implied_return",
+    intrinsicValue: Number(valuation.intrinsic_value ?? 0),
+    intrinsicValueLow: Number(valuation.intrinsic_value_low ?? 0),
+    intrinsicValueHigh: Number(valuation.intrinsic_value_high ?? 0),
+    currentPrice: Number(valuation.current_price),
+    marginOfSafetyPct: Number(valuation.margin_of_safety_pct ?? 0),
+    tier: valuation.tier,
+    dcfTier: valuation.dcf_tier,
+    relativeTier: valuation.relative_tier,
+    assumptions: newAssumptions,
+    reasoning: `${impliedReturn.reason} (Multiple override edited.)`,
+  });
+
+  revalidatePath(`/dashboard/position/${positionId}`);
+  revalidatePath(`/dashboard/position/${positionId}/trajectory`);
 }
 
 // ─── Position-level pre-commitment ───────────────────────────────────────

@@ -146,7 +146,43 @@ export type MultiYearScore = {
   worstYear: number | null;
   yearsUsed: number;
   note?: string; // e.g. "Insufficient history (<3 years)"
+  // Latest reported value of the metric. For ratios (ROIC, FCF margin,
+  // op margin, etc.) this is the most recent year's value of the ratio
+  // itself. For CAGR-based metrics (revenue growth, AFFO/share, BV/share)
+  // this is the most recent year's YoY change. Used by the UI to render
+  // a triangulation hint ("último año vs mediana 10y") so the reader
+  // can spot regime change that the long-window aggregate hides.
+  latestValue?: number | null;
+  // True when `median` is actually a CAGR (compound rate over the
+  // window) rather than a year-by-year median — applies to revenue
+  // growth, AFFO/share growth, BV/share growth. The UI uses this flag
+  // to label correctly ("vs CAGR 10y" instead of "vs mediana 10y").
+  isCagr?: boolean;
 };
+
+// Helper: latest value of a per-year series (chronologically ordered).
+// For ratio-based scorers (ROIC, FCF margin, etc.) — returns the most
+// recent year's value of the ratio. Null when the series is empty.
+function latestOfSeries(
+  series: { year: string; value: number }[],
+): number | null {
+  return series.length > 0 ? series[series.length - 1].value : null;
+}
+
+// Helper: YoY change of the last two non-null/positive values from a
+// chronologically-ordered list of nullable values. Used by CAGR-based
+// scorers (revenue growth, BV/share, AFFO/share) where the headline
+// is a CAGR over the window but we want to surface the most recent
+// year's YoY as a triangulation hint.
+function latestYoY(values: (number | null)[]): number | null {
+  const valid = values.filter(
+    (v): v is number => v !== null && Number.isFinite(v) && v > 0,
+  );
+  if (valid.length < 2) return null;
+  const last = valid[valid.length - 1];
+  const prev = valid[valid.length - 2];
+  return (last - prev) / prev;
+}
 
 export function computeRoicPerYear(
   rows: AnnualFundamentalRow[],
@@ -383,7 +419,13 @@ export function scoreRoic(
   if (med >= 0.15 && worst >= 0.1) quality = "strong";
   else if (med >= 0.1 && worst >= 0.05) quality = "acceptable";
   else quality = "weak";
-  return { quality, median: med, worstYear: worst, yearsUsed: series.length };
+  return {
+    quality,
+    median: med,
+    worstYear: worst,
+    yearsUsed: series.length,
+    latestValue: latestOfSeries(series),
+  };
 }
 
 export function scoreFcfMargin(
@@ -426,7 +468,13 @@ export function scoreFcfMargin(
   if (med >= 0.15 && worst >= 0.08) quality = "strong";
   else if (med >= 0.08 && worst >= 0.02) quality = "acceptable";
   else quality = "weak";
-  return { quality, median: med, worstYear: worst, yearsUsed: series.length };
+  return {
+    quality,
+    median: med,
+    worstYear: worst,
+    yearsUsed: series.length,
+    latestValue: latestOfSeries(series),
+  };
 }
 
 // --- Sector/industry classification helpers ---
@@ -613,7 +661,13 @@ export function scoreGrossMargin(
   if (med >= 0.5 && worst >= 0.4) quality = "strong";
   else if (med >= 0.35 && worst >= 0.25) quality = "acceptable";
   else quality = "weak";
-  return { quality, median: med, worstYear: worst, yearsUsed: series.length };
+  return {
+    quality,
+    median: med,
+    worstYear: worst,
+    yearsUsed: series.length,
+    latestValue: latestOfSeries(series),
+  };
 }
 
 export function scoreOperatingMargin(
@@ -644,7 +698,13 @@ export function scoreOperatingMargin(
   if (med >= 0.2 && worst >= 0.1) quality = "strong";
   else if (med >= 0.1 && worst >= 0.05) quality = "acceptable";
   else quality = "weak";
-  return { quality, median: med, worstYear: worst, yearsUsed: series.length };
+  return {
+    quality,
+    median: med,
+    worstYear: worst,
+    yearsUsed: series.length,
+    latestValue: latestOfSeries(series),
+  };
 }
 
 export function scoreRevenueGrowthMultiYear(
@@ -677,6 +737,8 @@ export function scoreRevenueGrowthMultiYear(
     median: cagr,
     worstYear: null,
     yearsUsed: withRev,
+    latestValue: latestYoY(mya.years.map((r) => r.revenue)),
+    isCagr: true,
   };
 }
 
@@ -781,7 +843,13 @@ export function scoreRoeMultiYear(
   if (med >= 0.15 && worst >= 0.1) quality = "strong";
   else if (med >= 0.1 && worst >= 0.05) quality = "acceptable";
   else quality = "weak";
-  return { quality, median: med, worstYear: worst, yearsUsed: series.length };
+  return {
+    quality,
+    median: med,
+    worstYear: worst,
+    yearsUsed: series.length,
+    latestValue: latestOfSeries(series),
+  };
 }
 
 export function scoreRoaMultiYear(
@@ -814,7 +882,13 @@ export function scoreRoaMultiYear(
   if (med >= 0.012 && worst >= 0.008) quality = "strong";
   else if (med >= 0.008 && worst >= 0.004) quality = "acceptable";
   else quality = "weak";
-  return { quality, median: med, worstYear: worst, yearsUsed: series.length };
+  return {
+    quality,
+    median: med,
+    worstYear: worst,
+    yearsUsed: series.length,
+    latestValue: latestOfSeries(series),
+  };
 }
 
 export function scoreBookValuePerShareCagr(
@@ -857,6 +931,17 @@ export function scoreBookValuePerShareCagr(
     median: cagr,
     worstYear: null,
     yearsUsed: withData,
+    latestValue: latestYoY(
+      mya.years.map((r) =>
+        r.stockholdersEquity !== null &&
+        r.stockholdersEquity > 0 &&
+        r.sharesDiluted !== null &&
+        r.sharesDiluted > 0
+          ? r.stockholdersEquity / r.sharesDiluted
+          : null,
+      ),
+    ),
+    isCagr: true,
   };
 }
 
@@ -1009,6 +1094,17 @@ export function scoreAffoPerShareCagr(
     median: cagr,
     worstYear: null,
     yearsUsed: withData,
+    latestValue: latestYoY(
+      mya.years.map((r) =>
+        r.freeCashFlow !== null &&
+        r.freeCashFlow > 0 &&
+        r.sharesDiluted !== null &&
+        r.sharesDiluted > 0
+          ? r.freeCashFlow / r.sharesDiluted
+          : null,
+      ),
+    ),
+    isCagr: true,
   };
 }
 
@@ -1032,6 +1128,8 @@ export function scoreShareCountTrend(
     median: cagr,
     worstYear: null,
     yearsUsed: mya.years.filter((r) => r.sharesDiluted !== null).length,
+    latestValue: latestYoY(mya.years.map((r) => r.sharesDiluted)),
+    isCagr: true,
   };
 }
 

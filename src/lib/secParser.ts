@@ -99,6 +99,95 @@ function daysBetween(start: string, end: string): number {
   return (new Date(end).getTime() - new Date(start).getTime()) / MS_PER_DAY;
 }
 
+// Add `n` days to a YYYY-MM-DD string (negative subtracts). UTC-anchored
+// to avoid timezone drift across DST boundaries.
+function addDays(yyyymmdd: string, n: number): string {
+  const d = new Date(`${yyyymmdd}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+// Sum 4 chained quarterly entries to synthesize an annual record. Used
+// as fallback in extractAnnualFlow for filers that only break out the
+// metric quarterly inside the 10-K (e.g., INTU's CostOfGoodsAndServicesSold
+// post-2018: 4 quarters per fiscal year, no annual aggregate).
+//
+// Chain rule: each next quarter starts the day after the previous ends.
+// Validation: total span 350-380 days. Filter: ANNUAL_FORMS only (10-K /
+// 10-K/A / 20-F / 20-F/A — not 10-Q, where quarterly is the natural shape
+// and aggregating across filings risks double-counting).
+//
+// `validEnds`, when provided, restricts emitted records to ends that
+// match a known fiscal-year-end set (typically derived from revenue's
+// direct annual ends). Without it, the aggregator would synthesize
+// phantom annuals at every chain endpoint — e.g., for a filer that
+// reports continuous quarters, every quarter forms a 365-day chain
+// back, producing one synthetic annual per quarter instead of one per
+// fiscal year. Anchoring on revenue's spine fixes this.
+//
+// Returns synthetic annual records keyed at the q4.end. Per-end dedupe
+// keeps the most recently filed chain.
+function aggregateAnnualFromQuarterly(
+  records: FactRecord[],
+  validEnds?: Set<string>,
+): NormalizedRecord[] {
+  const quarterly = records.filter((r) => {
+    if (!r.start || !ANNUAL_FORMS.has(r.form)) return false;
+    const d = daysBetween(r.start, r.end);
+    return d >= 80 && d <= 95;
+  });
+
+  // Dedupe by (start, end): same period reported across multiple filings
+  // → keep the latest filed.
+  const byPeriod = new Map<string, FactRecord>();
+  for (const r of quarterly) {
+    const key = `${r.start}_${r.end}`;
+    const prev = byPeriod.get(key);
+    if (!prev || r.filed > prev.filed) byPeriod.set(key, r);
+  }
+
+  // Index by end date for chain lookup. When two records share the same
+  // end (different starts, e.g. 88d vs 91d), prefer the one with the
+  // later start — typically the canonical fiscal quarter rather than a
+  // partial slice.
+  const byEnd = new Map<string, FactRecord>();
+  for (const r of byPeriod.values()) {
+    const prev = byEnd.get(r.end);
+    if (!prev || (r.start && prev.start && r.start > prev.start)) {
+      byEnd.set(r.end, r);
+    }
+  }
+
+  const result: NormalizedRecord[] = [];
+  const seenEnds = new Set<string>();
+
+  for (const q4 of byPeriod.values()) {
+    if (seenEnds.has(q4.end) || !q4.start) continue;
+
+    const q3 = byEnd.get(addDays(q4.start, -1));
+    if (!q3?.start) continue;
+    const q2 = byEnd.get(addDays(q3.start, -1));
+    if (!q2?.start) continue;
+    const q1 = byEnd.get(addDays(q2.start, -1));
+    if (!q1?.start) continue;
+
+    const span = daysBetween(q1.start, q4.end);
+    if (span < 350 || span > 380) continue;
+
+    if (validEnds && !validEnds.has(q4.end)) continue;
+
+    const total = q1.val + q2.val + q3.val + q4.val;
+    const latestFiled = [q1, q2, q3, q4].reduce((a, b) =>
+      a.filed > b.filed ? a : b,
+    ).filed;
+
+    result.push({ end: q4.end, val: total, filed: latestFiled });
+    seenEnds.add(q4.end);
+  }
+
+  return result.sort((a, b) => a.end.localeCompare(b.end));
+}
+
 function getUnitRecords(
   facts: SecCompanyFacts,
   tag: string,
@@ -118,6 +207,10 @@ export function extractAnnualFlow(
   tag: string,
   namespace = "us-gaap",
   unit = "USD",
+  aggregateOptions?: {
+    aggregateQuarterly: boolean;
+    validEnds?: Set<string>;
+  },
 ): NormalizedRecord[] {
   const records = getUnitRecords(facts, tag, namespace, unit);
   if (!records) return [];
@@ -132,9 +225,29 @@ export function extractAnnualFlow(
     const prev = byEnd.get(r.end);
     if (!prev || r.filed > prev.filed) byEnd.set(r.end, r);
   }
-  return Array.from(byEnd.values())
+  const direct = Array.from(byEnd.values())
     .sort((a, b) => a.end.localeCompare(b.end))
     .map((r) => ({ end: r.end, val: r.val, filed: r.filed }));
+
+  // Aggregation is opt-in per tag (off by default to avoid synthesizing
+  // phantom annuals for tags that report continuous quarterly data
+  // without a clear fiscal-year boundary). Caller signals intent via
+  // `aggregateOptions.aggregateQuarterly = true`. The `validEnds` set
+  // (fiscal year ends derived from revenue) anchors aggregation to real
+  // year boundaries — see comment on aggregateAnnualFromQuarterly.
+  if (!aggregateOptions?.aggregateQuarterly) return direct;
+
+  const aggregated = aggregateAnnualFromQuarterly(
+    records,
+    aggregateOptions.validEnds,
+  );
+  if (aggregated.length === 0) return direct;
+  const directEnds = new Set(direct.map((r) => r.end));
+  const additions = aggregated.filter((r) => !directEnds.has(r.end));
+  if (additions.length === 0) return direct;
+  return [...direct, ...additions].sort((a, b) =>
+    a.end.localeCompare(b.end),
+  );
 }
 
 export function extractInstant(
@@ -197,10 +310,15 @@ function extractMerged(
   namespace = "us-gaap",
   unit = "USD",
   kind: "flow" | "instant" = "flow",
+  aggregateOptions?: {
+    aggregateQuarterly: boolean;
+    validEnds?: Set<string>;
+  },
 ): NormalizedRecord[] {
   const extract =
     kind === "flow"
-      ? (tag: string) => extractAnnualFlow(facts, tag, namespace, unit)
+      ? (tag: string) =>
+          extractAnnualFlow(facts, tag, namespace, unit, aggregateOptions)
       : (tag: string) => extractInstant(facts, tag, namespace, unit);
   return mergeYearsByTag(facts, tags, extract, trace);
 }
@@ -331,16 +449,31 @@ export function parseFundamentals(
     trace("netIncome"),
   );
 
+  // Fiscal year ends derived from revenue's direct annual records — used
+  // to anchor quarterly-aggregation fallback for tags like cogs / gross
+  // profit so we don't synthesize phantom annuals at non-fiscal-year
+  // boundaries (e.g., INTU reports continuous quarterly cogs; without
+  // anchoring we'd emit an annual record at every quarter-end).
+  const fiscalYearEnds = new Set(revenueRows.map((r) => r.end));
+
   const grossProfitRows = extractMerged(
     facts,
     ["GrossProfit"],
     trace("grossProfit"),
+    "us-gaap",
+    "USD",
+    "flow",
+    { aggregateQuarterly: true, validEnds: fiscalYearEnds },
   );
 
   const cogsRows = extractMerged(
     facts,
     ["CostOfRevenue", "CostOfGoodsAndServicesSold", "CostOfGoodsSold"],
     trace("cogs"),
+    "us-gaap",
+    "USD",
+    "flow",
+    { aggregateQuarterly: true, validEnds: fiscalYearEnds },
   );
 
   const operatingIncomeRows = extractMerged(
@@ -668,11 +801,18 @@ export function parseFundamentals(
   // scoring but lets banks (no OperatingIncomeLoss / no capex / no
   // InvestedCapital concept) pass without falling through to yfinance's
   // 4-5y fallback. AXP, BAC, BRK go from 0 usable years to 18-51.
+  // Filter is intentionally minimal: revenue + netIncome are the universal
+  // anchors for "this year is structurally usable". Earlier we also required
+  // sharesDiluted, but Visa-class filers (V, MA — Credit Services) don't
+  // populate any standard XBRL share-count tag (no
+  // WeightedAverageNumberOfDilutedSharesOutstanding, no
+  // EarningsPerShareDiluted, etc. — verified via SEC EDGAR companyfacts API).
+  // Requiring shares meant V failed yearsAvailable < 3 → parse_error → full
+  // yfinance fallback (4y of everything). With shares dropped from the
+  // filter, V passes with 19 usable years; the per-field merge in
+  // fetchMultiYearFundamentals fills sharesDiluted from yfinance separately.
   const yearsAvailable = rows.filter(
-    (r) =>
-      r.revenue !== null &&
-      r.netIncome !== null &&
-      r.sharesDiluted !== null,
+    (r) => r.revenue !== null && r.netIncome !== null,
   ).length;
 
   const earliestYear = rows.length > 0 ? Number(rows[0].fiscalYearEnd.slice(0, 4)) : null;

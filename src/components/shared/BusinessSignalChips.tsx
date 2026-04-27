@@ -41,6 +41,50 @@ export function BusinessTierChip({ tier }: { tier: Tier | null }) {
   );
 }
 
+// Implied-return verdict — collapsed to binary Comprable / No comprable
+// for at-a-glance scanning in list views (watchlist, future history).
+// The full reason (caro / riesgo / ambos) lives in the title attribute
+// for hover, and the calculator's Conclusión zone shows the verbose
+// label. Color logic mirrors the calculator: emerald positive, amber
+// negative — never red, anti-trading principle.
+export type ValuationVerdict =
+  | "comprable"
+  | "no_comprable_caro"
+  | "no_comprable_riesgo"
+  | "no_comprable_ambos";
+
+const VERDICT_TITLE: Record<ValuationVerdict, string> = {
+  comprable: "Comprable a este precio",
+  no_comprable_caro: "No comprable — precio caro para la calidad",
+  no_comprable_riesgo: "No comprable — riesgo asimétrico",
+  no_comprable_ambos: "No comprable — precio y riesgo no compensan",
+};
+
+export function ValuationVerdictChip({
+  verdict,
+}: {
+  verdict: ValuationVerdict | null;
+}) {
+  if (!verdict) {
+    return <span className="text-xs italic text-navy-300">—</span>;
+  }
+  const isBuyable = verdict === "comprable";
+  const label = isBuyable ? "Comprable" : "No comprable";
+  const chip = isBuyable
+    ? "bg-emerald-500/10 text-emerald-700"
+    : "bg-amber-500/10 text-amber-700";
+  const dot = isBuyable ? "bg-emerald-700" : "bg-amber-700";
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-semibold ${chip}`}
+      title={VERDICT_TITLE[verdict]}
+    >
+      <span aria-hidden className={`h-1.5 w-1.5 rounded-full ${dot}`} />
+      {label}
+    </span>
+  );
+}
+
 export function FlagsBadge({
   analyzed,
   serious,

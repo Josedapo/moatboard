@@ -35,12 +35,14 @@ import type {
   ExcessReturnsStoredAssumptions,
 } from "@/lib/valuations";
 import type { ValuationGuide } from "@/lib/valuationGuides";
-import type { RelativeValuationSnapshot } from "@/lib/valuations";
+import type {
+  ImpliedReturnStoredAssumptions,
+  RelativeValuationSnapshot,
+} from "@/lib/valuations";
+import { deriveLiveImpliedReturn } from "@/lib/impliedReturn";
 import DashboardNav from "@/components/DashboardNav";
 import MoatboardAnalysis from "@/components/MoatboardAnalysis";
 import ValuationSection from "@/components/Valuation";
-import ValuationFollowupChat from "@/components/ValuationFollowupChat";
-import { listChatTurnsForTicker } from "@/lib/valuationChats";
 import FundsHoldingCard from "@/components/FundsHoldingCard";
 import { listFundsHoldingTicker } from "@/lib/discoveryFund";
 import QualityBadge from "@/components/QualityBadge";
@@ -163,10 +165,29 @@ export default async function PositionDetail({
 
   const analysis: Analysis | null = analysisResult.ok ? analysisResult.data : null;
   const analysisError = analysisResult.ok ? null : analysisResult.error;
-  const valuation: Valuation | null = valuationResult.ok
+  const persistedValuation: Valuation | null = valuationResult.ok
     ? valuationResult.data
     : null;
   const valuationError = valuationResult.ok ? null : valuationResult.error;
+
+  // Live-recompute the implied-return verdict against today's market cap
+  // so the calculator's Conclusión zone (verdict + check rows + CAGRs)
+  // reflects today's price rather than the snapshot from the last
+  // regenerate. Pure math — no AI calls, no DB writes. Anchored
+  // assumptions (growth, multiple targets, peer median, quality tier)
+  // stay frozen; only the price-sensitive pieces re-derive.
+  const valuation: Valuation | null =
+    persistedValuation &&
+    persistedValuation.method === "implied_return" &&
+    quote?.marketCap
+      ? {
+          ...persistedValuation,
+          assumptions: deriveLiveImpliedReturn(
+            persistedValuation.assumptions as ImpliedReturnStoredAssumptions,
+            quote.marketCap,
+          ),
+        }
+      : persistedValuation;
 
   // Fetch the AI-generated valuation guide AFTER the valuation is known —
   // we need the relative snapshot to tell the guide whether P/B is available
@@ -203,13 +224,6 @@ export default async function PositionDetail({
       },
     );
   }
-
-  // Per-ticker chat history. Empty for tickers Joseda hasn't asked
-  // about yet. Cheap query (single index on user_id, ticker).
-  const valuationChatHistory = await listChatTurnsForTicker({
-    userId: session.user.id,
-    ticker: position.ticker,
-  });
 
   // Curated funds (Discovery roster) currently holding this business.
   // Pulled in parallel-ish via the same get-then-render server flow;
@@ -347,7 +361,6 @@ export default async function PositionDetail({
             isUnderstandingStale,
             latestAnnualFiling,
             understandingSourceFiling: understandingSourceFiling ?? null,
-            valuationChatHistory,
             fundsHolding,
           })}
         />
@@ -388,7 +401,6 @@ function buildPanels(args: {
   understandingSourceFiling:
     | import("@/lib/businessUnderstanding").BusinessUnderstandingSource
     | null;
-  valuationChatHistory: import("@/lib/valuationChats").ValuationChatTurn[];
   fundsHolding: import("@/lib/discoveryFund").FundHoldingTicker[];
 }): Record<PositionTabId, React.ReactNode> {
   const {
@@ -419,7 +431,6 @@ function buildPanels(args: {
     isUnderstandingStale,
     latestAnnualFiling,
     understandingSourceFiling,
-    valuationChatHistory,
     fundsHolding,
   } = args;
 
@@ -588,13 +599,6 @@ function buildPanels(args: {
         guide={guide}
         loadError={valuationError}
       />
-      {valuation && (
-        <ValuationFollowupChat
-          positionId={positionId}
-          ticker={ticker}
-          initialHistory={valuationChatHistory}
-        />
-      )}
     </>
   );
 

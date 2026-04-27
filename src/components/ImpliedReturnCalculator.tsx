@@ -19,7 +19,14 @@
 //     wants to audit a number, not in the way when they don't.
 
 import type { ImpliedReturnStoredAssumptions } from "@/lib/valuations";
-import { VERDICT_LABELS, computeTargetBuyPrice } from "@/lib/impliedReturn";
+import { VERDICT_LABELS } from "@/lib/impliedReturn";
+import MultipleRowEditable from "@/components/MultipleRowEditable";
+import GrowthRowEditable from "@/components/GrowthRowEditable";
+
+// Disclaimer trigger threshold — when current/peer ratio reaches this,
+// the calculator surfaces a meta-commentary card. Anchored on Damodaran's
+// general "1.5× sector median = stretched" rule of thumb.
+const PEER_MEDIAN_DISCLAIMER_RATIO = 1.5;
 
 const TIER_LABEL: Record<
   ImpliedReturnStoredAssumptions["quality_tier"],
@@ -44,10 +51,12 @@ const TIER_RATIONALE: Record<
 };
 
 export default function ImpliedReturnCalculator({
+  positionId,
   ticker,
   currentPrice,
   assumptions,
 }: {
+  positionId: number;
   ticker: string;
   currentPrice: number;
   assumptions: ImpliedReturnStoredAssumptions;
@@ -80,12 +89,11 @@ export default function ImpliedReturnCalculator({
       {/* ─── ZONE 1 · CONCLUSIÓN ──────────────────────────────────── */}
       <ConclusionZone
         assumptions={assumptions}
-        currentPrice={currentPrice}
         verdictTone={verdictTone}
       />
 
       {/* ─── ZONE 2 · CÁLCULO ─────────────────────────────────────── */}
-      <CalculationZone assumptions={assumptions} />
+      <CalculationZone positionId={positionId} assumptions={assumptions} />
 
       {/* ─── ZONE 3 · DETALLES (collapsed) ───────────────────────── */}
       <DetailsZone assumptions={assumptions} />
@@ -99,11 +107,9 @@ export default function ImpliedReturnCalculator({
 
 function ConclusionZone({
   assumptions,
-  currentPrice,
   verdictTone,
 }: {
   assumptions: ImpliedReturnStoredAssumptions;
-  currentPrice: number;
   verdictTone: "positive" | "negative";
 }) {
   const bg =
@@ -114,25 +120,6 @@ function ConclusionZone({
     verdictTone === "positive" ? "text-emerald-900" : "text-amber-900";
   const subColor =
     verdictTone === "positive" ? "text-emerald-800" : "text-amber-800";
-
-  // Target buy price — the price at which both verdict checks would pass.
-  // Only meaningful when the verdict is currently negative.
-  const target =
-    verdictTone === "negative"
-      ? computeTargetBuyPrice({
-          fcfTtm: assumptions.fcf_ttm,
-          marketCap: assumptions.market_cap,
-          currentPrice,
-          growthBase: assumptions.growth.base,
-          growthStress: assumptions.growth.stress,
-          multipleChangeBase: assumptions.multiple_change_base,
-          multipleChangeStress: assumptions.multiple_change_stress,
-          threshold: assumptions.threshold,
-          floor: assumptions.floor,
-          passesAttractiveness: assumptions.passes_attractiveness,
-          passesNoDisaster: assumptions.passes_no_disaster,
-        })
-      : null;
 
   return (
     <div
@@ -188,84 +175,60 @@ function ConclusionZone({
         />
       </div>
 
-      {target && target.targetPrice !== null && (
-        <TargetPriceCard
-          target={
-            target as {
-              targetPrice: number;
-              bindingConstraint: "attractiveness" | "no_disaster";
-              changeFromCurrentPct: number | null;
-              requiredFcfYieldAtTarget: number | null;
-              currentFcfYield: number | null;
-            }
-          }
-          currentPrice={currentPrice}
-          tierLabel={TIER_LABEL[assumptions.quality_tier]}
-        />
-      )}
-      {target && target.growthAlreadyCoversNonBinding && (
-        <div className="mt-3 rounded border border-navy-200 bg-white/60 px-3 py-2 text-[11px] leading-relaxed text-navy-700">
-          El crecimiento sostenible ya cubre uno de los dos hurdles por sí
-          solo — para esa condición no haría falta que bajase el precio. La
-          otra condición no tiene precio target en este caso.
-        </div>
-      )}
+      <PeerMedianDisclaimer assumptions={assumptions} />
     </div>
   );
 }
 
-function TargetPriceCard({
-  target,
-  currentPrice,
-  tierLabel,
+// Cross-sectional disclaimer: when the current multiple cotiza
+// ≥ 1.5× the peer median for this business type, the own-history
+// math may be unrepresentative. Informational only — does not change
+// the verdict. Drives Joseda toward considering the override.
+function PeerMedianDisclaimer({
+  assumptions,
 }: {
-  target: {
-    targetPrice: number;
-    bindingConstraint: "attractiveness" | "no_disaster";
-    changeFromCurrentPct: number | null;
-    requiredFcfYieldAtTarget: number | null;
-    currentFcfYield: number | null;
-  };
-  currentPrice: number;
-  tierLabel: string;
+  assumptions: ImpliedReturnStoredAssumptions;
 }) {
-  const drop = target.changeFromCurrentPct ?? 0;
-  const dropPct = Math.abs(drop * 100);
-  const constraintLabel =
-    target.bindingConstraint === "attractiveness"
-      ? `umbral ${tierLabel}`
-      : "floor no-desastre";
+  const current = assumptions.multiple_current ?? null;
+  const peer = assumptions.peer_median ?? null;
+  const label = assumptions.multiple_label ?? null;
+  if (current === null || peer === null || label === null || peer <= 0) {
+    return null;
+  }
+  const ratio = current / peer;
+  if (ratio < PEER_MEDIAN_DISCLAIMER_RATIO) return null;
 
-  // Build the inline rationale: shows the lever that's actually moving
-  // (FCF Yield from current → required) so the price drop stops feeling
-  // arbitrary. Only renders when both yields are available.
-  const yieldExplainer =
-    target.currentFcfYield !== null && target.requiredFcfYieldAtTarget !== null
-      ? `FCF Yield pasaría de ${pct(target.currentFcfYield)} → ${pct(target.requiredFcfYieldAtTarget)} (growth y múltiplo constantes).`
-      : null;
+  const sourceLabel =
+    assumptions.peer_median_source === "industry"
+      ? "industria"
+      : "sector";
+  const matchKey = assumptions.peer_median_match_key ?? null;
 
   return (
-    <div className="mt-4 rounded-md border border-navy-300 bg-white px-4 py-3 shadow-sm">
-      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <span className="text-[10px] font-semibold uppercase tracking-wider text-navy-600">
-          Comprable a partir de
-        </span>
-        <span className="font-display text-xl italic font-semibold text-navy-900 tabular-nums">
-          ${target.targetPrice.toFixed(2)}
-        </span>
-        <span className="text-xs tabular-nums text-navy-600">
-          {drop < 0 ? "−" : "+"}
-          {dropPct.toFixed(1)}% vs ${currentPrice.toFixed(2)} actual
-        </span>
-        <span className="text-[11px] text-navy-500">
-          · binding: {constraintLabel}
-        </span>
+    <div className="mt-4 rounded-md border border-navy-200 border-l-4 border-l-amber-500 bg-white px-4 py-3">
+      <div className="text-[10px] font-semibold uppercase tracking-wider text-amber-800">
+        Aviso sobre el múltiplo asumido
       </div>
-      {yieldExplainer && (
-        <p className="mt-1.5 text-[11px] leading-relaxed text-navy-500">
-          {yieldExplainer}
-        </p>
-      )}
+      <p className="mt-1 text-[11px] leading-relaxed text-navy-700">
+        El múltiplo {label} actual ({current.toFixed(1)}x) cotiza{" "}
+        <strong>{ratio.toFixed(1)}×</strong> el peer median del{" "}
+        {sourceLabel} ({peer.toFixed(1)}x). El propio histórico 10y
+        puede no ser representativo del régimen normal — considera
+        introducir manualmente el múltiplo terminal en base/estrés
+        (botón ✎ en la fila Múltiplo de la tabla).
+      </p>
+      <p className="mt-2 text-[10px] text-navy-500">
+        Fuente:{" "}
+        <a
+          href="https://pages.stern.nyu.edu/~adamodar/New_Home_Page/data.html"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="underline hover:text-navy-800"
+        >
+          Damodaran 2025
+        </a>
+        {matchKey ? ` · ${matchKey}` : ""}
+      </p>
     </div>
   );
 }
@@ -275,8 +238,10 @@ function TargetPriceCard({
 // ────────────────────────────────────────────────────────────────────
 
 function CalculationZone({
+  positionId,
   assumptions,
 }: {
+  positionId: number;
   assumptions: ImpliedReturnStoredAssumptions;
 }) {
   return (
@@ -304,12 +269,14 @@ function CalculationZone({
             base={pct(assumptions.fcf_yield)}
             stress={pct(assumptions.fcf_yield)}
           />
-          <CalcRow
-            label="+ Crecimiento sostenible"
-            base={pct(assumptions.growth.base)}
-            stress={pct(assumptions.growth.stress)}
+          <GrowthRowEditable
+            positionId={positionId}
+            assumptions={assumptions}
           />
-          <MultipleRow assumptions={assumptions} />
+          <MultipleRowEditable
+            positionId={positionId}
+            assumptions={assumptions}
+          />
           <tr className="border-t-2 border-navy-300 text-base font-bold">
             <td className="py-3 text-navy-900">= CAGR esperado</td>
             <td className="py-3 text-right tabular-nums text-navy-900">
@@ -379,83 +346,9 @@ function CalcRow({
   );
 }
 
-// Δ Múltiplo row — surfaces the actual terminal multiple in each scenario
-// (headline) with the annualized impact (subordinate). Falls back to the
-// legacy "% only" rendering when the multiple metadata is unavailable
-// (legacy implied_return rows generated before 2026-04-27).
-function MultipleRow({
-  assumptions,
-}: {
-  assumptions: ImpliedReturnStoredAssumptions;
-}) {
-  const label = assumptions.multiple_label ?? null;
-  const baseTerm = assumptions.multiple_base_terminal ?? null;
-  const stressTerm = assumptions.multiple_stress_terminal ?? null;
-  const median = assumptions.multiple_median ?? null;
-  const current = assumptions.multiple_current ?? null;
-
-  // Legacy fallback — show % only.
-  if (label === null || baseTerm === null) {
-    return (
-      <tr>
-        <td className="py-2 text-navy-700">+ Δ Múltiplo (anualizado)</td>
-        <td className="py-2 text-right tabular-nums text-navy-900">
-          {signedPct(assumptions.multiple_change_base)}
-        </td>
-        <td className="py-2 text-right tabular-nums text-navy-700">
-          {signedPct(assumptions.multiple_change_stress)}
-        </td>
-      </tr>
-    );
-  }
-
-  // Caption logic: base case
-  //   - if current ≤ median (no compression assumed): "actual, sin re-rating"
-  //   - else (compression to median): "mediana 10y"
-  const baseCaption =
-    current !== null && median !== null && current <= median
-      ? "actual, sin re-rating"
-      : "mediana 10y";
-
-  // Caption logic: stress case
-  //   - if change == 0 → already at or below Q1 → "ya en Q1 hist."
-  //   - else → "Q1 histórico"
-  const stressCaption =
-    assumptions.multiple_change_stress === 0
-      ? "ya en Q1 hist."
-      : "Q1 histórico";
-
-  return (
-    <tr>
-      <td className="py-2 align-top text-navy-700">
-        Múltiplo {label} a 10y
-        <div className="text-[10px] uppercase tracking-wider text-navy-400">
-          impacto anualizado
-        </div>
-      </td>
-      <td className="py-2 align-top text-right tabular-nums text-navy-900">
-        <div className="font-semibold">{formatMultiple(baseTerm)}</div>
-        <div className="text-[11px] font-normal text-navy-500">
-          {baseCaption}
-        </div>
-        <div className="text-[11px] font-normal italic text-navy-400">
-          {signedPct(assumptions.multiple_change_base)}/año
-        </div>
-      </td>
-      <td className="py-2 align-top text-right tabular-nums text-navy-700">
-        <div className="font-semibold">
-          {stressTerm !== null ? formatMultiple(stressTerm) : "—"}
-        </div>
-        <div className="text-[11px] font-normal text-navy-500">
-          {stressCaption}
-        </div>
-        <div className="text-[11px] font-normal italic text-navy-400">
-          {signedPct(assumptions.multiple_change_stress)}/año
-        </div>
-      </td>
-    </tr>
-  );
-}
+// MultipleRowEditable owns the row rendering + the inline edit form.
+// Lives in its own client component file because it needs useState/
+// useTransition for the edit interaction.
 
 function formatMultiple(x: number): string {
   return `${x.toFixed(1)}x`;
@@ -549,7 +442,7 @@ function DetailsZone({
       <summary className="cursor-pointer px-6 py-3 text-sm font-medium text-navy-700 hover:text-navy-900">
         Detalles del cálculo · supuestos y racional
       </summary>
-      <div className="space-y-6 border-t border-navy-100 px-6 py-5">
+      <div className="space-y-8 border-t border-navy-100 px-6 py-5">
         {/* FCF Yield breakdown */}
         <DetailSection title="FCF Yield">
           <p className="text-[12px] leading-relaxed text-navy-600">
@@ -610,6 +503,14 @@ function DetailsZone({
           <MultipleDetail assumptions={assumptions} />
         </DetailSection>
 
+        {/* Peer median origin — only when peer_median is available. */}
+        {assumptions.peer_median !== null &&
+          assumptions.peer_median !== undefined && (
+            <DetailSection title="Peer median del sector — origen y limitación">
+              <PeerMedianDetail assumptions={assumptions} />
+            </DetailSection>
+          )}
+
         {/* Tier thresholds */}
         <DetailSection title="Umbrales por calidad del negocio">
           <p className="mb-2 text-[12px] leading-relaxed text-navy-600">
@@ -668,6 +569,56 @@ function DetailsZone({
   );
 }
 
+// Peer median detail — methodology + source + limitations. Honest about
+// the hardcoded-annual nature of Route A and signals that Route B
+// (Discovery-cached) is the planned evolution.
+function PeerMedianDetail({
+  assumptions,
+}: {
+  assumptions: ImpliedReturnStoredAssumptions;
+}) {
+  const value = assumptions.peer_median ?? null;
+  const label = assumptions.peer_median_label ?? null;
+  const source = assumptions.peer_median_source ?? null;
+  const matchKey = assumptions.peer_median_match_key ?? null;
+  if (value === null || label === null) return null;
+
+  const sourceLabel = source === "industry" ? "industria" : "sector";
+
+  return (
+    <div className="space-y-2 text-[12px] leading-relaxed text-navy-600">
+      <p>
+        El peer median ({formatMultiple(value)} {label}) proviene de la
+        tabla anual de{" "}
+        <a
+          href="https://pages.stern.nyu.edu/~adamodar/New_Home_Page/data.html"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="underline hover:text-navy-900"
+        >
+          Damodaran (NYU Stern, sector multiples 2025)
+        </a>
+        , benchmark estándar entre investment professionals.
+        {matchKey
+          ? ` Para esta valoración el lookup hizo match con ${sourceLabel} `
+          : ` Match a nivel de ${sourceLabel}.`}
+        {matchKey && (
+          <span className="font-medium text-navy-800">{matchKey}</span>
+        )}
+        {matchKey ? "." : ""}
+      </p>
+      <p>
+        <strong>Limitación:</strong> la tabla se mantiene manualmente en{" "}
+        <code className="rounded bg-navy-100 px-1 text-[11px]">
+          lib/peerMedians.ts
+        </code>{" "}
+        y se actualiza anualmente. Entre ediciones el valor puede quedar
+        atrás de cambios de régimen estructural.
+      </p>
+    </div>
+  );
+}
+
 function DetailSection({
   title,
   children,
@@ -676,12 +627,12 @@ function DetailSection({
   children: React.ReactNode;
 }) {
   return (
-    <div>
-      <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-navy-500">
+    <section>
+      <h4 className="mb-3 border-b border-navy-200 pb-1.5 font-display text-[15px] font-semibold italic text-navy-900">
         {title}
-      </div>
+      </h4>
       {children}
-    </div>
+    </section>
   );
 }
 

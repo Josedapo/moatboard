@@ -2,10 +2,14 @@ import Link from "next/link";
 import { auth } from "@/auth";
 import { listTickerStatesEnriched } from "@/lib/tickerStates";
 import { fetchQuoteAndFundamentals } from "@/lib/financial";
+import { deriveLiveImpliedReturn } from "@/lib/impliedReturn";
+import type { ImpliedReturnStoredAssumptions } from "@/lib/valuations";
+import type { ValuationVerdict } from "@/components/shared/BusinessSignalChips";
 import DashboardNav from "@/components/DashboardNav";
 import {
   BusinessTierChip,
   FlagsBadge,
+  ValuationVerdictChip,
 } from "@/components/shared/BusinessSignalChips";
 import { reanalyzeTickerAction } from "../actions";
 
@@ -24,20 +28,45 @@ export default async function WatchlistPage() {
     status: "watchlist",
   });
 
-  // Same pattern as the Dashboard's watchlistQuotes block: fetch Yahoo
-  // quotes in parallel solely to surface a friendly company name. Cheap
-  // at watchlist scale (typically <15 tickers); not worth caching.
-  const companyNames = new Map<string, string | null>(
+  // Fetch Yahoo quotes in parallel: friendly company name + today's
+  // market cap (used to recompute the implied-return verdict against
+  // live price so the chip reflects today, not the last regenerate).
+  // Cheap at watchlist scale (typically <15 tickers); not worth caching.
+  const liveQuotes = new Map<
+    string,
+    { name: string | null; marketCap: number | null }
+  >(
     await Promise.all(
       items.map(async (item) => {
         const { quote } = await fetchQuoteAndFundamentals(item.ticker);
         return [
           item.ticker,
-          quote?.longName ?? quote?.shortName ?? null,
-        ] as [string, string | null];
+          {
+            name: quote?.longName ?? quote?.shortName ?? null,
+            marketCap: quote?.marketCap ?? null,
+          },
+        ] as [string, { name: string | null; marketCap: number | null }];
       }),
     ),
   );
+
+  // Derive each ticker's live verdict by re-running the implied-return
+  // formula against today's market cap. Falls back to the persisted
+  // verdict when the row pre-dates implied_return or live data is
+  // unavailable. Pure function, no AI / DB writes.
+  const liveVerdicts = new Map<string, ValuationVerdict | null>();
+  for (const item of items) {
+    const stored = item.valuation_assumptions as
+      | ImpliedReturnStoredAssumptions
+      | null;
+    const marketCap = liveQuotes.get(item.ticker)?.marketCap ?? null;
+    if (stored && marketCap) {
+      const live = deriveLiveImpliedReturn(stored, marketCap);
+      liveVerdicts.set(item.ticker, live.verdict);
+    } else {
+      liveVerdicts.set(item.ticker, item.valuation_verdict);
+    }
+  }
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -70,9 +99,9 @@ export default async function WatchlistPage() {
                         <span className="text-lg font-semibold text-navy-900">
                           {item.ticker}
                         </span>
-                        {companyNames.get(item.ticker) && (
+                        {liveQuotes.get(item.ticker)?.name && (
                           <span className="text-sm text-navy-700">
-                            {companyNames.get(item.ticker)}
+                            {liveQuotes.get(item.ticker)?.name}
                           </span>
                         )}
                       </div>
@@ -82,6 +111,9 @@ export default async function WatchlistPage() {
                     </div>
                     <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1.5">
                       <BusinessTierChip tier={item.business_tier} />
+                      <ValuationVerdictChip
+                        verdict={liveVerdicts.get(item.ticker) ?? null}
+                      />
                       <FlagsBadge
                         analyzed={item.business_tier !== null}
                         serious={item.serious_flag_count}

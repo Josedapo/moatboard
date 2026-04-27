@@ -311,16 +311,13 @@ export async function decideWatchlistAction(
   if (!active) redirect(`/dashboard`);
 
   const reason = String(formData.get("reason") ?? "").trim();
-  if (reason.length < 5) {
-    throw new Error("Reason required (e.g. 'too expensive, PE at 92nd percentile')");
-  }
 
   const canonical = await getCanonicalTicker(upper);
   await upsertTickerState({
     userId,
     ticker: canonical,
     status: "watchlist",
-    reasonMd: reason,
+    reasonMd: reason.length > 0 ? reason : null,
     reviewWhen: null,
   });
 
@@ -348,16 +345,13 @@ export async function decideDiscardAction(
   if (!active) redirect(`/dashboard`);
 
   const reason = String(formData.get("reason") ?? "").trim();
-  if (reason.length < 5) {
-    throw new Error("Reason required");
-  }
 
   const canonicalDiscard = await getCanonicalTicker(upper);
   await upsertTickerState({
     userId,
     ticker: canonicalDiscard,
     status: "discarded",
-    reasonMd: reason,
+    reasonMd: reason.length > 0 ? reason : null,
   });
 
   // Keep the draft for cached-analysis persistence (see watchlist path).

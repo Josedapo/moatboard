@@ -5,6 +5,7 @@ import { getTickerState } from "@/lib/tickerStates";
 import { fetchQuoteAndFundamentals } from "@/lib/financial";
 import { ensureDraftPosition } from "@/lib/positions";
 import { ensureAnalysis, ensureValuation } from "@/lib/positionFlow";
+import { deriveLiveImpliedReturn } from "@/lib/impliedReturn";
 import { ensureValuationGuide } from "@/lib/valuationGuides";
 import {
   listSignalsForTicker,
@@ -13,6 +14,7 @@ import {
 import { getCurrentUnderstanding } from "@/lib/businessUnderstanding";
 import { getRedFlags } from "@/lib/redFlags";
 import type {
+  ImpliedReturnStoredAssumptions,
   RelativeValuationSnapshot,
   Valuation,
 } from "@/lib/valuations";
@@ -23,8 +25,6 @@ import BusinessUnderstandingView from "@/components/shared/BusinessUnderstanding
 import RedFlagsList from "@/components/shared/RedFlagsList";
 import MoatboardAnalysisView from "@/components/MoatboardAnalysis";
 import ValuationSection from "@/components/Valuation";
-import ValuationFollowupChat from "@/components/ValuationFollowupChat";
-import { listChatTurnsForTicker } from "@/lib/valuationChats";
 import FundsHoldingCard from "@/components/FundsHoldingCard";
 import { listFundsHoldingTicker } from "@/lib/discoveryFund";
 import { reanalyzeTickerAction } from "../../actions";
@@ -69,14 +69,12 @@ export default async function WatchlistTickerPage({ params }: Props) {
     signals,
     understanding,
     redFlags,
-    valuationChatHistory,
     fundsHolding,
   ] = await Promise.all([
     fetchQuoteAndFundamentals(ticker),
     listSignalsForTicker({ userId: session.user.id, ticker }),
     getCurrentUnderstanding(ticker),
     getRedFlags(ticker),
-    listChatTurnsForTicker({ userId: session.user.id, ticker }),
     listFundsHoldingTicker(ticker),
   ]);
 
@@ -93,10 +91,10 @@ export default async function WatchlistTickerPage({ params }: Props) {
       err instanceof Error ? err.message : "Failed to load scorecard";
   }
 
-  let valuation: Valuation | null = null;
+  let persistedValuation: Valuation | null = null;
   let valuationError: string | null = null;
   try {
-    valuation = await ensureValuation(
+    persistedValuation = await ensureValuation(
       draftPosition.id,
       ticker,
       quote,
@@ -106,6 +104,21 @@ export default async function WatchlistTickerPage({ params }: Props) {
     valuationError =
       err instanceof Error ? err.message : "Failed to compute valuation";
   }
+
+  // Live-recompute the implied-return verdict against today's market cap
+  // (same pattern as the live position page). Pure math, no AI, no DB.
+  const valuation: Valuation | null =
+    persistedValuation &&
+    persistedValuation.method === "implied_return" &&
+    quote?.marketCap
+      ? {
+          ...persistedValuation,
+          assumptions: deriveLiveImpliedReturn(
+            persistedValuation.assumptions as ImpliedReturnStoredAssumptions,
+            quote.marketCap,
+          ),
+        }
+      : persistedValuation;
 
   let valuationGuide = null;
   if (valuation) {
@@ -258,13 +271,6 @@ export default async function WatchlistTickerPage({ params }: Props) {
         loadError={valuationError}
         hideRegenerate
       />
-      {valuation && (
-        <ValuationFollowupChat
-          positionId={draftPosition.id}
-          ticker={ticker}
-          initialHistory={valuationChatHistory}
-        />
-      )}
     </>
   );
 

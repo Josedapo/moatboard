@@ -400,7 +400,11 @@ function LeaderboardTableRow({
           className="px-3 py-3 text-right"
           onClick={(e) => e.stopPropagation()}
         >
-          <AnalyzeButton ticker={row.ticker} />
+          {row.business_tier !== null ? (
+            <ViewFichaLink ticker={row.ticker} />
+          ) : (
+            <AnalyzeButton ticker={row.ticker} />
+          )}
         </td>
       </tr>
       {isExpanded && (
@@ -610,6 +614,23 @@ function TiersInfoPopover() {
         </>
       )}
     </span>
+  );
+}
+
+// Sends the user to the right ficha for this ticker — position page,
+// watchlist page, or back to the wizard — via the universal dispatcher
+// at /dashboard/ticker/[symbol]. Used when the ticker has already
+// been analyzed (business_tier !== null); the alternative is the
+// AnalyzeButton below for first-time discovery.
+function ViewFichaLink({ ticker }: { ticker: string }) {
+  return (
+    <Link
+      href={`/dashboard/ticker/${ticker}`}
+      prefetch={false}
+      className="whitespace-nowrap rounded-lg border border-navy-200 bg-white px-2.5 py-1 text-xs font-medium text-navy-700 hover:border-navy-400 hover:text-navy-900"
+    >
+      Ver →
+    </Link>
   );
 }
 

@@ -114,8 +114,21 @@ export type ImpliedReturnStoredAssumptions = {
       note?: string;
     }>;
   };
-  multiple_change_base: number; // signed, annualized
-  multiple_change_stress: number; // signed, annualized (typically more negative)
+  multiple_change_base: number; // signed, annualized — effective value used in CAGR (override if present, else auto-derived)
+  multiple_change_stress: number; // signed, annualized
+  // User-supplied overrides. When non-null, replace the auto-derived
+  // multiple_change_*. Persisted alongside so we keep an audit trail of
+  // "what did the model derive vs what did Joseda correct". Cleared by
+  // setting to null via updateImpliedReturnOverrideAction (Reset path).
+  multiple_change_base_override?: number | null;
+  multiple_change_stress_override?: number | null;
+  // Same override pattern for sustainable growth assumptions. Used when
+  // the auto-derived growth (min of historical CAGR and ROIC × retention)
+  // diverges from what Joseda observes happening in the recent year(s) —
+  // typically prompted by the latest-year line in the Quality scorecard
+  // showing deterioration the 10y CAGR hides. Decimals (0.12 = 12%/year).
+  growth_base_override?: number | null;
+  growth_stress_override?: number | null;
   // Multiple metadata — surfaced in the UI so the reader can see WHICH
   // multiple is driving the verdict and at what level it lands in each
   // scenario. Optional so legacy implied_return rows generated before this
@@ -127,8 +140,19 @@ export type ImpliedReturnStoredAssumptions = {
   multiple_q1?: number | null;
   // Computed terminal multiples for each scenario. Base ends at min(current,
   // median); stress ends at q1. Nullable when the snapshot is unusable.
+  // When an override is active the terminal reflects the override.
   multiple_base_terminal?: number | null;
   multiple_stress_terminal?: number | null;
+  // Cross-sectional anchor (peer median by business type). Used by the
+  // calculator UI to render a disclaimer when the current multiple
+  // significantly exceeds peer norm — does NOT affect the verdict math.
+  peer_median?: number | null;
+  peer_median_label?: "P/E" | "P/FCF" | "P/B";
+  peer_median_source?: "industry" | "sector" | null;
+  // Exact yfinance industry string or sector name that matched the peer
+  // median lookup. Surfaced in the UI so users see the specific category
+  // (e.g. "Insurance - Property & Casualty") instead of just "industria".
+  peer_median_match_key?: string | null;
   // Tier-gated decision context
   quality_tier: "exceptional" | "good" | "mediocre" | "poor";
   threshold: number;

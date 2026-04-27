@@ -236,8 +236,10 @@ quote + fundamentals + multi-year + treasury + relative-history (parallel)
           → P/FCF derived by inverting the persisted yield snapshot (1/yield)
       · multiple_change_base = deriveMultipleChangeBase (annualized compression to min(current, median); 0 if current ≤ median)
       · multiple_change_stress = deriveMultipleChangeStress (annualized compression to Q1; 0 if current ≤ Q1)
-      · impliedReturn.ts: computeImpliedReturn → base/stress CAGR + verdict (two-step rule)
-      · save with method='implied_return', assumptions = { fcf_yield, fcf_ttm, market_cap, growth, multiple_change_*, multiple_label, multiple_source, multiple_current/median/q1, multiple_base/stress_terminal, threshold, floor, treasury_yield, base_cagr, stress_cagr, passes_*, verdict, verdict_reason, cross_check, relative_valuation }
+      · OVERRIDE CARRY-FORWARD: read existing valuation; if multiple_change_*_override is non-null, it replaces the auto-derived value
+      · peerMedians.ts: getPeerMedian({ sector, industry, multipleLabel }) — hardcoded Damodaran sectors + business-type sub-rules (key separator " - " matches yfinance industry strings exactly)
+      · impliedReturn.ts: computeImpliedReturn → base/stress CAGR + verdict (two-step rule). Effective multiple_change_* = override ?? auto.
+      · save with method='implied_return', assumptions = { fcf_yield, fcf_ttm, market_cap, growth, multiple_change_*, multiple_change_*_override, multiple_label, multiple_source, multiple_current/median/q1, multiple_base/stress_terminal, peer_median, peer_median_label, peer_median_source, threshold, floor, treasury_yield, base_cagr, stress_cagr, passes_*, verdict, verdict_reason, cross_check, relative_valuation }
 ```
 
 Decision rule (two steps — both must pass):
@@ -248,7 +250,9 @@ When the verdict is negative, `computeTargetBuyPrice` (in `lib/impliedReturn.ts`
 
 Both `ensureValuation` (first render) and `runValuationAction` (user-triggered regenerate) go through the same `computeAndSaveValuation` helper — dispatch logic lives in one place. `qualityTier` is an optional 5th parameter on both signatures so callers that already loaded the analysis can pass it through; otherwise it's resolved internally.
 
-User-edited DCF assumptions (`updateValuationAssumptionsAction`) go through pure recompute only — **no AI re-call**. The relative snapshot and the guide are preserved as-is. Note this action edits the legacy DCF cross-check; the primary implied-return verdict is read-only in v1 (override editable of `multiple_change_*` on backlog — see BACKLOG entry "Cross-sectional anchor + override editable").
+User-edited DCF assumptions (`updateValuationAssumptionsAction`) go through pure recompute only — **no AI re-call**. The relative snapshot and the guide are preserved as-is. Note this action edits the legacy DCF cross-check.
+
+**Implied-return overrides** (`updateImpliedReturnOverrideAction`, post-2026-04-27): Joseda can override four assumptions independently — **terminal multiple base / stress in Nx** and **growth base / stress in %/yr**. For multiples, the server converts Nx → annualized %/año via `multipleToAnnualizedChange`, persists in `multiple_change_*_override`. For growth, the server stores the decimal directly in `growth_*_override`. Both re-run `computeImpliedReturn` with effective values (override ?? auto). Reset clears the relevant override. Carry-forward in `computeAndSaveValuation` preserves overrides across natural regenerations — only the action itself can clear them. The disclaimer in `ImpliedReturnCalculator` (current/peer ≥ 1.5×) drives toward the multiple override; the latest-year subordinate line in `ScorecardCard` (e.g. ROIC 22% último año vs 28% mediana 10y) drives toward the growth override. Both editable via pencil ✎ buttons in the calculator's calculation table.
 
 ### Cache philosophy
 

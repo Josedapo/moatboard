@@ -119,6 +119,22 @@ export type EnrichedTickerState = TickerState & {
   business_tier: Tier | null;
   serious_flag_count: number;
   watch_flag_count: number;
+  // Latest implied-return verdict for this user/ticker. Null when no
+  // implied_return valuation exists (legacy DCF-only rows, or never
+  // valued). Used by /dashboard/watchlist to render a Comprable / No
+  // comprable chip alongside the quality tier.
+  valuation_verdict:
+    | "comprable"
+    | "no_comprable_caro"
+    | "no_comprable_riesgo"
+    | "no_comprable_ambos"
+    | null;
+  // Latest implied-return assumptions blob for live-recompute against
+  // today's market cap. Caller (watchlist list page) can derive the
+  // verdict at current price via deriveLiveImpliedReturn(). Null for
+  // tickers without an implied_return valuation. Typed as `unknown` to
+  // keep this lib free of impliedReturn dep — caller casts.
+  valuation_assumptions: unknown | null;
 };
 
 export async function listTickerStatesEnriched({
@@ -147,7 +163,23 @@ export async function listTickerStatesEnriched({
          FROM qualitative_red_flags qrf,
               jsonb_array_elements(qrf.flags) AS f
          WHERE qrf.ticker = ts.ticker
-           AND f->>'severity' = 'watch'), 0) AS watch_flag_count
+           AND f->>'severity' = 'watch'), 0) AS watch_flag_count,
+      (SELECT v.assumptions->>'verdict'
+         FROM valuations v
+         JOIN positions p ON p.id = v.position_id
+         WHERE p.user_id = ${userId}
+           AND p.ticker = ts.ticker
+           AND v.method = 'implied_return'
+         ORDER BY v.generated_at DESC
+         LIMIT 1) AS valuation_verdict,
+      (SELECT v.assumptions
+         FROM valuations v
+         JOIN positions p ON p.id = v.position_id
+         WHERE p.user_id = ${userId}
+           AND p.ticker = ts.ticker
+           AND v.method = 'implied_return'
+         ORDER BY v.generated_at DESC
+         LIMIT 1) AS valuation_assumptions
     FROM ticker_states ts
     WHERE ts.user_id = ${userId} AND ts.status = ${status}
     ORDER BY ts.last_touched_at DESC
