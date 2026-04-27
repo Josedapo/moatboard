@@ -39,6 +39,10 @@ export type HoldingMovement =
 
 export type FundHolding = {
   ticker: string | null;
+  // Canonical ticker for the business (collapses dual-class share pairs).
+  // Equal to `ticker` when there's no alias. Used for the "Analizar →"
+  // link so both BRK-A and BRK-B rows route to the canonical analysis.
+  canonical_ticker: string | null;
   cusip: string;
   issuer_name: string;
   class_title: string | null;
@@ -125,6 +129,7 @@ export async function getFundDetail({
     )
     SELECT
       l.ticker,
+      COALESCE(ta.canonical_ticker, l.ticker) AS canonical_ticker,
       l.cusip,
       l.issuer_name,
       l.class_title,
@@ -145,8 +150,18 @@ export async function getFundDetail({
       END AS shares_pct_change
     FROM latest l
     LEFT JOIN prior p ON p.cusip = l.cusip
-    LEFT JOIN ticker_states ts
-      ON ts.ticker = l.ticker AND ts.user_id = ${userId}
+    LEFT JOIN ticker_aliases ta ON ta.ticker = l.ticker
+    -- Per-user state attaches via canonical so a watchlist entry under
+    -- either share class shows on both rows (BRK-A and BRK-B).
+    LEFT JOIN (
+      SELECT DISTINCT ON (COALESCE(ta2.canonical_ticker, ts2.ticker))
+        COALESCE(ta2.canonical_ticker, ts2.ticker) AS canonical_ticker,
+        ts2.status
+      FROM ticker_states ts2
+      LEFT JOIN ticker_aliases ta2 ON ta2.ticker = ts2.ticker
+      WHERE ts2.user_id = ${userId}
+      ORDER BY COALESCE(ta2.canonical_ticker, ts2.ticker), ts2.last_touched_at DESC
+    ) ts ON ts.canonical_ticker = COALESCE(ta.canonical_ticker, l.ticker)
     ORDER BY l.weight_in_fund DESC
   `) as unknown as FundHolding[];
 
@@ -332,5 +347,70 @@ export async function listActiveFundsForNav(): Promise<FundMeta[]> {
     WHERE active = TRUE
     ORDER BY tier, display_name
   `) as unknown as FundMeta[];
+  return rows;
+}
+
+// ─── Per-ticker funds list (used by the position/watchlist Overview) ───
+
+export type FundHoldingTicker = {
+  cik: string;
+  display_name: string;
+  tier: "A" | "B" | "C" | "D" | "E";
+  weight_in_fund: number; // 0-100
+  value_usd: number;
+  // The ticker symbol the fund actually reports the holding under,
+  // not the canonical. For BRK-A canonical, a fund holding BRK-B
+  // would surface here as actual_ticker='BRK-B' so the UI can show
+  // "(via BRK-B)" if useful — kept opaque by default.
+  actual_ticker: string;
+};
+
+// Returns the curated funds whose latest 13F-HR holds `ticker` (or any
+// of its share-class siblings via ticker_aliases). Sorted by tier then
+// weight_in_fund desc so the highest-conviction A-tier holders read
+// first. Used in the position/watchlist Overview to surface "smart
+// money exposure" without requiring the user to drill into Discovery.
+export async function listFundsHoldingTicker(
+  canonicalTicker: string,
+): Promise<FundHoldingTicker[]> {
+  const upper = canonicalTicker.toUpperCase();
+  const rows = (await sql`
+    WITH latest_filing AS (
+      SELECT DISTINCT ON (fund_id)
+        id, fund_id
+      FROM discovery_filings
+      ORDER BY fund_id, period_of_report DESC
+    ),
+    -- Match the holding's ticker (or its canonical) against the target.
+    -- A fund holding GOOG should show up when we ask for GOOGL, and
+    -- vice versa — match through ticker_aliases. Aggregate by fund so
+    -- a fund holding multiple share classes (GOOG + GOOGL, BRK-A +
+    -- BRK-B) collapses into a single row with combined weight and value.
+    -- string_agg keeps the actual tickers for the "(vía …)" UI label.
+    matched AS (
+      SELECT
+        f.fund_id,
+        SUM(h.value_usd)::float AS value_usd,
+        SUM(h.weight_in_fund)::float AS weight_in_fund,
+        string_agg(DISTINCT h.ticker, '/' ORDER BY h.ticker) AS actual_ticker
+      FROM discovery_holdings h
+      JOIN latest_filing f ON f.id = h.filing_id
+      LEFT JOIN ticker_aliases ta ON ta.ticker = h.ticker
+      WHERE h.ticker IS NOT NULL
+        AND COALESCE(ta.canonical_ticker, h.ticker) = ${upper}
+      GROUP BY f.fund_id
+    )
+    SELECT
+      df.cik,
+      df.display_name,
+      df.tier,
+      m.actual_ticker,
+      m.weight_in_fund,
+      m.value_usd
+    FROM matched m
+    JOIN discovery_funds df ON df.id = m.fund_id
+    WHERE df.active = TRUE
+    ORDER BY df.tier ASC, m.weight_in_fund DESC, df.display_name ASC
+  `) as unknown as FundHoldingTicker[];
   return rows;
 }

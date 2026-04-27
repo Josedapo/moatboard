@@ -1,4 +1,5 @@
 import { sql } from "@/lib/db";
+import type { Tier } from "@/lib/verdict";
 
 export type TickerStatus =
   | "in_portfolio"
@@ -103,6 +104,55 @@ export async function upsertTickerState({
               prior_reason_on_invest_md, last_touched_at, created_at
   `) as unknown as TickerState[];
   return rows[0];
+}
+
+// TickerState row enriched with the cached quality verdict and the count of
+// qualitative red flags by severity. Used by /dashboard/watchlist (renders
+// tier + flags) and /dashboard/history (renders only tier, flags often
+// missing for tickers parked from the wizard's skip-to-decision shortcut).
+// Tier is per-user (latest moatboard_analyses across this user's positions
+// for the ticker, draft or live). Flag counts are per-ticker
+// (qualitative_red_flags is shared across users since the source 10-K is
+// the same). Flag subqueries are cheap at watchlist/history scale (<20
+// tickers); always computed even when the caller doesn't render them.
+export type EnrichedTickerState = TickerState & {
+  business_tier: Tier | null;
+  serious_flag_count: number;
+  watch_flag_count: number;
+};
+
+export async function listTickerStatesEnriched({
+  userId,
+  status,
+}: {
+  userId: string | number;
+  status: TickerStatus;
+}): Promise<EnrichedTickerState[]> {
+  const rows = (await sql`
+    SELECT
+      ts.id, ts.user_id, ts.ticker, ts.status, ts.reason_md, ts.review_when,
+      ts.prior_reason_on_invest_md, ts.last_touched_at, ts.created_at,
+      (SELECT ma.tier
+         FROM moatboard_analyses ma
+         JOIN positions p ON p.id = ma.position_id
+         WHERE p.user_id = ${userId} AND p.ticker = ts.ticker
+         ORDER BY ma.generated_at DESC
+         LIMIT 1) AS business_tier,
+      COALESCE((SELECT COUNT(*)::int
+         FROM qualitative_red_flags qrf,
+              jsonb_array_elements(qrf.flags) AS f
+         WHERE qrf.ticker = ts.ticker
+           AND f->>'severity' = 'serious'), 0) AS serious_flag_count,
+      COALESCE((SELECT COUNT(*)::int
+         FROM qualitative_red_flags qrf,
+              jsonb_array_elements(qrf.flags) AS f
+         WHERE qrf.ticker = ts.ticker
+           AND f->>'severity' = 'watch'), 0) AS watch_flag_count
+    FROM ticker_states ts
+    WHERE ts.user_id = ${userId} AND ts.status = ${status}
+    ORDER BY ts.last_touched_at DESC
+  `) as unknown as EnrichedTickerState[];
+  return rows;
 }
 
 export async function deleteTickerState({

@@ -1,4 +1,5 @@
 import { callText } from "@/lib/claudeClient";
+import { parseJsonObject } from "@/lib/aiJson";
 import type {
   Quote,
   Fundamentals,
@@ -201,13 +202,7 @@ export async function generateThesis(
   );
 
   const { text: raw } = await callText(prompt, { maxTokens: 2000 });
-  const trimmed = raw.trim();
-  const jsonMatch = trimmed.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) {
-    throw new Error(`Could not find JSON in response: ${trimmed.slice(0, 200)}`);
-  }
-
-  const parsed = JSON.parse(jsonMatch[0]) as ThesisContent;
+  const parsed = parseJsonObject<ThesisContent>(raw);
 
   for (const field of THESIS_FIELD_ORDER) {
     const value = parsed[field];

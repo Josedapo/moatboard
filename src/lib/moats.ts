@@ -1,4 +1,5 @@
 import { sql } from "@/lib/db";
+import { getCanonicalTicker } from "@/lib/tickerAliases";
 import type { MoatStrength, MoatArchetype } from "@/lib/verdict";
 
 export type MoatAssessment = {
@@ -15,10 +16,11 @@ const TTL_DAYS = 365;
 export async function getMoatAssessment(
   ticker: string,
 ): Promise<MoatAssessment | null> {
+  const canonical = await getCanonicalTicker(ticker);
   const rows = (await sql`
     SELECT ticker, strength, archetype, reasoning, evaluated_at, evaluated_with_model
     FROM moat_assessments
-    WHERE ticker = ${ticker.toUpperCase()}
+    WHERE ticker = ${canonical}
     LIMIT 1
   `) as unknown as MoatAssessment[];
   return rows[0] ?? null;
@@ -37,9 +39,10 @@ export async function saveMoatAssessment({
   reasoning: string;
   model?: string;
 }): Promise<MoatAssessment> {
+  const canonical = await getCanonicalTicker(ticker);
   const rows = (await sql`
     INSERT INTO moat_assessments (ticker, strength, archetype, reasoning, evaluated_with_model)
-    VALUES (${ticker.toUpperCase()}, ${strength}, ${archetype}, ${reasoning}, ${model})
+    VALUES (${canonical}, ${strength}, ${archetype}, ${reasoning}, ${model})
     ON CONFLICT (ticker) DO UPDATE
       SET strength = EXCLUDED.strength,
           archetype = EXCLUDED.archetype,

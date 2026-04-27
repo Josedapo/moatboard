@@ -86,27 +86,33 @@ export async function computeDeltaWindow(
       ORDER BY fund_id, period_of_report DESC
     ),
     latest_agg AS (
+      -- Canonicalize at the holding level so dual-class share pairs
+      -- (GOOG/GOOGL, BRK-A/BRK-B) collapse into one business row.
+      -- Otherwise the delta would split conviction across the two
+      -- share classes and obscure the real per-business movement.
       SELECT
-        h.ticker,
-        h.issuer_name,
+        COALESCE(ta.canonical_ticker, h.ticker) AS ticker,
+        MAX(h.issuer_name) AS issuer_name,
         SUM(df.tier_weight * h.weight_in_fund)::float AS conviction,
         COUNT(DISTINCT f.fund_id)::int AS n_funds
       FROM discovery_holdings h
       JOIN latest_per_fund f ON f.id = h.filing_id
       JOIN discovery_funds df ON df.id = f.fund_id
+      LEFT JOIN ticker_aliases ta ON ta.ticker = h.ticker
       WHERE h.ticker IS NOT NULL AND df.active = TRUE
-      GROUP BY h.ticker, h.issuer_name
+      GROUP BY COALESCE(ta.canonical_ticker, h.ticker)
     ),
     prior_agg AS (
       SELECT
-        h.ticker,
+        COALESCE(ta.canonical_ticker, h.ticker) AS ticker,
         SUM(df.tier_weight * h.weight_in_fund)::float AS conviction,
         COUNT(DISTINCT f.fund_id)::int AS n_funds
       FROM discovery_holdings h
       JOIN prior_per_fund f ON f.id = h.filing_id
       JOIN discovery_funds df ON df.id = f.fund_id
+      LEFT JOIN ticker_aliases ta ON ta.ticker = h.ticker
       WHERE h.ticker IS NOT NULL AND df.active = TRUE
-      GROUP BY h.ticker
+      GROUP BY COALESCE(ta.canonical_ticker, h.ticker)
     )
     SELECT
       COALESCE(la.ticker, pa.ticker) AS ticker,
@@ -119,8 +125,17 @@ export async function computeDeltaWindow(
       ts.status AS ticker_state
     FROM latest_agg la
     FULL OUTER JOIN prior_agg pa ON pa.ticker = la.ticker
-    LEFT JOIN ticker_states ts ON ts.ticker = COALESCE(la.ticker, pa.ticker)
-      AND ts.user_id = ${userId}
+    -- Per-user state, canonicalized so a watchlist/discarded entry
+    -- under either share class attaches to the canonical delta row.
+    LEFT JOIN (
+      SELECT DISTINCT ON (COALESCE(ta.canonical_ticker, ts2.ticker))
+        COALESCE(ta.canonical_ticker, ts2.ticker) AS canonical_ticker,
+        ts2.status
+      FROM ticker_states ts2
+      LEFT JOIN ticker_aliases ta ON ta.ticker = ts2.ticker
+      WHERE ts2.user_id = ${userId}
+      ORDER BY COALESCE(ta.canonical_ticker, ts2.ticker), ts2.last_touched_at DESC
+    ) ts ON ts.canonical_ticker = COALESCE(la.ticker, pa.ticker)
     WHERE COALESCE(la.conviction, 0) > 0 OR COALESCE(pa.conviction, 0) > 0
     ORDER BY delta DESC
   `) as unknown as DeltaRow[];
@@ -143,16 +158,22 @@ export async function computeDeltaWindow(
       WHERE period_of_report <= ${prior}::date
       ORDER BY fund_id, period_of_report DESC
     ),
+    -- latest_set / prior_set are canonical-ticker sets so dual-class
+    -- pairs count as one business. Without this, GOOG entering with 3
+    -- funds + GOOGL entering with 4 funds would each fall under the
+    -- HAVING ≥5 threshold and the entrant would never surface.
     latest_set AS (
-      SELECT DISTINCT h.ticker
+      SELECT DISTINCT COALESCE(ta.canonical_ticker, h.ticker) AS ticker
       FROM discovery_holdings h
       JOIN latest_per_fund f ON f.id = h.filing_id
+      LEFT JOIN ticker_aliases ta ON ta.ticker = h.ticker
       WHERE h.ticker IS NOT NULL
     ),
     prior_set AS (
-      SELECT DISTINCT h.ticker
+      SELECT DISTINCT COALESCE(ta.canonical_ticker, h.ticker) AS ticker
       FROM discovery_holdings h
       JOIN prior_per_fund f ON f.id = h.filing_id
+      LEFT JOIN ticker_aliases ta ON ta.ticker = h.ticker
       WHERE h.ticker IS NOT NULL
     ),
     entrants AS (
@@ -160,26 +181,52 @@ export async function computeDeltaWindow(
       FROM latest_set ls
       LEFT JOIN prior_set ps ON ps.ticker = ls.ticker
       WHERE ps.ticker IS NULL
+    ),
+    -- Pre-canonicalize holdings before aggregation so the outer query
+    -- groups on a single column (canonical) instead of a COALESCE
+    -- expression. The earlier shape used COALESCE in both the GROUP BY
+    -- and the issuer_name subquery, which Postgres rejects with
+    -- "subquery uses ungrouped column from outer query" because the
+    -- two component columns are not in the GROUP BY.
+    holdings_canonical AS (
+      SELECT
+        COALESCE(ta.canonical_ticker, h.ticker) AS canonical,
+        h.issuer_name,
+        h.weight_in_fund,
+        h.filing_id,
+        f.fund_id,
+        df.tier,
+        df.tier_weight,
+        df.display_name,
+        df.active
+      FROM discovery_holdings h
+      JOIN latest_per_fund f ON f.id = h.filing_id
+      JOIN discovery_funds df ON df.id = f.fund_id
+      LEFT JOIN ticker_aliases ta ON ta.ticker = h.ticker
+      WHERE h.ticker IS NOT NULL AND df.active = TRUE
     )
     SELECT
-      h.ticker,
-      (SELECT issuer_name FROM discovery_holdings
-       WHERE ticker = h.ticker
-       GROUP BY issuer_name ORDER BY COUNT(*) DESC LIMIT 1) AS issuer_name,
-      COUNT(DISTINCT f.fund_id)::int AS n_funds,
-      SUM(df.tier_weight * h.weight_in_fund)::float AS conviction,
-      COUNT(DISTINCT f.fund_id) FILTER (WHERE df.tier = 'A')::int AS tier_a_funds,
-      COUNT(DISTINCT f.fund_id) FILTER (WHERE df.tier = 'B')::int AS tier_b_funds,
-      ARRAY_AGG(DISTINCT df.display_name ORDER BY df.display_name) AS fund_names,
+      hc.canonical AS ticker,
+      MAX(hc.issuer_name) AS issuer_name,
+      COUNT(DISTINCT hc.fund_id)::int AS n_funds,
+      SUM(hc.tier_weight * hc.weight_in_fund)::float AS conviction,
+      COUNT(DISTINCT hc.fund_id) FILTER (WHERE hc.tier = 'A')::int AS tier_a_funds,
+      COUNT(DISTINCT hc.fund_id) FILTER (WHERE hc.tier = 'B')::int AS tier_b_funds,
+      ARRAY_AGG(DISTINCT hc.display_name ORDER BY hc.display_name) AS fund_names,
       ts.status AS ticker_state
-    FROM discovery_holdings h
-    JOIN latest_per_fund f ON f.id = h.filing_id
-    JOIN discovery_funds df ON df.id = f.fund_id
-    LEFT JOIN ticker_states ts ON ts.ticker = h.ticker AND ts.user_id = ${userId}
-    WHERE h.ticker IN (SELECT ticker FROM entrants)
-      AND df.active = TRUE
-    GROUP BY h.ticker, ts.status
-    HAVING COUNT(DISTINCT f.fund_id) >= 5
+    FROM holdings_canonical hc
+    LEFT JOIN (
+      SELECT DISTINCT ON (COALESCE(ta.canonical_ticker, ts2.ticker))
+        COALESCE(ta.canonical_ticker, ts2.ticker) AS canonical_ticker,
+        ts2.status
+      FROM ticker_states ts2
+      LEFT JOIN ticker_aliases ta ON ta.ticker = ts2.ticker
+      WHERE ts2.user_id = ${userId}
+      ORDER BY COALESCE(ta.canonical_ticker, ts2.ticker), ts2.last_touched_at DESC
+    ) ts ON ts.canonical_ticker = hc.canonical
+    WHERE hc.canonical IN (SELECT ticker FROM entrants)
+    GROUP BY hc.canonical, ts.status
+    HAVING COUNT(DISTINCT hc.fund_id) >= 5
     ORDER BY conviction DESC
   `) as unknown as NewEntrant[];
 

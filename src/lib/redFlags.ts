@@ -1,4 +1,5 @@
 import { sql } from "@/lib/db";
+import { getCanonicalTicker } from "@/lib/tickerAliases";
 
 export type RedFlagCategory =
   | "auditor"
@@ -37,12 +38,13 @@ export type QualitativeRedFlags = {
 export async function getRedFlags(
   ticker: string,
 ): Promise<QualitativeRedFlags | null> {
+  const canonical = await getCanonicalTicker(ticker);
   const rows = (await sql`
     SELECT ticker, flags, last_10k_accession,
            TO_CHAR(last_10k_period_end, 'YYYY-MM-DD') AS last_10k_period_end,
            generated_at, generated_with_model
     FROM qualitative_red_flags
-    WHERE ticker = ${ticker.toUpperCase()}
+    WHERE ticker = ${canonical}
     LIMIT 1
   `) as unknown as QualitativeRedFlags[];
   return rows[0] ?? null;
@@ -61,11 +63,12 @@ export async function saveRedFlags({
   last10kPeriodEnd?: string | null;
   model?: string;
 }): Promise<QualitativeRedFlags> {
+  const canonical = await getCanonicalTicker(ticker);
   const rows = (await sql`
     INSERT INTO qualitative_red_flags
       (ticker, flags, last_10k_accession, last_10k_period_end, generated_with_model)
     VALUES
-      (${ticker.toUpperCase()}, ${JSON.stringify(flags)}::jsonb,
+      (${canonical}, ${JSON.stringify(flags)}::jsonb,
        ${last10kAccession ?? null}, ${last10kPeriodEnd ?? null}, ${model})
     ON CONFLICT (ticker) DO UPDATE
       SET flags = EXCLUDED.flags,

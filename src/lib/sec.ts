@@ -13,6 +13,7 @@ import {
   parseFundamentals,
   type ParsedFundamentals,
 } from "@/lib/secParser";
+import { getCanonicalTicker } from "@/lib/tickerAliases";
 import type { MultiYearFundamentals } from "@/lib/financial";
 
 const SEC_USER_AGENT = process.env.SEC_USER_AGENT;
@@ -73,7 +74,12 @@ async function refreshTickerCikTable(): Promise<void> {
 }
 
 export async function getCikForTicker(ticker: string): Promise<string | null> {
-  const key = ticker.toUpperCase();
+  // Canonicalize so dual-class share pairs resolve to the same SEC row.
+  // Both GOOG and GOOGL share CIK 0001652044 (Alphabet); GOOG analysis
+  // and GOOGL analysis must hit the same `sec_fundamentals_cache` row
+  // — keyed under the canonical ticker — so we don't double-fetch from
+  // SEC EDGAR or store two identical raw_facts blobs.
+  const key = await getCanonicalTicker(ticker);
 
   const rows = (await sql`
     SELECT cik, last_refreshed
@@ -215,7 +221,9 @@ async function writeCacheOk(
 export async function ensureSecRawCache(
   ticker: string,
 ): Promise<EnsureSecRawResult> {
-  const key = ticker.toUpperCase();
+  // Cache row is keyed under canonical: GOOG and GOOGL share Alphabet's
+  // CIK and SEC payload, so caching twice would be waste.
+  const key = await getCanonicalTicker(ticker);
 
   const cachedRows = (await sql`
     SELECT cik, status, raw_facts, last_fetched
@@ -316,7 +324,8 @@ async function markParseError(ticker: string): Promise<void> {
 export async function ensureSecFundamentals(
   ticker: string,
 ): Promise<EnsureSecFundamentalsResult> {
-  const key = ticker.toUpperCase();
+  // Mirror ensureSecRawCache: parsed cache row is keyed under canonical.
+  const key = await getCanonicalTicker(ticker);
 
   // First, ensure the raw cache is hot.
   const raw = await ensureSecRawCache(key);
@@ -411,6 +420,8 @@ export async function fetchMultiYearFundamentalsSec(
 ): Promise<MultiYearFundamentals | null> {
   const result = await ensureSecFundamentals(ticker);
   if (result.status !== "ok" || !result.parsed) return null;
+  // `symbol` reports the ticker the caller asked about (per-share-class
+  // accuracy), even though the underlying SEC data is the same business.
   return {
     symbol: ticker.toUpperCase(),
     years: result.parsed.years,

@@ -1,4 +1,5 @@
 import { callText } from "@/lib/claudeClient";
+import { parseJsonObject } from "@/lib/aiJson";
 import type { Quote } from "@/lib/financial";
 import type { MoatStrength, MoatArchetype } from "@/lib/verdict";
 
@@ -125,14 +126,7 @@ export async function validateMoat({
   });
 
   const { text: raw, model } = await callText(prompt, { maxTokens: 800 });
-
-  const trimmed = raw.trim();
-  const jsonMatch = trimmed.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) {
-    throw new Error(`Could not find JSON in response: ${trimmed.slice(0, 200)}`);
-  }
-
-  const parsed = JSON.parse(jsonMatch[0]) as MoatValidation;
+  const parsed = parseJsonObject<MoatValidation>(raw);
 
   if (!VERDICTS.includes(parsed.verdict)) {
     throw new Error(`Invalid verdict: ${parsed.verdict}`);

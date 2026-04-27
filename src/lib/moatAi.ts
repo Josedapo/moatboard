@@ -1,4 +1,5 @@
 import { callText } from "@/lib/claudeClient";
+import { parseJsonObject } from "@/lib/aiJson";
 import type {
   Quote,
   Fundamentals,
@@ -118,14 +119,7 @@ export async function assessMoat(
   const prompt = buildPrompt(ticker, quote, fundamentals, multiYear);
 
   const { text: raw, model } = await callText(prompt, { maxTokens: 600 });
-
-  const trimmed = raw.trim();
-  const jsonMatch = trimmed.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) {
-    throw new Error(`Could not find JSON in response: ${trimmed.slice(0, 200)}`);
-  }
-
-  const parsed = JSON.parse(jsonMatch[0]) as MoatEvaluation;
+  const parsed = parseJsonObject<MoatEvaluation>(raw);
 
   if (!["strong", "weak", "unclear"].includes(parsed.strength)) {
     throw new Error(`Invalid moat strength: ${parsed.strength}`);

@@ -479,20 +479,25 @@ export async function fetchManagementSignals(
 // implicitly when judging compounders.
 //
 // Data pipeline:
-//   1. Monthly close prices for up to 7 years (yfinance historical, interval=1mo).
-//      → ~85 monthly price points.
+//   1. Monthly close prices for up to 10 years (yfinance historical, interval=1mo).
+//      → ~120 monthly price points. Aligned with the 10-year scoring window
+//      cap (scorecard.ts SCORING_WINDOW_YEARS) — Buffett 1987 letter, Pat
+//      Dorsey, Damodaran ch. 11 all anchor "long enough to span a cycle, short
+//      enough to stay current".
 //   2. Annual fundamentals (from the already-fetched multi-year series).
-//      yfinance reliably returns 4-5 fiscal years of {netIncome, FCF, shares}.
-//      (Quarterly data from `fundamentalsTimeSeries` proved unusable for this
-//      — it returns only ~6 sparse rows with many null fields.)
+//      SEC EDGAR XBRL gives 10-18y for US filers; yfinance fallback gives
+//      4-5y for foreign filers (TSM, BABA, etc. — they don't file XBRL with
+//      SEC even when ADR-listed). When fundamentals are shorter than the
+//      price window, the alignment loop below skips price points before the
+//      first available fiscal year, so foreign-filer histories are capped by
+//      their fundamentals span, not by the 10-year price window.
 //   3. For each monthly price, use the most recently reported fiscal-year
 //      values as the denominator → PE = price / EPS_FY, FCF yield = FCF_FY / price.
 //
 // The denominator is therefore stepped (changes at each fiscal year-end), but
 // the price numerator moves every month — so the monthly PE series captures
 // real month-to-month variation in how the market values this specific
-// business. 85 points × 4-5 distinct denominators is sufficient for
-// median/quartile statistics of the price-to-fundamentals ratio.
+// business.
 
 export type RelativeValuationPoint = {
   date: string; // YYYY-MM-DD
@@ -517,8 +522,8 @@ export async function fetchRelativeValuationHistory(
 ): Promise<RelativeValuationHistory | null> {
   try {
     const today = new Date();
-    const sevenYearsAgo = new Date(
-      today.getFullYear() - 7,
+    const tenYearsAgo = new Date(
+      today.getFullYear() - 10,
       today.getMonth(),
       1,
     );
@@ -527,7 +532,7 @@ export async function fetchRelativeValuationHistory(
     // Monthly price history always via yfinance — SEC has no price feed.
     const [priceHistory, multiYear] = await Promise.all([
       yf.historical(ticker, {
-        period1: sevenYearsAgo.toISOString().slice(0, 10),
+        period1: tenYearsAgo.toISOString().slice(0, 10),
         period2: today.toISOString().slice(0, 10),
         interval: "1mo",
       }),

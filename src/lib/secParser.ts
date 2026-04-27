@@ -313,6 +313,10 @@ export function parseFundamentals(
       "RealEstateRevenueNet",
       "OperatingLeasesIncomeStatementLeaseRevenue",
       "InterestIncomeOperating",
+      // Banks report top-line as net of interest expense (AXP, JPM-style).
+      // Without this tag, AXP's Revenues series is fragmentary because the
+      // bank reclassified after 2020 to RevenuesNetOfInterestExpense.
+      "RevenuesNetOfInterestExpense",
     ],
     trace("revenue"),
   );
@@ -427,13 +431,33 @@ export function parseFundamentals(
     trace("operatingCashFlow"),
   );
 
-  const sharesDilutedRows = extractMerged(
+  // Diluted shares is the headline. When a filer doesn't report Diluted
+  // (Berkshire is the canonical example: no stock options issued, so basic
+  // = diluted by definition), fall back to Basic. Mark with a parse-note
+  // so callers can tell it was a fallback.
+  let sharesDilutedRows = extractMerged(
     facts,
     ["WeightedAverageNumberOfDilutedSharesOutstanding"],
     trace("sharesDiluted"),
     "us-gaap",
     "shares",
   );
+  if (sharesDilutedRows.length === 0) {
+    const basicTrace = trace("sharesDiluted__basicFallback");
+    const basicShares = extractMerged(
+      facts,
+      ["WeightedAverageNumberOfSharesOutstandingBasic"],
+      basicTrace,
+      "us-gaap",
+      "shares",
+    );
+    if (basicShares.length > 0) {
+      sharesDilutedRows = basicShares;
+      notes.warnings.push(
+        "sharesDiluted: filer reports only Basic (Diluted absent); using Basic as a proxy. Common for issuers with no equity-linked instruments (e.g. Berkshire Hathaway).",
+      );
+    }
+  }
 
   const repurchaseRows = extractMerged(
     facts,
@@ -637,14 +661,18 @@ export function parseFundamentals(
     };
   });
 
-  // yearsAvailable matches the yfinance convention: count rows with enough
-  // signal to score ROIC + FCF margin at minimum.
+  // Count years usable for the *relative valuation distribution* (the
+  // weakest bar — PE per year requires only NetIncome + DilutedShares).
+  // ROIC / FCF-margin scoring degrades gracefully when EBIT / IC / FCF
+  // are null, so the looser filter doesn't break operating-business
+  // scoring but lets banks (no OperatingIncomeLoss / no capex / no
+  // InvestedCapital concept) pass without falling through to yfinance's
+  // 4-5y fallback. AXP, BAC, BRK go from 0 usable years to 18-51.
   const yearsAvailable = rows.filter(
     (r) =>
       r.revenue !== null &&
-      r.ebit !== null &&
-      r.investedCapital !== null &&
-      r.freeCashFlow !== null,
+      r.netIncome !== null &&
+      r.sharesDiluted !== null,
   ).length;
 
   const earliestYear = rows.length > 0 ? Number(rows[0].fiscalYearEnd.slice(0, 4)) : null;

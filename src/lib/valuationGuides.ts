@@ -2,6 +2,7 @@
 // Follows the same pattern as moat_assessments (TTL 365d, get-or-create).
 
 import { sql } from "@/lib/db";
+import { getCanonicalTicker } from "@/lib/tickerAliases";
 import { assessValuationGuide, type ToolId } from "@/lib/valuationGuideAi";
 import type { Quote, Fundamentals } from "@/lib/financial";
 
@@ -20,11 +21,12 @@ export type ValuationGuide = {
 export async function getValuationGuide(
   ticker: string,
 ): Promise<ValuationGuide | null> {
+  const canonical = await getCanonicalTicker(ticker);
   const rows = (await sql`
     SELECT ticker, primary_tool, secondary_tool, cautious_tool, reasoning,
            evaluated_at, evaluated_with_model
     FROM valuation_guides
-    WHERE ticker = ${ticker.toUpperCase()}
+    WHERE ticker = ${canonical}
     LIMIT 1
   `) as unknown as ValuationGuide[];
   return rows[0] ?? null;
@@ -45,13 +47,14 @@ export async function saveValuationGuide({
   reasoning: string;
   model: string;
 }): Promise<ValuationGuide> {
+  const canonical = await getCanonicalTicker(ticker);
   const rows = (await sql`
     INSERT INTO valuation_guides (
       ticker, primary_tool, secondary_tool, cautious_tool,
       reasoning, evaluated_with_model
     )
     VALUES (
-      ${ticker.toUpperCase()}, ${primaryTool}, ${secondaryTool}, ${cautiousTool},
+      ${canonical}, ${primaryTool}, ${secondaryTool}, ${cautiousTool},
       ${reasoning}, ${model}
     )
     ON CONFLICT (ticker) DO UPDATE

@@ -1,4 +1,5 @@
 import { callText } from "@/lib/claudeClient";
+import { parseJsonObject } from "@/lib/aiJson";
 import type { Quote, Fundamentals } from "@/lib/financial";
 
 // DCF assumptions (growth / terminal / discount) are NOT AI-suggested.
@@ -52,10 +53,7 @@ OUTPUT (strict JSON, no preamble):
 }`;
 
   const { text: raw } = await callText(prompt, { maxTokens: 600 });
-  const trimmed = raw.trim();
-  const m = trimmed.match(/\{[\s\S]*\}/);
-  if (!m) throw new Error(`Could not find JSON: ${trimmed.slice(0, 200)}`);
-  const parsed = JSON.parse(m[0]) as MultiplesEstimate;
+  const parsed = parseJsonObject<MultiplesEstimate>(raw);
 
   if (!Number.isFinite(parsed.intrinsic_value) || parsed.intrinsic_value <= 0) {
     throw new Error("Intrinsic value invalid");

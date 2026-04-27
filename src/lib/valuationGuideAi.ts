@@ -12,6 +12,7 @@
 //   list — P/B gets excluded when book value is negative).
 
 import { callText } from "@/lib/claudeClient";
+import { parseJsonObject } from "@/lib/aiJson";
 import type { Quote, Fundamentals } from "@/lib/financial";
 
 export type ToolId = "dcf" | "pe" | "pfcf" | "pb" | "cash_yield";
@@ -103,10 +104,7 @@ Output strict JSON, no preamble. CRITICAL: primary, secondary, and cautious must
 }`;
 
   const { text: raw, model } = await callText(prompt, { maxTokens: 600 });
-  const trimmed = raw.trim();
-  const m = trimmed.match(/\{[\s\S]*\}/);
-  if (!m) throw new Error(`Could not find JSON: ${trimmed.slice(0, 200)}`);
-  const parsed = JSON.parse(m[0]) as ValuationGuideEvaluation;
+  const parsed = parseJsonObject<ValuationGuideEvaluation>(raw);
 
   // Validate: primary must be in the allowed list.
   if (!availableTools.includes(parsed.primary)) {
