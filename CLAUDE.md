@@ -153,6 +153,12 @@ node scripts/init-db.mjs
 
 The script DROPs legacy tables (`theses`, `moatboard_analyses` when their CHECK constraints change) before recreating, so it's safe to re-run after schema edits. Drop list is at the top of the script — add new entries when CHECK constraints change.
 
+**Local DB === Production DB.** `DATABASE_URL` in `.env.local` points to the same Neon Postgres instance Vercel production reads. Implications:
+- Any migration or maintenance script Joseda runs locally (`node scripts/add-*.mjs`, `node scripts/extend-*.mjs`, `node scripts/seed-*.mjs`, `scripts/canonicalize-*.mjs`, etc.) writes to production immediately. There is **no separate prod-migration step** after a local apply.
+- After deploying code that depends on a new table or CHECK constraint, Claude must verify the migration already ran (or run it) — but does **not** need to ask Joseda to re-run scripts that were already applied during local dogfooding.
+- Any data-mutating script (`wipe-user-data.mjs`, seeds, ad-hoc `UPDATE`s) affects real production rows. Treat every DB write as a production write.
+- Read scripts (e.g. inspecting current state with `SELECT`) are safe and should be the default verification step before re-running a migration.
+
 Tables:
 - `users`, `accounts`, `sessions`, `verification_token` — NextAuth (Neon adapter)
 - `positions` — user portfolio entries (`user_id`, `ticker`, `pre_commitment_md`, `pre_commitment_edited_at`, `created_at`). `pre_commitment_md` is the position-level "compromiso de salida" — what would make Joseda lose confidence in this investment. Editable, optional. Cost basis lives in `position_transactions`. Dashboard filters by **net shares > 0** (sum of buys+adds − trims−sells) so closed positions and drafts both disappear from Portfolio automatically. **Draft positions persist across terminal decisions** (watchlist / discarded / outside_circle): they are the anchor for cached `moatboard_analyses` / `valuations` / `moat` rows — deleting them would cascade the quality tier away and break Discovery's at-a-glance tier+flag chips. Only promoted-to-live positions gain `position_transactions` rows.
@@ -223,9 +229,15 @@ quote + fundamentals + multi-year + treasury + relative-history (parallel)
           → anchor 2: fundamental sostenible (ROIC × retention for product, ROE × retention for banks, ROA × retention for REITs)
           → base = min(anchors), capped at GROWTH_CAP (20%); stress = base × 0.7; optimistic = max(anchors), capped
       · FCF yield = (fundamentals.freeCashflow ?? recent SEC FCF) / quote.marketCap
-      · multiple_change_stress = deriveMultipleChangeStress (annualized compression to Q1 PE; 0% if current ≤ Q1)
+      · ensureValuationGuide(ticker, …, availability) — runs HERE so primary_tool is known before implied return derives the multiple
+      · multipleSelection.ts: selectPrimaryMultipleSnapshot({ guide, relative, sector, industry })
+          → AI guide primary_tool (pe/pfcf/pb) → matching snapshot
+          → fallback (no guide / dcf / cash_yield): balance-sheet → P/B, REIT → P/FCF, product → P/FCF
+          → P/FCF derived by inverting the persisted yield snapshot (1/yield)
+      · multiple_change_base = deriveMultipleChangeBase (annualized compression to min(current, median); 0 if current ≤ median)
+      · multiple_change_stress = deriveMultipleChangeStress (annualized compression to Q1; 0 if current ≤ Q1)
       · impliedReturn.ts: computeImpliedReturn → base/stress CAGR + verdict (two-step rule)
-      · save with method='implied_return', assumptions = { fcf_yield, fcf_ttm, market_cap, growth, multiple_change_*, threshold, floor, treasury_yield, base_cagr, stress_cagr, passes_*, verdict, verdict_reason, cross_check, relative_valuation }
+      · save with method='implied_return', assumptions = { fcf_yield, fcf_ttm, market_cap, growth, multiple_change_*, multiple_label, multiple_source, multiple_current/median/q1, multiple_base/stress_terminal, threshold, floor, treasury_yield, base_cagr, stress_cagr, passes_*, verdict, verdict_reason, cross_check, relative_valuation }
 ```
 
 Decision rule (two steps — both must pass):
@@ -236,7 +248,7 @@ When the verdict is negative, `computeTargetBuyPrice` (in `lib/impliedReturn.ts`
 
 Both `ensureValuation` (first render) and `runValuationAction` (user-triggered regenerate) go through the same `computeAndSaveValuation` helper — dispatch logic lives in one place. `qualityTier` is an optional 5th parameter on both signatures so callers that already loaded the analysis can pass it through; otherwise it's resolved internally.
 
-User-edited DCF assumptions (`updateValuationAssumptionsAction`) go through pure recompute only — **no AI re-call**. The relative snapshot and the guide are preserved as-is. Note this action edits the legacy DCF cross-check; the primary implied-return verdict is read-only in v1 (override editable of `multiple_change_stress` on backlog).
+User-edited DCF assumptions (`updateValuationAssumptionsAction`) go through pure recompute only — **no AI re-call**. The relative snapshot and the guide are preserved as-is. Note this action edits the legacy DCF cross-check; the primary implied-return verdict is read-only in v1 (override editable of `multiple_change_*` on backlog — see BACKLOG entry "Cross-sectional anchor + override editable").
 
 ### Cache philosophy
 

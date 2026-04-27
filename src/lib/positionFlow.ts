@@ -59,8 +59,12 @@ import { computeSustainableGrowth } from "@/lib/sustainableGrowth";
 import {
   computeImpliedReturn,
   deriveMultipleChangeStress,
-  DEFAULT_MULTIPLE_CHANGE,
+  deriveMultipleChangeBase,
+  deriveBaseMultiple,
+  deriveStressMultiple,
 } from "@/lib/impliedReturn";
+import { selectPrimaryMultipleSnapshot } from "@/lib/multipleSelection";
+import { ensureValuationGuide } from "@/lib/valuationGuides";
 import type { Tier } from "@/lib/verdict";
 
 export async function ensureAnalysis(
@@ -320,20 +324,49 @@ export async function computeAndSaveValuation(
   const fcf = fcfTtm ?? recentSecFcf ?? 0;
   const fcfYield = marketCap && marketCap > 0 ? fcf / marketCap : 0;
 
-  // Multiple change stress derived from the PE distribution snapshot.
-  // Uses the symmetry between current PE and Q1 PE (both lower = cheaper)
-  // to compute the annualized compression rate over a 10-year horizon.
-  const peSnapshot = relativeContext?.snapshot.pe;
-  const multipleChangeStress = deriveMultipleChangeStress({
-    currentMultiple: peSnapshot?.current ?? null,
-    q1Multiple: peSnapshot?.q1 ?? null,
+  // Resolve the primary multiple — whichever P/X is most informative for
+  // this business per the AI guide, with a deterministic business-type
+  // fallback. The same multiple drives both base (compress to median if
+  // current > median, else hold at current) and stress (compress to Q1).
+  // We need the AI guide to compute this, so it has to run BEFORE the
+  // implied-return computation. Availability flags mirror the position
+  // page's logic exactly so the guide is told which tools are renderable.
+  const isDistributionReady = (
+    s: { current: number | null; median: number | null; q1: number | null; q3: number | null; min: number | null; max: number | null } | null | undefined,
+  ) =>
+    !!s &&
+    s.current !== null &&
+    s.median !== null &&
+    s.q1 !== null &&
+    s.q3 !== null &&
+    s.min !== null &&
+    s.max !== null;
+  const peAvailable = isDistributionReady(relativeContext?.snapshot.pe);
+  const pfcfAvailable = isDistributionReady(relativeContext?.snapshot.fcf_yield);
+  const pbAvailable = isDistributionReady(relativeContext?.snapshot.pb);
+  const valuationGuide = await ensureValuationGuide(ticker, quote, fundamentals, {
+    pe: peAvailable,
+    pfcf: pfcfAvailable,
+    pb: pbAvailable,
   });
+
+  const primaryMultiple = selectPrimaryMultipleSnapshot({
+    guide: valuationGuide,
+    relative: relativeContext?.snapshot,
+    sector,
+    industry,
+  });
+  const primarySnapshot = primaryMultiple?.snapshot ?? null;
+  const multipleChangeBase = deriveMultipleChangeBase(primarySnapshot);
+  const multipleChangeStress = deriveMultipleChangeStress(primarySnapshot);
+  const baseTerminalMultiple = deriveBaseMultiple(primarySnapshot);
+  const stressTerminalMultiple = deriveStressMultiple(primarySnapshot);
 
   const impliedReturn = computeImpliedReturn({
     fcfYield,
     growthBase: growth.base,
     growthStress: growth.stress,
-    multipleChangeBase: DEFAULT_MULTIPLE_CHANGE,
+    multipleChangeBase,
     multipleChangeStress,
     qualityTier: resolvedTier,
     treasuryYield: treasury.currentPct,
@@ -365,8 +398,15 @@ export async function computeAndSaveValuation(
       note: growth.note,
       anchors: growth.anchors,
     },
-    multiple_change_base: DEFAULT_MULTIPLE_CHANGE,
+    multiple_change_base: multipleChangeBase,
     multiple_change_stress: multipleChangeStress,
+    multiple_label: primaryMultiple?.label,
+    multiple_source: primaryMultiple?.source,
+    multiple_current: primaryMultiple?.current ?? null,
+    multiple_median: primaryMultiple?.median ?? null,
+    multiple_q1: primaryMultiple?.q1 ?? null,
+    multiple_base_terminal: baseTerminalMultiple,
+    multiple_stress_terminal: stressTerminalMultiple,
     quality_tier: resolvedTier,
     threshold: impliedReturn.threshold,
     floor: impliedReturn.floor,

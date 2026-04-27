@@ -17,8 +17,12 @@
 //   - Sustainable growth (base) = min(historical CAGR, ROIC × retention).
 //     The disciplined growth assumption — never extrapolate above the
 //     fundamental ceiling.
-//   - Δ Multiple (annualized) = the assumed change in P/FCF over 10 years.
-//     Default 0% (multiple stable). Stress case assumes compression to Q1.
+//   - Δ Multiple (annualized) = the assumed change in the primary multiple
+//     over 10 years. Base case: compress to min(current, median) — assume
+//     mean-reversion when stretched, hold at current when already cheap.
+//     Stress: compress to Q1 of own history. The "primary multiple" is
+//     P/E, P/FCF or P/B per the AI valuation guide / business-type fallback
+//     — see lib/multipleSelection.ts.
 //
 // Decision rule — Buffett's "two-step" applied:
 //
@@ -60,8 +64,9 @@ export const TIER_THRESHOLDS: Record<Tier, number> = {
 // margin — opportunity cost is too high regardless of base expectations.
 export const FLOOR_PREMIUM_OVER_TREASURY = 0.02;
 
-// Default multiple change assumption: 0% (multiple stable). Conservative.
-// Stress case assumes some compression — handled by the calculator caller.
+// Legacy constant — kept for back-compat with any external imports. The
+// implied-return pipeline now derives the base-case multiple change via
+// `deriveMultipleChangeBase` instead of a fixed default.
 export const DEFAULT_MULTIPLE_CHANGE = 0;
 
 export type ImpliedReturnInputs = {
@@ -158,36 +163,114 @@ function tierLabel(t: Tier): string {
   }
 }
 
-// Convenience: derive the multiple-change stress assumption from the
-// PE / P-FCF distribution snapshot. If current multiple is at percentile X
-// of its own history, a stress scenario assumes compression to Q1 over
-// 10 years. Returns annualized decimal, always ≤ 0 (compression, not expansion).
+// Generic multi-quartile snapshot of "the primary multiple" — whatever
+// Moatboard has decided is the most informative one for this business
+// (P/E for compounders with clean earnings, P/FCF when SBC/capex makes
+// PE noisy, P/B for balance-sheet businesses). Unit-agnostic — math works
+// the same way regardless of whether values are P/E ratios or P/FCF.
+export type MultipleSnapshot = {
+  current: number | null;
+  median: number | null;
+  q1: number | null; // 25th percentile — "cheap end" of own history
+};
+
+// Stress-case multiple change: assume the multiple compresses from current
+// to Q1 over 10 years. Returns annualized decimal, always ≤ 0 (compression,
+// not expansion).
 //
-// Formula: if current multiple is M_now and Q1 is M_q1, total compression
-// over 10y = M_q1 / M_now − 1. Annualized = (M_q1/M_now)^(1/10) − 1.
-export function deriveMultipleChangeStress({
-  currentMultiple,
-  q1Multiple,
-}: {
-  currentMultiple: number | null;
-  q1Multiple: number | null;
-}): number {
+// Formula: if current multiple is M_now and Q1 is M_q1,
+//   total compression over 10y = M_q1 / M_now − 1
+//   annualized = (M_q1/M_now)^(1/10) − 1.
+export function deriveMultipleChangeStress(
+  snapshot: MultipleSnapshot | null,
+): number {
   if (
-    currentMultiple === null ||
-    q1Multiple === null ||
-    currentMultiple <= 0 ||
-    q1Multiple <= 0
+    snapshot === null ||
+    snapshot.current === null ||
+    snapshot.q1 === null ||
+    snapshot.current <= 0 ||
+    snapshot.q1 <= 0
   ) {
     // No history — assume modest 1.5%/y compression as a generic stress.
     return -0.015;
   }
-  if (q1Multiple >= currentMultiple) {
+  if (snapshot.q1 >= snapshot.current) {
     // Current is already at or below Q1 — stress assumes no further compression.
     return 0;
   }
-  const totalChange = q1Multiple / currentMultiple;
+  const totalChange = snapshot.q1 / snapshot.current;
   const annualized = Math.pow(totalChange, 1 / 10) - 1;
   return annualized;
+}
+
+// Base-case multiple change: disciplined "no re-rating" rule.
+//
+// Target multiple at year 10 = min(current, median).
+//   - When current > median (multiple stretched): assume mean-reversion to
+//     the own historical median over 10 years. Compression baked in.
+//   - When current ≤ median (multiple at or below norm): hold at current.
+//     Refuse to bake re-expansion into the base case — the value-investor
+//     position. The cheap entry is already captured in FCF Yield; assuming
+//     the multiple comes back to median would double-count the value.
+//
+// Returns annualized signed decimal: 0 when no compression needed,
+// negative when compression is assumed.
+export function deriveMultipleChangeBase(
+  snapshot: MultipleSnapshot | null,
+): number {
+  if (
+    snapshot === null ||
+    snapshot.current === null ||
+    snapshot.median === null ||
+    snapshot.current <= 0 ||
+    snapshot.median <= 0
+  ) {
+    // No history or unusable median — keep the conservative neutral default.
+    return 0;
+  }
+  // min(current, median): if current is at or below median, no re-rating
+  // assumed (return 0); if current is above median, compress toward median.
+  if (snapshot.current <= snapshot.median) {
+    return 0;
+  }
+  const totalChange = snapshot.median / snapshot.current;
+  const annualized = Math.pow(totalChange, 1 / 10) - 1;
+  return annualized;
+}
+
+// What multiple does the base case end up at? Used by the UI so it can
+// label the assumption transparently ("27.5x mediana 10y" vs "11.0x actual").
+// Returns null when the snapshot is unusable.
+export function deriveBaseMultiple(
+  snapshot: MultipleSnapshot | null,
+): number | null {
+  if (
+    snapshot === null ||
+    snapshot.current === null ||
+    snapshot.median === null ||
+    snapshot.current <= 0 ||
+    snapshot.median <= 0
+  ) {
+    return snapshot?.current ?? null;
+  }
+  return snapshot.current <= snapshot.median ? snapshot.current : snapshot.median;
+}
+
+// What multiple does the stress case end up at? = Q1 of own history if
+// usable, otherwise null.
+export function deriveStressMultiple(
+  snapshot: MultipleSnapshot | null,
+): number | null {
+  if (
+    snapshot === null ||
+    snapshot.current === null ||
+    snapshot.q1 === null ||
+    snapshot.current <= 0 ||
+    snapshot.q1 <= 0
+  ) {
+    return null;
+  }
+  return snapshot.q1 >= snapshot.current ? snapshot.current : snapshot.q1;
 }
 
 export const VERDICT_LABELS: Record<ImpliedReturnVerdict, string> = {

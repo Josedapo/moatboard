@@ -116,6 +116,19 @@ export type ImpliedReturnStoredAssumptions = {
   };
   multiple_change_base: number; // signed, annualized
   multiple_change_stress: number; // signed, annualized (typically more negative)
+  // Multiple metadata — surfaced in the UI so the reader can see WHICH
+  // multiple is driving the verdict and at what level it lands in each
+  // scenario. Optional so legacy implied_return rows generated before this
+  // metadata existed still parse.
+  multiple_label?: "P/E" | "P/FCF" | "P/B";
+  multiple_source?: "ai_guide" | "deterministic_fallback";
+  multiple_current?: number | null;
+  multiple_median?: number | null;
+  multiple_q1?: number | null;
+  // Computed terminal multiples for each scenario. Base ends at min(current,
+  // median); stress ends at q1. Nullable when the snapshot is unusable.
+  multiple_base_terminal?: number | null;
+  multiple_stress_terminal?: number | null;
   // Tier-gated decision context
   quality_tier: "exceptional" | "good" | "mediocre" | "poor";
   threshold: number;

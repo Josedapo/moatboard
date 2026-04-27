@@ -309,11 +309,7 @@ function CalculationZone({
             base={pct(assumptions.growth.base)}
             stress={pct(assumptions.growth.stress)}
           />
-          <CalcRow
-            label="+ Δ Múltiplo (anualizado)"
-            base={signedPct(assumptions.multiple_change_base)}
-            stress={signedPct(assumptions.multiple_change_stress)}
-          />
+          <MultipleRow assumptions={assumptions} />
           <tr className="border-t-2 border-navy-300 text-base font-bold">
             <td className="py-3 text-navy-900">= CAGR esperado</td>
             <td className="py-3 text-right tabular-nums text-navy-900">
@@ -380,6 +376,162 @@ function CalcRow({
       <td className="py-2 text-right tabular-nums text-navy-900">{base}</td>
       <td className="py-2 text-right tabular-nums text-navy-700">{stress}</td>
     </tr>
+  );
+}
+
+// Δ Múltiplo row — surfaces the actual terminal multiple in each scenario
+// (headline) with the annualized impact (subordinate). Falls back to the
+// legacy "% only" rendering when the multiple metadata is unavailable
+// (legacy implied_return rows generated before 2026-04-27).
+function MultipleRow({
+  assumptions,
+}: {
+  assumptions: ImpliedReturnStoredAssumptions;
+}) {
+  const label = assumptions.multiple_label ?? null;
+  const baseTerm = assumptions.multiple_base_terminal ?? null;
+  const stressTerm = assumptions.multiple_stress_terminal ?? null;
+  const median = assumptions.multiple_median ?? null;
+  const current = assumptions.multiple_current ?? null;
+
+  // Legacy fallback — show % only.
+  if (label === null || baseTerm === null) {
+    return (
+      <tr>
+        <td className="py-2 text-navy-700">+ Δ Múltiplo (anualizado)</td>
+        <td className="py-2 text-right tabular-nums text-navy-900">
+          {signedPct(assumptions.multiple_change_base)}
+        </td>
+        <td className="py-2 text-right tabular-nums text-navy-700">
+          {signedPct(assumptions.multiple_change_stress)}
+        </td>
+      </tr>
+    );
+  }
+
+  // Caption logic: base case
+  //   - if current ≤ median (no compression assumed): "actual, sin re-rating"
+  //   - else (compression to median): "mediana 10y"
+  const baseCaption =
+    current !== null && median !== null && current <= median
+      ? "actual, sin re-rating"
+      : "mediana 10y";
+
+  // Caption logic: stress case
+  //   - if change == 0 → already at or below Q1 → "ya en Q1 hist."
+  //   - else → "Q1 histórico"
+  const stressCaption =
+    assumptions.multiple_change_stress === 0
+      ? "ya en Q1 hist."
+      : "Q1 histórico";
+
+  return (
+    <tr>
+      <td className="py-2 align-top text-navy-700">
+        Múltiplo {label} a 10y
+        <div className="text-[10px] uppercase tracking-wider text-navy-400">
+          impacto anualizado
+        </div>
+      </td>
+      <td className="py-2 align-top text-right tabular-nums text-navy-900">
+        <div className="font-semibold">{formatMultiple(baseTerm)}</div>
+        <div className="text-[11px] font-normal text-navy-500">
+          {baseCaption}
+        </div>
+        <div className="text-[11px] font-normal italic text-navy-400">
+          {signedPct(assumptions.multiple_change_base)}/año
+        </div>
+      </td>
+      <td className="py-2 align-top text-right tabular-nums text-navy-700">
+        <div className="font-semibold">
+          {stressTerm !== null ? formatMultiple(stressTerm) : "—"}
+        </div>
+        <div className="text-[11px] font-normal text-navy-500">
+          {stressCaption}
+        </div>
+        <div className="text-[11px] font-normal italic text-navy-400">
+          {signedPct(assumptions.multiple_change_stress)}/año
+        </div>
+      </td>
+    </tr>
+  );
+}
+
+function formatMultiple(x: number): string {
+  return `${x.toFixed(1)}x`;
+}
+
+// Detailed prose for the Δ Múltiplo collapsed section. Explains the rule
+// (min(current, median) for base, Q1 for stress) using the actual numbers
+// computed for THIS valuation. Falls back to a generic explanation when
+// the multiple metadata is missing (legacy rows).
+function MultipleDetail({
+  assumptions,
+}: {
+  assumptions: ImpliedReturnStoredAssumptions;
+}) {
+  const label = assumptions.multiple_label ?? null;
+  const current = assumptions.multiple_current ?? null;
+  const median = assumptions.multiple_median ?? null;
+  const q1 = assumptions.multiple_q1 ?? null;
+  const baseTerm = assumptions.multiple_base_terminal ?? null;
+  const stressTerm = assumptions.multiple_stress_terminal ?? null;
+  const source = assumptions.multiple_source ?? null;
+
+  if (label === null || current === null || median === null || baseTerm === null) {
+    return (
+      <p className="text-[12px] leading-relaxed text-navy-600">
+        <strong>Caso base:</strong> múltiplo estable (
+        {signedPct(assumptions.multiple_change_base)}). No asumimos re-rating en
+        ninguna dirección.{" "}
+        <strong>Estrés:</strong>{" "}
+        {signedPct(assumptions.multiple_change_stress)}/año.{" "}
+        {assumptions.multiple_change_stress === 0
+          ? "El múltiplo ya está en el Q1 histórico o por debajo."
+          : "Asumimos vuelta hacia el Q1 histórico a lo largo de 10 años."}
+      </p>
+    );
+  }
+
+  const baseHoldsCurrent = current <= median;
+
+  return (
+    <div className="space-y-2 text-[12px] leading-relaxed text-navy-600">
+      <p>
+        <strong>Múltiplo de referencia:</strong> {label} ({formatMultiple(current)}{" "}
+        actual · {formatMultiple(median)} mediana 10y
+        {q1 !== null ? ` · ${formatMultiple(q1)} Q1 histórico` : ""}).{" "}
+        {source === "ai_guide"
+          ? "Determinado por la AI valuation guide como herramienta primaria para este negocio."
+          : "Determinado por dispatch automático según business type (no hay AI guide disponible o recomendaba un método no-multiple)."}
+      </p>
+      <p>
+        <strong>Caso base:</strong>{" "}
+        {baseHoldsCurrent ? (
+          <>
+            como el múltiplo actual ({formatMultiple(current)}) está al nivel o
+            por debajo de la mediana 10y ({formatMultiple(median)}), mantenemos
+            el actual a 10 años — <em>no asumimos re-rating al alza</em>. La
+            barateza, si la hay, ya se captura en FCF Yield; bake-in de
+            re-expansión sería doble-conteo.
+          </>
+        ) : (
+          <>
+            como el múltiplo actual ({formatMultiple(current)}) cotiza por
+            encima de la mediana 10y ({formatMultiple(median)}), el caso base
+            asume reversión a la mediana sobre 10 años → terminal{" "}
+            {formatMultiple(baseTerm)} ({signedPct(assumptions.multiple_change_base)}/año
+            de drag).
+          </>
+        )}
+      </p>
+      <p>
+        <strong>Estrés:</strong>{" "}
+        {assumptions.multiple_change_stress === 0
+          ? `el múltiplo actual ya está al nivel del Q1 histórico o por debajo (${q1 !== null ? formatMultiple(q1) : "—"}); no asumimos compresión adicional.`
+          : `el escenario malo asume vuelta al Q1 histórico (${stressTerm !== null ? formatMultiple(stressTerm) : "—"}) a lo largo de 10 años, equivalente a ${signedPct(assumptions.multiple_change_stress)}/año de compresión. Q1 (no la mediana) porque el escenario malo debe simular un cuartil bajo creíble, no la tendencia central.`}
+      </p>
+    </div>
   );
 }
 
@@ -454,19 +606,8 @@ function DetailsZone({
         </DetailSection>
 
         {/* Multiple change */}
-        <DetailSection title="Δ Múltiplo">
-          <p className="text-[12px] leading-relaxed text-navy-600">
-            <strong>Caso base:</strong> múltiplo estable (
-            {signedPct(assumptions.multiple_change_base)}). No asumimos
-            re-rating en ninguna dirección.
-          </p>
-          <p className="mt-1 text-[12px] leading-relaxed text-navy-600">
-            <strong>Estrés:</strong>{" "}
-            {signedPct(assumptions.multiple_change_stress)}/año.{" "}
-            {assumptions.multiple_change_stress === 0
-              ? "El múltiplo actual ya está en el Q1 histórico o por debajo, así que no asumimos compresión adicional."
-              : "El múltiplo actual cotiza por encima del Q1 histórico; asumimos vuelta hacia ese suelo a lo largo de 10 años (caída anualizada)."}
-          </p>
+        <DetailSection title="Múltiplo a 10 años">
+          <MultipleDetail assumptions={assumptions} />
         </DetailSection>
 
         {/* Tier thresholds */}
