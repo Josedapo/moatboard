@@ -11,6 +11,7 @@ import {
 } from "@/lib/secDocument";
 import type { UnderstandingFilingInput } from "@/lib/businessUnderstandingAi";
 import type { RedFlagsFilingInput } from "@/lib/redFlagsAi";
+import type { MoatFilingInput } from "@/lib/moatAi";
 
 const MIN_USABLE_CHARS = 5_000;
 
@@ -41,6 +42,43 @@ export async function prepareUnderstandingFiling(
   } catch (err) {
     console.error(
       `prepareUnderstandingFiling: ${ticker} filing fetch failed: ${(err as Error).message}`,
+    );
+    return null;
+  }
+}
+
+// Moat assessment wants Item 1 (Business description) — the canonical
+// place where management describes how the company actually competes
+// (customers, suppliers, distribution, technology, regulation, brand,
+// scale). Item 1 lives at the start of any 10-K, so the same start-
+// preserving truncation that Understanding uses is the right call.
+// Returning the same shape as the Understanding filing (kept as a
+// distinct type so future divergence — e.g. larger window for moat —
+// stays cheap).
+export async function prepareMoatFiling(
+  ticker: string,
+): Promise<MoatFilingInput | null> {
+  const filing = await fetchLatestAnnualFiling(ticker);
+  if (!filing) return null;
+
+  try {
+    const { text, truncated } = await fetchFilingText(filing.url, {
+      preserve: "start",
+    });
+    if (!text || text.length < MIN_USABLE_CHARS) return null;
+
+    return {
+      text,
+      truncated,
+      accession: filing.accession,
+      form: filing.form,
+      filingDate: filing.filingDate,
+      reportDate: filing.reportDate,
+      url: filing.url,
+    };
+  } catch (err) {
+    console.error(
+      `prepareMoatFiling: ${ticker} filing fetch failed: ${(err as Error).message}`,
     );
     return null;
   }

@@ -110,6 +110,15 @@ CREATE TABLE IF NOT EXISTS moat_assessments (
     'ip', 'regulatory', 'cost_advantage', 'none'
   )),
   reasoning TEXT NOT NULL,
+  -- Literal English excerpt from the 10-K that grounds the moat claim.
+  -- Optional: pre-2026-04-27 rows lacked filing context; null means the
+  -- moat was inferred without primary-source citation.
+  source_excerpt TEXT,
+  -- The 10-K this moat was evaluated against. Used by the staleness
+  -- check: a moat tied to an outdated accession is regenerated when SEC
+  -- publishes a newer annual filing (parallels business_understanding).
+  last_10k_accession VARCHAR(30),
+  last_10k_period_end DATE,
   evaluated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   evaluated_with_model VARCHAR(50) NOT NULL DEFAULT 'claude-sonnet-4-6'
 );

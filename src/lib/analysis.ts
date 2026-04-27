@@ -15,6 +15,7 @@ import {
 } from "@/lib/financial";
 import { getMoatAssessment, saveMoatAssessment, isMoatStale } from "@/lib/moats";
 import { assessMoat } from "@/lib/moatAi";
+import { prepareMoatFiling } from "@/lib/filingForPrompt";
 import {
   computeQualityTier,
   renderVerdictReason,
@@ -52,22 +53,43 @@ export async function runAnalysis(ticker: string): Promise<AnalysisResult> {
     );
   }
 
-  // Get or create moat assessment (cached, shared across users)
+  // Get or create moat assessment (cached, shared across users). The
+  // 10-K filing is prepared lazily — only fetched when we need to
+  // (re)evaluate, so cache hits stay free of SEC traffic.
   let moat = await getMoatAssessment(ticker);
   if (!moat || isMoatStale(moat)) {
-    const { evaluation, model } = await assessMoat(
-      ticker,
-      quote,
-      fundamentals,
-      multiYear,
-    );
-    moat = await saveMoatAssessment({
-      ticker,
-      strength: evaluation.strength,
-      archetype: evaluation.archetype,
-      reasoning: evaluation.reasoning,
-      model,
-    });
+    const filing = await prepareMoatFiling(ticker);
+    // Re-check staleness with the SEC accession in hand. If the cache
+    // already covers this filing, skip the AI call.
+    const cacheCoversLatest =
+      moat &&
+      filing &&
+      moat.last_10k_accession === filing.accession &&
+      moat.source_excerpt;
+    if (!cacheCoversLatest) {
+      const { evaluation, model } = await assessMoat(
+        ticker,
+        quote,
+        fundamentals,
+        multiYear,
+        filing,
+      );
+      moat = await saveMoatAssessment({
+        ticker,
+        strength: evaluation.strength,
+        archetype: evaluation.archetype,
+        reasoning: evaluation.reasoning,
+        sourceExcerpt: evaluation.source_excerpt ?? null,
+        last10kAccession: filing?.accession ?? null,
+        last10kPeriodEnd: filing?.reportDate ?? null,
+        model,
+      });
+    }
+  }
+  if (!moat) {
+    // Unreachable: every path through the conditional above either
+    // returns a cached moat or saves a new one. Guard for typescript.
+    throw new Error(`Moat assessment unavailable for ${ticker}`);
   }
 
   // Buffett's one-dollar test — reference signal, shown in Additional
