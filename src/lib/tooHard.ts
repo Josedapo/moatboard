@@ -16,17 +16,23 @@
 
 import type { MoatArchetype, MoatStrength } from "@/lib/verdict";
 
+// Keys are case-sensitive yfinance strings. Industries use " - "
+// (space-hyphen-space) as separator — verify against peerMedians.ts or
+// quote.industry before adding new entries (em-dash "—" silently fails).
+
 const HARD_SECTORS = new Set([
   "Basic Materials",
   "Energy",
+  "Utilities",
 ]);
 
 const HARD_INDUSTRIES = new Set([
   "Biotechnology",
-  "Drug Manufacturers—Specialty & Generic",
+  "Drug Manufacturers - Specialty & Generic",
   "Airlines",
-  "Oil & Gas Exploration & Production",
+  "Oil & Gas E&P",
   "Oil & Gas Drilling",
+  "Oil & Gas Refining & Marketing",
   "Coal",
   "Copper",
   "Silver",
@@ -36,6 +42,7 @@ const HARD_INDUSTRIES = new Set([
   "Resorts & Casinos",
   "Gambling",
   "Semiconductor Equipment & Materials",
+  "REIT - Mortgage",
 ]);
 
 export type TooHardAssessment = {
