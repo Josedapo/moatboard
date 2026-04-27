@@ -677,6 +677,62 @@ CREATE INDEX IF NOT EXISTS idx_discovery_holdings_ticker
 CREATE INDEX IF NOT EXISTS idx_discovery_holdings_cusip
   ON discovery_holdings(cusip);
 
+-- Discovery pre-analysis: agentic Quality + Moat + Red flags pre-tiering
+-- across the Discovery roster. Populated by runDiscoveryPreAnalysisJob;
+-- consumed by the Discovery leaderboard (tier chip + serious-flags badge)
+-- and by the future "what changed materially this week?" inbox.
+--
+-- One row per ticker (ticker as PK because pre-analysis is global, not
+-- per-user — same pattern as moat_assessments / valuation_guides).
+-- Tickers that don't pass coverage gates (SEC <5y, fewer than 2 funds,
+-- <5 applicable scorecard dimensions) get a row with status='not_covered'
+-- so we don't re-attempt them on every cron run.
+CREATE TABLE IF NOT EXISTS discovery_pre_analyses (
+  ticker VARCHAR(10) PRIMARY KEY,
+  status VARCHAR(20) NOT NULL CHECK (
+    status IN ('covered', 'not_covered', 'pending', 'error')
+  ),
+  -- Quality outputs (populated only when status='covered').
+  tier VARCHAR(15) CHECK (
+    tier IS NULL OR tier IN ('exceptional', 'good', 'mediocre', 'poor')
+  ),
+  applicable_dimensions INT,
+  scorecard_summary JSONB,
+  moat_strength VARCHAR(10) CHECK (
+    moat_strength IS NULL OR moat_strength IN ('strong', 'weak', 'unclear')
+  ),
+  moat_archetype VARCHAR(30) CHECK (
+    moat_archetype IS NULL OR moat_archetype IN (
+      'brand', 'network_effects', 'switching_costs', 'scale',
+      'ip', 'regulatory', 'cost_advantage', 'none'
+    )
+  ),
+  -- Red flags pre-processing (decision: included in v1 because tier
+  -- without flags can mislead — going-concern can flip Exceptional to
+  -- "do not enter" instantly).
+  has_serious_red_flags BOOLEAN NOT NULL DEFAULT FALSE,
+  serious_red_flags_count INT NOT NULL DEFAULT 0,
+  watch_red_flags_count INT NOT NULL DEFAULT 0,
+  -- 10-K accession the pre-analysis was evaluated against. Staleness:
+  -- when SEC publishes a newer 10-K (delta detected by the daily signals
+  -- cron extension), the row is invalidated and re-run.
+  last_10k_accession VARCHAR(30),
+  last_10k_period_end DATE,
+  -- Reason for not_covered (e.g. "SEC <5y of fundamentals",
+  -- "below 2-fund threshold", "<5 applicable scorecard dimensions").
+  not_covered_reason VARCHAR(200),
+  -- Last-attempt error message when status='error'.
+  error_message VARCHAR(500),
+  evaluated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  evaluated_with_model VARCHAR(50)
+);
+
+CREATE INDEX IF NOT EXISTS idx_discovery_pre_analyses_tier
+  ON discovery_pre_analyses(status, tier);
+CREATE INDEX IF NOT EXISTS idx_discovery_pre_analyses_serious
+  ON discovery_pre_analyses(has_serious_red_flags)
+  WHERE status = 'covered';
+
 -- CUSIP → ticker cache. Permanent once resolved. ticker nullable when
 -- OpenFIGI can't map (private companies, foreign securities). Source
 -- tracks where the resolution came from for manual audits.
