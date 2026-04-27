@@ -26,17 +26,52 @@ const BUSINESS_TIER_CHIP: Record<
   },
 };
 
-export function BusinessTierChip({ tier }: { tier: Tier | null }) {
+export function BusinessTierChip({
+  tier,
+  source = null,
+  notCoveredReason = null,
+}: {
+  tier: Tier | null;
+  source?: "user" | "agent" | null;
+  // When non-null and tier is null, render "no soportado" italic with
+  // tooltip — distinguishes "agent ran the gate and rejected" from
+  // "nobody has looked at this yet".
+  notCoveredReason?: string | null;
+}) {
   if (!tier) {
+    if (notCoveredReason) {
+      return (
+        <span
+          className="text-xs italic text-navy-400"
+          title={notCoveredReason}
+        >
+          no soportado
+        </span>
+      );
+    }
     return <span className="text-xs italic text-navy-300">—</span>;
   }
   const style = BUSINESS_TIER_CHIP[tier];
+  const isAgent = source === "agent";
   return (
     <span
       className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-semibold ${style.chip}`}
+      title={
+        isAgent
+          ? "Tier estimado por el agente desde el último 10-K. Pendiente de análisis manual (Understanding + Valuation)."
+          : undefined
+      }
     >
-      <span aria-hidden className={`h-1.5 w-1.5 rounded-full ${style.dot}`} />
+      <span
+        aria-hidden
+        className={`h-1.5 w-1.5 rounded-full ${style.dot} ${isAgent ? "opacity-50" : ""}`}
+      />
       {style.label}
+      {isAgent && (
+        <span className="ml-0.5 text-[9px] font-normal uppercase tracking-wider opacity-70">
+          ·agente
+        </span>
+      )}
     </span>
   );
 }

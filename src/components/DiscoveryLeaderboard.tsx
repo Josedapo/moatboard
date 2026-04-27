@@ -39,6 +39,32 @@ const FILTERS: { key: FilterKey; label: string }[] = [
   { key: "discarded", label: "Descartadas" },
 ];
 
+type TierFilterKey =
+  | "all"
+  | "exceptional_only"
+  | "good_plus"
+  | "mediocre_plus"
+  | "no_tier";
+
+const TIER_FILTERS: { key: TierFilterKey; label: string }[] = [
+  { key: "all", label: "Todas" },
+  { key: "exceptional_only", label: "Solo Exceptional" },
+  { key: "good_plus", label: "Good+" },
+  { key: "mediocre_plus", label: "Mediocre+" },
+  { key: "no_tier", label: "Sin tier aún" },
+];
+
+type FlagsFilterKey = "all" | "no_serious" | "with_serious";
+
+const FLAGS_FILTERS: { key: FlagsFilterKey; label: string }[] = [
+  { key: "all", label: "Todas" },
+  { key: "no_serious", label: "Sin red flags graves" },
+  { key: "with_serious", label: "Con red flags graves" },
+];
+
+// Order: best to worst. Used by tier filters to gate "X+".
+const TIER_ORDER: BusinessTier[] = ["exceptional", "good", "mediocre", "poor"];
+
 const STATE_STYLE: Record<
   string,
   { label: string; chip: string }
@@ -99,6 +125,8 @@ export default function DiscoveryLeaderboard({
   rows: LeaderboardRow[];
 }) {
   const [filter, setFilter] = useState<FilterKey>("all");
+  const [tierFilter, setTierFilter] = useState<TierFilterKey>("all");
+  const [flagsFilter, setFlagsFilter] = useState<FlagsFilterKey>("all");
   const [query, setQuery] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [sortKey, setSortKey] = useState<SortKey>("conviction");
@@ -145,6 +173,38 @@ export default function DiscoveryLeaderboard({
         return false;
       if (q && !r.ticker.includes(q) && !r.issuer_name.toUpperCase().includes(q))
         return false;
+
+      // Tier filter (agent or user verdict, doesn't matter — both are
+      // tier on the same scale).
+      if (tierFilter !== "all") {
+        if (tierFilter === "no_tier") {
+          if (r.business_tier !== null) return false;
+        } else if (tierFilter === "exceptional_only") {
+          if (r.business_tier !== "exceptional") return false;
+        } else {
+          // good_plus / mediocre_plus: rank-based "at-or-better" gate.
+          // Untiered rows fail because we can't claim they meet the bar.
+          if (r.business_tier === null) return false;
+          const minRank =
+            tierFilter === "good_plus"
+              ? TIER_ORDER.indexOf("good")
+              : TIER_ORDER.indexOf("mediocre");
+          const tierRank = TIER_ORDER.indexOf(r.business_tier);
+          if (tierRank > minRank) return false;
+        }
+      }
+
+      // Flags filter — only meaningful for analyzed rows. Untiered rows
+      // pass when "all", fail otherwise (we can't evaluate flags we
+      // haven't computed).
+      if (flagsFilter !== "all") {
+        if (r.business_tier === null) return false;
+        if (flagsFilter === "no_serious" && r.serious_flag_count > 0)
+          return false;
+        if (flagsFilter === "with_serious" && r.serious_flag_count === 0)
+          return false;
+      }
+
       return true;
     });
 
@@ -177,7 +237,7 @@ export default function DiscoveryLeaderboard({
         }
       }
     });
-  }, [rows, filter, query, sortKey, sortDir]);
+  }, [rows, filter, query, sortKey, sortDir, tierFilter, flagsFilter]);
 
   const counts = useMemo(() => {
     const c: Record<FilterKey, number> = {
@@ -236,6 +296,49 @@ export default function DiscoveryLeaderboard({
           placeholder="Filtrar por ticker o empresa…"
           className="ml-auto w-64 rounded-lg border border-navy-200 bg-white px-3 py-1.5 text-xs text-navy-800 placeholder-navy-400 focus:border-navy-400 focus:outline-none"
         />
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2 text-xs">
+        <span className="font-semibold uppercase tracking-wider text-navy-500">
+          Calidad
+        </span>
+        {TIER_FILTERS.map((f) => {
+          const active = tierFilter === f.key;
+          return (
+            <button
+              key={f.key}
+              type="button"
+              onClick={() => setTierFilter(f.key)}
+              className={
+                active
+                  ? "rounded-full bg-navy-900 px-2.5 py-1 text-xs font-semibold text-white"
+                  : "rounded-full border border-navy-200 bg-white px-2.5 py-1 text-xs font-medium text-navy-700 hover:border-navy-400 hover:text-navy-900"
+              }
+            >
+              {f.label}
+            </button>
+          );
+        })}
+        <span className="ml-4 font-semibold uppercase tracking-wider text-navy-500">
+          Red flags
+        </span>
+        {FLAGS_FILTERS.map((f) => {
+          const active = flagsFilter === f.key;
+          return (
+            <button
+              key={f.key}
+              type="button"
+              onClick={() => setFlagsFilter(f.key)}
+              className={
+                active
+                  ? "rounded-full bg-navy-900 px-2.5 py-1 text-xs font-semibold text-white"
+                  : "rounded-full border border-navy-200 bg-white px-2.5 py-1 text-xs font-medium text-navy-700 hover:border-navy-400 hover:text-navy-900"
+              }
+            >
+              {f.label}
+            </button>
+          );
+        })}
       </div>
 
       <div className="overflow-x-auto rounded-2xl border border-navy-100 bg-white">
@@ -365,7 +468,15 @@ function LeaderboardTableRow({
           {row.issuer_name}
         </td>
         <td className="px-3 py-3">
-          <BusinessTierChip tier={row.business_tier} />
+          <BusinessTierChip
+            tier={row.business_tier}
+            source={row.business_tier_source}
+            notCoveredReason={
+              row.pre_analysis_status === "not_covered"
+                ? row.pre_analysis_reason
+                : null
+            }
+          />
         </td>
         <td className="px-3 py-3">
           <FlagsBadge

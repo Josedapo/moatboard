@@ -17,6 +17,8 @@ export type FundInPosition = {
 
 export type BusinessTier = "exceptional" | "good" | "mediocre" | "poor";
 
+export type PreAnalysisStatus = "covered" | "not_covered" | "pending" | "error";
+
 export type LeaderboardRow = {
   ticker: string;
   issuer_name: string;
@@ -30,11 +32,24 @@ export type LeaderboardRow = {
   total_value_usd: number;
   fund_breakdown: FundInPosition[];
   ticker_state: string | null; // in_portfolio / watchlist / discarded / outside_circle / null
-  // Populated when the user has already analyzed this ticker and Moatboard
-  // has a cached verdict / red flag extraction. Null/zero when unseen.
+  // Quality verdict: prefers the user's own analysis (deeper) when it
+  // exists, falls back to the agent's pre-analysis (covers the ~230
+  // tickers that pass the gate without requiring the user to have
+  // touched them). Null when neither exists.
   business_tier: BusinessTier | null;
+  // Where the verdict came from: 'user' (their own moatboard_analyses
+  // row), 'agent' (discovery_pre_analyses), null (no verdict yet).
+  business_tier_source: "user" | "agent" | null;
   serious_flag_count: number;
   watch_flag_count: number;
+  // The agent's coverage status. Lets the UI distinguish:
+  //   'covered'      → agent analyzed; tier is reliable
+  //   'not_covered'  → agent ran the gate and said no (SEC <5y, <2 funds, <5 dims)
+  //   'pending'      → agent has it queued
+  //   'error'        → last attempt failed (next cron retries)
+  //   null           → not yet seen by the agent (cron hasn't reached it)
+  pre_analysis_status: PreAnalysisStatus | null;
+  pre_analysis_reason: string | null; // not_covered_reason or error_message
 };
 
 export type LeaderboardMeta = {
@@ -49,10 +64,18 @@ export type LeaderboardMeta = {
 // aggregate by canonical ticker — dual-class share pairs (GOOG/GOOGL,
 // BRK-A/BRK-B) collapse into one business via ticker_aliases so a fund
 // that holds both share classes contributes once with summed weight.
+type LeaderboardRowRaw = Omit<
+  LeaderboardRow,
+  "business_tier" | "business_tier_source"
+> & {
+  user_business_tier: BusinessTier | null;
+  agent_business_tier: BusinessTier | null;
+};
+
 export async function computeLeaderboard(
   userId: string | number,
 ): Promise<{ rows: LeaderboardRow[]; meta: LeaderboardMeta }> {
-  const rows = (await sql`
+  const raw = (await sql`
     WITH latest_filing AS (
       SELECT DISTINCT ON (fund_id)
         id, fund_id, period_of_report
@@ -124,11 +147,10 @@ export async function computeLeaderboard(
         ) ORDER BY fh.tier, fh.display_name
       ) AS fund_breakdown,
       ts.status AS ticker_state,
-      -- Per-user: the most recent quality verdict this user computed for
-      -- this business, across any position (draft or live) of any share
-      -- class. Joins via canonical so a GOOG-position analysis surfaces
-      -- on the GOOGL row and vice versa. Null when the user hasn't
-      -- analyzed the business yet.
+      -- Verdict lookup: user's own analysis wins (deeper; they've
+      -- already done Understanding + Red flags + Valuation). Agent's
+      -- pre-analysis is the fallback that covers tickers the user
+      -- hasn't touched. Null when neither exists.
       (SELECT ma.tier
          FROM moatboard_analyses ma
          JOIN positions p ON p.id = ma.position_id
@@ -136,19 +158,39 @@ export async function computeLeaderboard(
          WHERE p.user_id = ${userId}
            AND COALESCE(p_ta.canonical_ticker, p.ticker) = fh.ticker
          ORDER BY ma.generated_at DESC
-         LIMIT 1) AS business_tier,
-      -- Per-ticker shared cache, keyed under canonical post-migration
-      -- (so fh.ticker matches qualitative_red_flags.ticker directly).
-      COALESCE((SELECT COUNT(*)::int
-         FROM qualitative_red_flags qrf,
-              jsonb_array_elements(qrf.flags) AS f
-         WHERE qrf.ticker = fh.ticker
-           AND f->>'severity' = 'serious'), 0) AS serious_flag_count,
-      COALESCE((SELECT COUNT(*)::int
-         FROM qualitative_red_flags qrf,
-              jsonb_array_elements(qrf.flags) AS f
-         WHERE qrf.ticker = fh.ticker
-           AND f->>'severity' = 'watch'), 0) AS watch_flag_count
+         LIMIT 1) AS user_business_tier,
+      (SELECT dpa.tier FROM discovery_pre_analyses dpa
+         WHERE dpa.ticker = fh.ticker AND dpa.status = 'covered'
+         LIMIT 1) AS agent_business_tier,
+      -- Red flags: prefer the agent's pre-computed counts (one source
+      -- of truth, atomic with its tier). Fallback to direct count over
+      -- qualitative_red_flags for legacy / user-only data.
+      COALESCE(
+        (SELECT dpa.serious_red_flags_count FROM discovery_pre_analyses dpa
+           WHERE dpa.ticker = fh.ticker AND dpa.status = 'covered' LIMIT 1),
+        (SELECT COUNT(*)::int
+           FROM qualitative_red_flags qrf,
+                jsonb_array_elements(qrf.flags) AS f
+           WHERE qrf.ticker = fh.ticker
+             AND f->>'severity' = 'serious'),
+        0
+      ) AS serious_flag_count,
+      COALESCE(
+        (SELECT dpa.watch_red_flags_count FROM discovery_pre_analyses dpa
+           WHERE dpa.ticker = fh.ticker AND dpa.status = 'covered' LIMIT 1),
+        (SELECT COUNT(*)::int
+           FROM qualitative_red_flags qrf,
+                jsonb_array_elements(qrf.flags) AS f
+           WHERE qrf.ticker = fh.ticker
+             AND f->>'severity' = 'watch'),
+        0
+      ) AS watch_flag_count,
+      -- Agent coverage status (and reason when not_covered or errored).
+      (SELECT dpa.status FROM discovery_pre_analyses dpa
+         WHERE dpa.ticker = fh.ticker LIMIT 1) AS pre_analysis_status,
+      (SELECT COALESCE(dpa.not_covered_reason, dpa.error_message)
+         FROM discovery_pre_analyses dpa
+         WHERE dpa.ticker = fh.ticker LIMIT 1) AS pre_analysis_reason
     FROM fund_holdings fh
     -- Per-user state: canonicalize the user's ticker_states row before
     -- joining so a watchlist/discarded entry under either share class
@@ -166,7 +208,23 @@ export async function computeLeaderboard(
     ) ts ON ts.canonical_ticker = fh.ticker
     GROUP BY fh.ticker, ts.status
     ORDER BY conviction_score DESC
-  `) as unknown as LeaderboardRow[];
+  `) as unknown as LeaderboardRowRaw[];
+
+  const rows: LeaderboardRow[] = raw.map((r) => {
+    const business_tier = r.user_business_tier ?? r.agent_business_tier;
+    const business_tier_source: LeaderboardRow["business_tier_source"] =
+      r.user_business_tier !== null
+        ? "user"
+        : r.agent_business_tier !== null
+          ? "agent"
+          : null;
+    const {
+      user_business_tier: _u,
+      agent_business_tier: _a,
+      ...rest
+    } = r;
+    return { ...rest, business_tier, business_tier_source };
+  });
 
   const metaRows = (await sql`
     SELECT

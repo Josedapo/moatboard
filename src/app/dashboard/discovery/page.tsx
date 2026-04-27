@@ -4,10 +4,13 @@ import { redirect } from "next/navigation";
 import { computeLeaderboard } from "@/lib/discoveryLeaderboard";
 import { computeDeltaWindow } from "@/lib/discoveryDelta";
 import { listRecentFilingsForUser } from "@/lib/discoveryRecentFilings";
+import { getPreAnalysisStats } from "@/lib/preAnalysisStats";
+import { getLatestCronRun } from "@/lib/cronRuns";
 import DashboardNav from "@/components/DashboardNav";
 import DiscoveryLeaderboard from "@/components/DiscoveryLeaderboard";
 import DiscoveryNewEntrants from "@/components/DiscoveryNewEntrants";
 import DiscoveryRecentFilingsPanel from "@/components/DiscoveryRecentFilingsPanel";
+import DiscoveryAgentHeartbeat from "@/components/DiscoveryAgentHeartbeat";
 import AnalyzeEntryForm from "@/components/AnalyzeEntryForm";
 
 export const metadata = {
@@ -27,11 +30,14 @@ export default async function DiscoveryPage() {
   const session = await auth();
   if (!session?.user?.id) redirect("/auth/signin");
 
-  const [{ rows, meta }, delta, recentFilings] = await Promise.all([
-    computeLeaderboard(session.user.id),
-    computeDeltaWindow(session.user.id),
-    listRecentFilingsForUser({ userId: session.user.id }),
-  ]);
+  const [{ rows, meta }, delta, recentFilings, preAnalysisStats, lastCronRun] =
+    await Promise.all([
+      computeLeaderboard(session.user.id),
+      computeDeltaWindow(session.user.id),
+      listRecentFilingsForUser({ userId: session.user.id }),
+      getPreAnalysisStats(),
+      getLatestCronRun("discovery_pre_analysis_weekly"),
+    ]);
   const quarterLabel = meta.latestQuarter
     ? formatQuarter(meta.latestQuarter)
     : "—";
@@ -69,6 +75,13 @@ export default async function DiscoveryPage() {
 
         <section className="mb-6">
           <AnalyzeEntryForm variant="inline" />
+        </section>
+
+        <section className="mb-6">
+          <DiscoveryAgentHeartbeat
+            stats={preAnalysisStats}
+            lastRun={lastCronRun}
+          />
         </section>
 
         <section className="mb-6">
