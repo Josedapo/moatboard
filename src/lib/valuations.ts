@@ -2,7 +2,8 @@ import { sql } from "@/lib/db";
 import type { CompoundTier, DcfTier, RelativeTier } from "@/lib/valuation";
 
 export type ValuationMethod =
-  | "dcf" // owner earnings two-stage DCF (default for product businesses)
+  | "implied_return" // 2026-04-25 — primary method, FCF Yield + Growth + Δ Multiple
+  | "dcf" // owner earnings two-stage DCF (cross-check, secondary)
   | "affo_dcf" // same math as dcf, labeled for real estate (AFFO proxy)
   | "excess_returns" // banks/insurers — ROE vs Cost of Equity on book value
   | "ai_multiples"; // fallback when no absolute method applies
@@ -83,6 +84,73 @@ export type AiMultiplesStoredAssumptions = {
   relative_valuation?: RelativeValuationSnapshot;
 };
 
+// Implied Return Model — primary method since 2026-04-25 redesign. Frames
+// valuation as "what return can I expect at this price?" rather than "is
+// this below intrinsic?". The frame Buffett post-1985, Smith, and Akre
+// use operationally. See lib/impliedReturn.ts for the math; lib/sustainable
+// Growth.ts for how growth anchors are derived.
+//
+// `cross_check` carries the absolute-valuation result (DCF / AFFO / Excess
+// Returns / AI multiples) computed in parallel — kept secondary for users
+// who want to see the deep-value lens, never used as the primary verdict.
+export type ImpliedReturnStoredAssumptions = {
+  // Inputs
+  fcf_yield: number;
+  fcf_ttm: number; // absolute USD, used to render the calculation transparently
+  market_cap: number;
+  // Growth — the full set of anchors so the UI can render the rationale.
+  growth: {
+    base: number;
+    stress: number;
+    optimistic: number;
+    driver: "historical" | "fundamental" | null;
+    cap_applied: boolean;
+    note?: string;
+    anchors: Array<{
+      key: "historical" | "fundamental";
+      label: string;
+      value: number | null;
+      formula: string;
+      note?: string;
+    }>;
+  };
+  multiple_change_base: number; // signed, annualized
+  multiple_change_stress: number; // signed, annualized (typically more negative)
+  // Tier-gated decision context
+  quality_tier: "exceptional" | "good" | "mediocre" | "poor";
+  threshold: number;
+  floor: number;
+  treasury_yield: number;
+  // Outputs
+  base_cagr: number;
+  stress_cagr: number;
+  optimistic_cagr: number;
+  passes_attractiveness: boolean;
+  passes_no_disaster: boolean;
+  verdict:
+    | "comprable"
+    | "no_comprable_caro"
+    | "no_comprable_riesgo"
+    | "no_comprable_ambos";
+  verdict_reason: string;
+  // Optional cross-check (DCF / AFFO / Excess Returns / AI multiples). Kept
+  // so users can see the deep-value lens in "Otros métodos" without losing
+  // the legacy data path.
+  cross_check?: {
+    method: "dcf" | "affo_dcf" | "excess_returns" | "ai_multiples";
+    intrinsic_value: number;
+    intrinsic_value_low: number;
+    intrinsic_value_high: number;
+    assumptions:
+      | DcfStoredAssumptions
+      | ExcessReturnsStoredAssumptions
+      | AiMultiplesStoredAssumptions;
+    reasoning: string;
+  };
+  // Relative valuation (multiples vs own history) — same shape as legacy.
+  relative_valuation?: RelativeValuationSnapshot;
+};
+
 // Banks, insurers, balance-sheet businesses — Excess Returns Model.
 // IV = Book Value + PV of (ROE − Cost of Equity) × BV_{t-1} over a 10y
 // horizon, fading to zero excess returns beyond year 10 (competitive
@@ -116,6 +184,7 @@ export type Valuation = {
   dcf_tier: DcfTier;
   relative_tier: RelativeTier | null;
   assumptions:
+    | ImpliedReturnStoredAssumptions
     | DcfStoredAssumptions
     | AiMultiplesStoredAssumptions
     | ExcessReturnsStoredAssumptions;
@@ -162,6 +231,7 @@ export async function saveValuation({
   dcfTier: DcfTier;
   relativeTier: RelativeTier | null;
   assumptions:
+    | ImpliedReturnStoredAssumptions
     | DcfStoredAssumptions
     | AiMultiplesStoredAssumptions
     | ExcessReturnsStoredAssumptions;

@@ -1,5 +1,12 @@
 // "Ensure" helpers — get-or-create flows used by the position detail page so
 // the data is auto-computed on first visit, no buttons required.
+//
+// 2026-04-25 redesign: the primary valuation method is now `implied_return`
+// (FCF Yield + Sustainable Growth + Δ Multiple → CAGR vs threshold by tier).
+// The previous absolute-valuation methods (DCF / AFFO / Excess Returns / AI
+// multiples) are still computed and persisted as a `cross_check` inside the
+// `assumptions` JSONB, so users can see the deep-value lens in "Otros métodos"
+// without it driving the verdict. See `lib/impliedReturn.ts` for the math.
 
 import { runAnalysis } from "@/lib/analysis";
 import {
@@ -36,6 +43,8 @@ import {
   type Valuation,
   type DcfStoredAssumptions,
   type ExcessReturnsStoredAssumptions,
+  type AiMultiplesStoredAssumptions,
+  type ImpliedReturnStoredAssumptions,
   type RelativeValuationSnapshot,
   type ValuationMethod,
 } from "@/lib/valuations";
@@ -46,6 +55,13 @@ import {
   type Quote,
   type Fundamentals,
 } from "@/lib/financial";
+import { computeSustainableGrowth } from "@/lib/sustainableGrowth";
+import {
+  computeImpliedReturn,
+  deriveMultipleChangeStress,
+  DEFAULT_MULTIPLE_CHANGE,
+} from "@/lib/impliedReturn";
+import type { Tier } from "@/lib/verdict";
 
 export async function ensureAnalysis(
   positionId: number,
@@ -91,11 +107,8 @@ export async function computeRelativeValuationContext(
     .filter((v): v is number => v !== null && Number.isFinite(v) && v > 0);
 
   const peStats = computeDistributionStats(peValues);
-  // Classification requires PE stats — the primary relative metric. If PE
-  // doesn't have enough data, fall back to DCF-only (null).
   if (!peStats) return null;
 
-  // Most recent point's multiples as "current".
   const latest = history.points[history.points.length - 1];
   const currentPe = latest.peRatio;
   if (currentPe === null || currentPe <= 0 || !Number.isFinite(currentPe)) {
@@ -115,10 +128,6 @@ export async function computeRelativeValuationContext(
       ? computePercentile(fcfSorted, currentFcfYield)
       : null;
 
-  // P/B snapshot — computed when equity has been positive and stable enough
-  // across the history. When the current book value is zero/negative (some
-  // aggressive-buyback names) the current reads null and the UI will render
-  // "Insufficient data" rather than a misleading multiple.
   const pbStats = computeDistributionStats(pbValues);
   const currentPb = latest.pbRatio;
   const pbSorted = [...pbValues].sort((a, b) => a - b);
@@ -185,9 +194,8 @@ export async function computeRelativeValuationContext(
 }
 
 // Pure helper: given a DCF tier and an optional relative context, return the
-// compound tier + the relative tier value (or null). Used by both
-// ensureValuation and the runValuationAction to keep classification logic
-// in one place.
+// compound tier + the relative tier value (or null). Kept so legacy DCF /
+// Excess Returns rows that pre-date implied_return still classify coherently.
 export function deriveCompoundTier(
   dcfTier: DcfTier,
   relativeContext: RelativeValuationContext | null,
@@ -204,45 +212,66 @@ export async function ensureValuation(
   ticker: string,
   quote: Quote | null,
   fundamentals: Fundamentals | null,
+  qualityTier?: Tier,
 ): Promise<Valuation | null> {
   const existing = await getValuationByPositionId(positionId);
   if (existing) return existing;
-  return computeAndSaveValuation(positionId, ticker, quote, fundamentals);
+  return computeAndSaveValuation(
+    positionId,
+    ticker,
+    quote,
+    fundamentals,
+    qualityTier,
+  );
 }
 
-// Core compute-and-save: used by both ensureValuation (first-visit auto)
-// and runValuationAction (explicit Regenerate button). Having both paths
-// go through this helper is what keeps the sector-aware dispatch (banks →
-// Excess Returns, REITs → AFFO, rest → Owner Earnings DCF) applied
-// consistently. Before this consolidation, runValuationAction carried a
-// duplicate of the old single-branch logic and never routed banks/REITs.
+// Cross-check result shape — what the legacy absolute-valuation methods
+// produce, kept inside the implied_return assumptions JSONB for users who
+// want to see the deep-value lens.
+type LegacyValuationResult = {
+  method: "dcf" | "affo_dcf" | "excess_returns" | "ai_multiples";
+  intrinsicValue: number;
+  intrinsicValueLow: number;
+  intrinsicValueHigh: number;
+  dcfTier: DcfTier;
+  marginOfSafetyPct: number;
+  assumptions:
+    | DcfStoredAssumptions
+    | ExcessReturnsStoredAssumptions
+    | AiMultiplesStoredAssumptions;
+  reasoning: string;
+};
+
+// Core compute-and-save. Computes the implied-return verdict (primary)
+// and the legacy absolute-valuation method (cross-check) in parallel,
+// then persists with method='implied_return' and the legacy result
+// stored under assumptions.cross_check.
 export async function computeAndSaveValuation(
   positionId: number,
   ticker: string,
   quote: Quote | null,
   fundamentals: Fundamentals | null,
+  qualityTier?: Tier,
 ): Promise<Valuation | null> {
   if (!quote || quote.regularMarketPrice == null) {
-    // Cannot compute without a current market price
     return null;
   }
 
   const currentPrice = quote.regularMarketPrice;
   const sharesOutstanding = quote.sharesOutstanding;
+  const marketCap = quote.marketCap;
 
-  if (sharesOutstanding === null || sharesOutstanding <= 0) {
-    return runMultiplesFallback(
-      positionId,
-      ticker,
-      quote,
-      fundamentals,
-      currentPrice,
-      "shares outstanding not available",
-    );
+  // Resolve the quality tier — needed for the implied-return threshold.
+  // Caller can pass it; otherwise we read from moatboard_analyses; final
+  // fallback is 'good' (middle-of-the-road threshold of 14% so the verdict
+  // doesn't artificially inflate or deflate when the analysis is missing).
+  let resolvedTier: Tier = qualityTier ?? "good";
+  if (qualityTier === undefined) {
+    const analysis = await getAnalysisByPositionId(positionId);
+    if (analysis) resolvedTier = analysis.tier;
   }
 
-  // Fetch multi-year, treasury, and relative history in parallel. Treasury +
-  // multi-year feed the DCF; relative history feeds the drift-M second anchor.
+  // Fetch multi-year, treasury, and relative history in parallel.
   const [multiYear, treasury, relativeContext] = await Promise.all([
     fetchMultiYearFundamentals(ticker),
     fetchTenYearTreasuryYieldAverage(),
@@ -252,9 +281,179 @@ export async function computeAndSaveValuation(
   const sector = quote.sector ?? null;
   const industry = quote.industry ?? null;
 
-  // ─── Balance-sheet businesses (banks, insurers, asset managers) ──────
-  // Excess Returns Model instead of DCF. Invested capital isn't meaningful
-  // for a bank; stockholder equity × (ROE − Cost of Equity) is.
+  // Legacy absolute-valuation result (cross-check). Always computed so users
+  // can drill down into the deep-value lens. Returns null only when the
+  // ticker is genuinely uncomputable (no shares outstanding, no method
+  // applies) — in that case implied_return still runs if FCF and growth are
+  // available.
+  const legacy = await computeLegacyValuation({
+    ticker,
+    quote,
+    fundamentals,
+    multiYear,
+    treasury,
+    relativeContext,
+    sharesOutstanding,
+    currentPrice,
+    sector,
+    industry,
+  });
+
+  // Sustainable growth — base, stress, optimistic + the anchors used.
+  const growth = computeSustainableGrowth({
+    multiYear,
+    fundamentals,
+    sector,
+    industry,
+  });
+
+  // FCF yield. Prefer TTM yfinance freeCashflow / market cap; fallback to
+  // the most recent SEC fiscal-year FCF if TTM is unavailable.
+  const fcfTtm =
+    fundamentals?.freeCashflow !== null && fundamentals?.freeCashflow !== undefined
+      ? fundamentals.freeCashflow
+      : null;
+  const recentSecFcf =
+    multiYear && multiYear.years.length > 0
+      ? (multiYear.years[multiYear.years.length - 1].freeCashFlow ?? null)
+      : null;
+  const fcf = fcfTtm ?? recentSecFcf ?? 0;
+  const fcfYield = marketCap && marketCap > 0 ? fcf / marketCap : 0;
+
+  // Multiple change stress derived from the PE distribution snapshot.
+  // Uses the symmetry between current PE and Q1 PE (both lower = cheaper)
+  // to compute the annualized compression rate over a 10-year horizon.
+  const peSnapshot = relativeContext?.snapshot.pe;
+  const multipleChangeStress = deriveMultipleChangeStress({
+    currentMultiple: peSnapshot?.current ?? null,
+    q1Multiple: peSnapshot?.q1 ?? null,
+  });
+
+  const impliedReturn = computeImpliedReturn({
+    fcfYield,
+    growthBase: growth.base,
+    growthStress: growth.stress,
+    multipleChangeBase: DEFAULT_MULTIPLE_CHANGE,
+    multipleChangeStress,
+    qualityTier: resolvedTier,
+    treasuryYield: treasury.currentPct,
+  });
+
+  // Build the cross-check block from the legacy result so users can see
+  // the absolute-valuation lens without re-running the math.
+  const crossCheck = legacy
+    ? {
+        method: legacy.method,
+        intrinsic_value: legacy.intrinsicValue,
+        intrinsic_value_low: legacy.intrinsicValueLow,
+        intrinsic_value_high: legacy.intrinsicValueHigh,
+        assumptions: legacy.assumptions,
+        reasoning: legacy.reasoning,
+      }
+    : undefined;
+
+  const stored: ImpliedReturnStoredAssumptions = {
+    fcf_yield: fcfYield,
+    fcf_ttm: fcf,
+    market_cap: marketCap ?? 0,
+    growth: {
+      base: growth.base,
+      stress: growth.stress,
+      optimistic: growth.optimistic,
+      driver: growth.driver,
+      cap_applied: growth.capApplied,
+      note: growth.note,
+      anchors: growth.anchors,
+    },
+    multiple_change_base: DEFAULT_MULTIPLE_CHANGE,
+    multiple_change_stress: multipleChangeStress,
+    quality_tier: resolvedTier,
+    threshold: impliedReturn.threshold,
+    floor: impliedReturn.floor,
+    treasury_yield: treasury.currentPct,
+    base_cagr: impliedReturn.baseCAGR,
+    stress_cagr: impliedReturn.stressCAGR,
+    optimistic_cagr: impliedReturn.optimisticCAGR,
+    passes_attractiveness: impliedReturn.passesAttractiveness,
+    passes_no_disaster: impliedReturn.passesNoDisaster,
+    verdict: impliedReturn.verdict,
+    verdict_reason: impliedReturn.reason,
+    cross_check: crossCheck,
+    relative_valuation: relativeContext?.snapshot,
+  };
+
+  // The DB schema requires intrinsic_value, intrinsic_value_low/high,
+  // margin_of_safety_pct, tier, dcf_tier — kept for legacy back-compat.
+  // For implied_return the meaningful fields live in assumptions; the
+  // legacy columns are populated with cross-check values when available
+  // so reads from old code paths still get something coherent.
+  const ivBase = legacy?.intrinsicValue ?? currentPrice;
+  const ivLow = legacy?.intrinsicValueLow ?? currentPrice;
+  const ivHigh = legacy?.intrinsicValueHigh ?? currentPrice;
+  const mosPct = legacy?.marginOfSafetyPct ?? 0;
+  const dcfTier: DcfTier = legacy?.dcfTier ?? "fair";
+  const { compoundTier, relativeTier } = deriveCompoundTier(
+    dcfTier,
+    relativeContext,
+  );
+
+  const reasoning = `${impliedReturn.reason}${legacy ? ` Cross-check (${legacy.method}): ${legacy.reasoning}` : ""}`;
+
+  return saveValuation({
+    positionId,
+    method: "implied_return",
+    intrinsicValue: ivBase,
+    intrinsicValueLow: ivLow,
+    intrinsicValueHigh: ivHigh,
+    currentPrice,
+    marginOfSafetyPct: mosPct,
+    tier: compoundTier,
+    dcfTier,
+    relativeTier,
+    assumptions: stored,
+    reasoning,
+  });
+}
+
+// ─── Legacy absolute-valuation pipeline (now: cross-check, not verdict) ──
+// Pure compute — does not write to DB. Returns null when the ticker has no
+// usable absolute-valuation method (negative shares, no FCF history, no
+// book value for a bank, etc.).
+async function computeLegacyValuation({
+  ticker,
+  quote,
+  fundamentals,
+  multiYear,
+  treasury,
+  relativeContext,
+  sharesOutstanding,
+  currentPrice,
+  sector,
+  industry,
+}: {
+  ticker: string;
+  quote: Quote;
+  fundamentals: Fundamentals | null;
+  multiYear: Awaited<ReturnType<typeof fetchMultiYearFundamentals>>;
+  treasury: Awaited<ReturnType<typeof fetchTenYearTreasuryYieldAverage>>;
+  relativeContext: RelativeValuationContext | null;
+  sharesOutstanding: number | null;
+  currentPrice: number;
+  sector: string | null;
+  industry: string | null;
+}): Promise<LegacyValuationResult | null> {
+  if (sharesOutstanding === null || sharesOutstanding <= 0) {
+    return computeMultiplesFallbackResult(
+      ticker,
+      quote,
+      fundamentals,
+      currentPrice,
+      "shares outstanding not available",
+      relativeContext,
+    );
+  }
+
+  // Balance-sheet businesses → Excess Returns Model.
   if (isBalanceSheetBusiness(sector, industry)) {
     const base = computeExcessReturnsBase(
       multiYear,
@@ -274,14 +473,9 @@ export async function computeAndSaveValuation(
         costOfEquity,
         terminalRoe: costOfEquity,
       });
-
       const { mosPct, tier: dcfTier } = classifyMarginOfSafety(
         range.base,
         currentPrice,
-      );
-      const { compoundTier, relativeTier } = deriveCompoundTier(
-        dcfTier,
-        relativeContext,
       );
 
       const stored: ExcessReturnsStoredAssumptions = {
@@ -304,17 +498,13 @@ export async function computeAndSaveValuation(
         relative_valuation: relativeContext?.snapshot,
       };
 
-      return saveValuation({
-        positionId,
+      return {
         method: "excess_returns",
         intrinsicValue: range.base,
         intrinsicValueLow: range.low,
         intrinsicValueHigh: range.high,
-        currentPrice,
-        marginOfSafetyPct: mosPct,
-        tier: compoundTier,
         dcfTier,
-        relativeTier,
+        marginOfSafetyPct: mosPct,
         assumptions: stored,
         reasoning: buildExcessReturnsReasoning(
           base.yearsUsed,
@@ -323,12 +513,9 @@ export async function computeAndSaveValuation(
           fundamentals?.beta ?? null,
           treasury.source,
         ),
-      });
+      };
     }
-    // Distressed bank/insurer: ROE or book value unreliable → fall through
-    // to multiples with an explicit reason.
-    return runMultiplesFallback(
-      positionId,
+    return computeMultiplesFallbackResult(
       ticker,
       quote,
       fundamentals,
@@ -338,9 +525,7 @@ export async function computeAndSaveValuation(
     );
   }
 
-  // ─── Owner earnings / AFFO DCF path ──────────────────────────────────
-  // REITs use the same formula but it's re-labeled as AFFO — for real
-  // estate, NI + D&A − capex is the industry-standard AFFO approximation.
+  // Owner-earnings / AFFO DCF path.
   const trailingFcf = fundamentals?.freeCashflow ?? null;
   const ownerEarnings = computeOwnerEarningsBase(multiYear, trailingFcf);
 
@@ -349,8 +534,7 @@ export async function computeAndSaveValuation(
       trailingFcf !== null && trailingFcf <= 0
         ? "owner earnings / FCF is negative"
         : "cash-flow base not available";
-    return runMultiplesFallback(
-      positionId,
+    return computeMultiplesFallbackResult(
       ticker,
       quote,
       fundamentals,
@@ -377,14 +561,7 @@ export async function computeAndSaveValuation(
     range.base,
     currentPrice,
   );
-  const { compoundTier, relativeTier } = deriveCompoundTier(
-    dcfTier,
-    relativeContext,
-  );
 
-  // Terminal-value concentration at the base hurdle — surfaced in UI so the
-  // reader can see when IV is dominated by the perpetuity (Damodaran's
-  // warning; audit drift V1, 2026-04-18).
   const baseBreakdown = range.breakdowns.base;
   const baseEv = baseBreakdown.enterpriseValue;
   const pvBreakdown =
@@ -421,17 +598,13 @@ export async function computeAndSaveValuation(
 
   const method: ValuationMethod = isRealEstate(sector) ? "affo_dcf" : "dcf";
 
-  return saveValuation({
-    positionId,
-    method,
+  return {
+    method: method === "affo_dcf" ? "affo_dcf" : "dcf",
     intrinsicValue: range.base,
     intrinsicValueLow: range.low,
     intrinsicValueHigh: range.high,
-    currentPrice,
-    marginOfSafetyPct: mosPct,
-    tier: compoundTier,
     dcfTier,
-    relativeTier,
+    marginOfSafetyPct: mosPct,
     assumptions: stored,
     reasoning:
       method === "affo_dcf"
@@ -447,51 +620,44 @@ export async function computeAndSaveValuation(
             terminalGrowth,
             treasury.source,
           ),
-  });
+  };
 }
 
-async function runMultiplesFallback(
-  positionId: number,
+async function computeMultiplesFallbackResult(
   ticker: string,
   quote: Quote,
   fundamentals: Fundamentals | null,
   currentPrice: number,
   reasonNotApplicable: string,
-  // Optional: a relative-valuation context already computed by the caller.
-  // If null/undefined we'll try to compute it ourselves so the second anchor
-  // still applies to multiples-based valuations.
-  precomputedRelative?: RelativeValuationContext | null,
-): Promise<Valuation> {
-  const estimate = await estimateWithMultiples(ticker, quote, fundamentals);
-  const { mosPct, tier: dcfTier } = classifyMarginOfSafety(
-    estimate.intrinsic_value,
-    currentPrice,
-  );
-  const relativeContext =
-    precomputedRelative ?? (await computeRelativeValuationContext(ticker));
-  const { compoundTier, relativeTier } = deriveCompoundTier(
-    dcfTier,
-    relativeContext,
-  );
-
-  return saveValuation({
-    positionId,
-    method: "ai_multiples",
-    intrinsicValue: estimate.intrinsic_value,
-    intrinsicValueLow: estimate.intrinsic_value,
-    intrinsicValueHigh: estimate.intrinsic_value,
-    currentPrice,
-    marginOfSafetyPct: mosPct,
-    tier: compoundTier,
-    dcfTier,
-    relativeTier,
-    assumptions: {
+  relativeContext: RelativeValuationContext | null,
+): Promise<LegacyValuationResult | null> {
+  try {
+    const estimate = await estimateWithMultiples(ticker, quote, fundamentals);
+    const { mosPct, tier: dcfTier } = classifyMarginOfSafety(
+      estimate.intrinsic_value,
+      currentPrice,
+    );
+    const stored: AiMultiplesStoredAssumptions = {
       basis: estimate.basis,
       sector_multiple_used: estimate.sector_multiple_used,
       relative_valuation: relativeContext?.snapshot,
-    },
-    reasoning: `${estimate.reasoning} (DCF not applicable: ${reasonNotApplicable}.)`,
-  });
+    };
+    return {
+      method: "ai_multiples",
+      intrinsicValue: estimate.intrinsic_value,
+      intrinsicValueLow: estimate.intrinsic_value,
+      intrinsicValueHigh: estimate.intrinsic_value,
+      dcfTier,
+      marginOfSafetyPct: mosPct,
+      assumptions: stored,
+      reasoning: `${estimate.reasoning} (DCF not applicable: ${reasonNotApplicable}.)`,
+    };
+  } catch (err) {
+    console.warn(
+      `AI multiples fallback failed for ${ticker}: ${err instanceof Error ? err.message : err}`,
+    );
+    return null;
+  }
 }
 
 export function buildDcfReasoning(
@@ -514,10 +680,6 @@ export function buildDcfReasoning(
   return `${historyNote} Growth projected at ${growthText}. Terminal growth ${terminalAnchor}. Intrinsic value shown as a range across three hurdle rates (10% / 12% / 14%); the headline is the 12% base case.`;
 }
 
-// AFFO-based DCF reasoning for REITs. The math is identical to owner
-// earnings DCF (NI + D&A − avg capex) — for real estate this formula is
-// the industry-standard AFFO proxy because property depreciation is
-// non-cash and reported capex approximates maintenance.
 export function buildAffoReasoning(
   yearsUsed: number,
   stageOneGrowth: number,
@@ -538,9 +700,6 @@ export function buildAffoReasoning(
   return `${historyNote} Growth projected at ${growthText}. Terminal growth ${terminalAnchor}. Intrinsic value shown as a range across three hurdle rates (10% / 12% / 14%); the headline is the 12% base case.`;
 }
 
-// Excess Returns Model reasoning for banks/insurers. IV = current book
-// value + PV of economic profits (ROE − Ke) × BV over a 10-year horizon,
-// fading to zero excess returns at year 10 (competitive equilibrium).
 export function buildExcessReturnsReasoning(
   yearsUsed: number,
   stableRoe: number,

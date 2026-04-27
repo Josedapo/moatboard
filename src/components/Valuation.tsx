@@ -19,6 +19,7 @@ import type {
   DcfStoredAssumptions,
   AiMultiplesStoredAssumptions,
   ExcessReturnsStoredAssumptions,
+  ImpliedReturnStoredAssumptions,
   RelativeMetricSnapshot,
   RelativeValuationSnapshot,
 } from "@/lib/valuations";
@@ -29,15 +30,21 @@ import {
   runValuationAction,
   updateValuationAssumptionsAction,
 } from "@/app/dashboard/position/[id]/actions";
+import ImpliedReturnCalculator from "@/components/ImpliedReturnCalculator";
 
 export default function ValuationSection({
   positionId,
+  ticker,
   valuation,
   guide,
   loadError,
   hideRegenerate = false,
 }: {
   positionId: number;
+  // Optional — passed by callers that have it (position page, watchlist
+  // page, wizard step). Used by the implied-return widget header. Falls
+  // back to empty string for legacy callers.
+  ticker?: string;
   valuation: Valuation | null;
   guide: ValuationGuide | null;
   loadError?: string | null;
@@ -89,6 +96,7 @@ export default function ValuationSection({
       {valuation ? (
         <ValuationToolkit
           positionId={positionId}
+          ticker={ticker ?? ""}
           valuation={valuation}
           guide={guide}
         />
@@ -119,13 +127,29 @@ function getRecommendedTools(guide: ValuationGuide | null): Set<ToolId> {
 
 function ValuationToolkit({
   positionId,
+  ticker,
   valuation,
   guide,
 }: {
   positionId: number;
+  ticker: string;
   valuation: Valuation;
   guide: ValuationGuide | null;
 }) {
+  // 2026-04-25 redesign: implied_return is the primary method. The widget
+  // dispatches based on `method` so legacy rows (DCF / AFFO / Excess
+  // Returns / AI multiples generated before the redesign) keep rendering
+  // the way they always did, while new rows route to ImpliedReturnView.
+  if (valuation.method === "implied_return") {
+    return (
+      <ImpliedReturnView
+        positionId={positionId}
+        ticker={ticker}
+        valuation={valuation}
+      />
+    );
+  }
+
   // Extract what each tool needs from the persisted valuation row. All
   // figures are pre-computed server-side; nothing here classifies or judges.
   const intrinsicBase = Number(valuation.intrinsic_value);
@@ -201,13 +225,30 @@ function ValuationToolkit({
     }
   }
 
-  // Split into visible (recommended) and hidden, preserving canonical order.
+  // Visible tools follow the guide's priority: primary first, then secondary.
+  // Hidden tools keep the canonical order. Tools without data are dropped.
   const visibleTools: ToolId[] = [];
+  if (guide && toolNodes[guide.primary_tool]) {
+    visibleTools.push(guide.primary_tool);
+  }
+  if (
+    guide?.secondary_tool &&
+    guide.secondary_tool !== guide.primary_tool &&
+    toolNodes[guide.secondary_tool]
+  ) {
+    visibleTools.push(guide.secondary_tool);
+  }
+  // No guide → surface everything in canonical order (fallback path).
+  if (!guide) {
+    for (const t of TOOL_RENDER_ORDER) {
+      if (toolNodes[t]) visibleTools.push(t);
+    }
+  }
   const hiddenTools: ToolId[] = [];
   for (const t of TOOL_RENDER_ORDER) {
     if (!toolNodes[t]) continue;
-    if (recommendedTools.has(t)) visibleTools.push(t);
-    else hiddenTools.push(t);
+    if (visibleTools.includes(t)) continue;
+    hiddenTools.push(t);
   }
 
   // History-length disclaimer attaches to whichever section first surfaces
@@ -262,6 +303,20 @@ function formatYears(years: number): string {
   return years >= 1 ? `${years.toFixed(1)}y history` : "<1y history";
 }
 
+// English ordinal suffix: 1st, 2nd, 3rd, 4th-20th, 21st, 22nd, 23rd, 24th-30th…
+// Used for the "Current percentile" row in the relative-valuation
+// distribution panel. Replaces a hard-coded "Nth" that produced "3th"/"21th".
+function ordinal(n: number): string {
+  const abs = Math.abs(n);
+  const lastTwo = abs % 100;
+  const last = abs % 10;
+  if (lastTwo >= 11 && lastTwo <= 13) return `${n}th`;
+  if (last === 1) return `${n}st`;
+  if (last === 2) return `${n}nd`;
+  if (last === 3) return `${n}rd`;
+  return `${n}th`;
+}
+
 // Builds a "Mar 2019 – Apr 2026" label for the relative-valuation subtitle
 // so the user can see the actual window behind Min / Median / Max. Returns
 // null for legacy snapshots that lack period dates (the subtitle then falls
@@ -282,6 +337,194 @@ function formatPeriodRange(
 function parseIsoDate(s: string): Date | null {
   const d = new Date(s);
   return Number.isFinite(d.getTime()) ? d : null;
+}
+
+// ─── Implied Return view (post-2026-04-25 redesign) ──────────────────────
+//
+// Composes:
+//   1. ImpliedReturnCalculator — the primary widget (FCF Yield + Growth
+//      + Δ Multiple → CAGR vs threshold by tier).
+//   2. Contexto histórico — relative-to-self distribution panels (PE,
+//      P/FCF, P/B) kept as supporting context. Decomposition of multiple
+//      change is informational, not a verdict input.
+//   3. Otros métodos — DCF / AFFO / Excess Returns / AI multiples in a
+//      collapsed <details> as cross-check. Available for users who want
+//      the deep-value lens; never drives the verdict.
+
+function ImpliedReturnView({
+  positionId,
+  ticker,
+  valuation,
+}: {
+  positionId: number;
+  ticker: string;
+  valuation: Valuation;
+}) {
+  const assumptions = valuation.assumptions as ImpliedReturnStoredAssumptions;
+  const currentPrice = Number(valuation.current_price);
+  const relativeSnapshot = assumptions.relative_valuation ?? null;
+
+  const hasOtherMethods = relativeSnapshot || assumptions.cross_check;
+
+  return (
+    <div className="space-y-5">
+      <ImpliedReturnCalculator
+        ticker={ticker}
+        currentPrice={currentPrice}
+        assumptions={assumptions}
+      />
+
+      {hasOtherMethods && (
+        <details className="rounded-lg border border-navy-200 bg-white">
+          <summary className="cursor-pointer px-5 py-3 text-sm font-medium text-navy-700 hover:text-navy-900">
+            Otros métodos de valoración · contexto histórico + cross-check
+          </summary>
+          <div className="space-y-6 border-t border-navy-100 p-5">
+            {relativeSnapshot && (
+              <ContextHistoricalInline snapshot={relativeSnapshot} />
+            )}
+            {assumptions.cross_check && (
+              <div className="space-y-3">
+                <div className="text-[11px] font-semibold uppercase tracking-wider text-navy-600">
+                  Valoración absoluta (cross-check)
+                </div>
+                <p className="text-[11px] leading-relaxed text-navy-500">
+                  Estos métodos descuentan flujos al 10-14% para llegar a un
+                  IV y comparar con precio. Para compounders de calidad
+                  sistemáticamente dicen &quot;Premium&quot; — útil como
+                  cross-check para detectar precios absurdos, no como
+                  veredicto.
+                </p>
+                <CrossCheckBlock
+                  positionId={positionId}
+                  valuation={valuation}
+                  assumptions={assumptions}
+                />
+              </div>
+            )}
+          </div>
+        </details>
+      )}
+    </div>
+  );
+}
+
+function ContextHistoricalInline({
+  snapshot,
+}: {
+  snapshot: RelativeValuationSnapshot;
+}) {
+  const periodLabel = formatPeriodRange(
+    snapshot.period_start,
+    snapshot.period_end,
+  );
+  const subtitle = [
+    periodLabel,
+    formatYears(snapshot.years_of_data),
+    `${snapshot.points_count} points`,
+  ]
+    .filter((s): s is string => Boolean(s))
+    .join(" · ");
+
+  return (
+    <div className="space-y-3">
+      <div className="text-[11px] font-semibold uppercase tracking-wider text-navy-600">
+        Contexto histórico · múltiplos vs propia distribución
+      </div>
+      <p className="text-[11px] leading-relaxed text-navy-500">
+        Múltiplos actuales vs distribución propia del negocio. Soporte
+        contextual — la decisión la marca el retorno implícito arriba, no
+        la mediana histórica (puede haber re-rating estructural).
+      </p>
+      <DistributionTool
+        title="PE ratio · vs propio historial"
+        subtitle={subtitle}
+        snapshot={snapshot.pe}
+        formatValue={(v) => `${v.toFixed(1)}x`}
+      />
+      <DistributionTool
+        title="P/FCF ratio · vs propio historial"
+        subtitle={subtitle}
+        snapshot={invertYieldToMultipleSnapshot(snapshot.fcf_yield)}
+        formatValue={(v) => `${v.toFixed(1)}x`}
+      />
+      {snapshot.pb && (
+        <DistributionTool
+          title="P/B ratio · vs propio historial"
+          subtitle={subtitle}
+          snapshot={snapshot.pb}
+          formatValue={(v) => `${v.toFixed(2)}x`}
+        />
+      )}
+    </div>
+  );
+}
+
+// Renders the cross-check (legacy DCF / AFFO / Excess Returns / AI multiples)
+// inside the collapsed <details>. Reuses the underlying DcfDetails /
+// ExcessReturnsDetails / MultiplesDetails by reshaping a virtual valuation
+// row from the cross_check.
+function CrossCheckBlock({
+  positionId,
+  valuation,
+  assumptions,
+}: {
+  positionId: number;
+  valuation: Valuation;
+  assumptions: ImpliedReturnStoredAssumptions;
+}) {
+  const cc = assumptions.cross_check;
+  if (!cc) return null;
+  const currentPrice = Number(valuation.current_price);
+  const intrinsicBase = cc.intrinsic_value;
+  const intrinsicLow = cc.intrinsic_value_low;
+  const intrinsicHigh = cc.intrinsic_value_high;
+  // Inline a method-style header without the IV range bar (deliberate —
+  // the bar visual reinforces the "below intrinsic = buy" frame we're
+  // trying to demote). Just show the numbers and the method-specific
+  // breakdown table.
+  const methodLabel =
+    cc.method === "dcf"
+      ? "Owner earnings two-stage DCF"
+      : cc.method === "affo_dcf"
+        ? "AFFO-based DCF (real estate)"
+        : cc.method === "excess_returns"
+          ? "Excess Returns Model (banks / insurers)"
+          : "AI multiples (DCF not applicable)";
+  return (
+    <div className="rounded-md border border-navy-200 bg-navy-50/40 p-4">
+      <div className="mb-2 flex flex-wrap items-baseline justify-between gap-3">
+        <h4 className="text-sm font-bold text-navy-900">{methodLabel}</h4>
+        <span className="text-[11px] font-medium uppercase tracking-wider text-navy-500">
+          IV ${intrinsicBase.toFixed(2)} · Precio ${currentPrice.toFixed(2)}
+        </span>
+      </div>
+      <p className="mb-3 text-[11px] leading-relaxed text-navy-500">
+        {cc.reasoning}
+      </p>
+      {cc.method === "dcf" || cc.method === "affo_dcf" ? (
+        <DcfDetails
+          positionId={positionId}
+          assumptions={cc.assumptions as DcfStoredAssumptions}
+          intrinsicBase={intrinsicBase}
+          intrinsicLow={intrinsicLow}
+          intrinsicHigh={intrinsicHigh}
+          method={cc.method}
+        />
+      ) : cc.method === "excess_returns" ? (
+        <ExcessReturnsDetails
+          assumptions={cc.assumptions as ExcessReturnsStoredAssumptions}
+          intrinsicBase={intrinsicBase}
+          intrinsicLow={intrinsicLow}
+          intrinsicHigh={intrinsicHigh}
+        />
+      ) : (
+        <MultiplesDetails
+          assumptions={cc.assumptions as AiMultiplesStoredAssumptions}
+        />
+      )}
+    </div>
+  );
 }
 
 // Passive disclosure: when the business's own multiple history is shorter
@@ -604,7 +847,7 @@ function DistributionTool({
           {snapshot.current_percentile !== null && (
             <DistributionRow
               label="Current percentile"
-              value={`${Math.round(snapshot.current_percentile)}th`}
+              value={ordinal(Math.round(snapshot.current_percentile))}
             />
           )}
         </tbody>

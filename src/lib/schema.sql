@@ -263,7 +263,7 @@ CREATE TABLE IF NOT EXISTS moatboard_analyses (
 CREATE TABLE IF NOT EXISTS valuations (
   id SERIAL PRIMARY KEY,
   position_id INTEGER NOT NULL UNIQUE REFERENCES positions(id) ON DELETE CASCADE,
-  method VARCHAR(20) NOT NULL CHECK (method IN ('dcf', 'affo_dcf', 'excess_returns', 'ai_multiples')),
+  method VARCHAR(20) NOT NULL CHECK (method IN ('implied_return', 'dcf', 'affo_dcf', 'excess_returns', 'ai_multiples')),
   intrinsic_value NUMERIC(14, 4) NOT NULL,
   intrinsic_value_low NUMERIC(14, 4) NOT NULL,
   intrinsic_value_high NUMERIC(14, 4) NOT NULL,
@@ -367,10 +367,14 @@ ALTER TABLE sec_fundamentals_cache ADD COLUMN IF NOT EXISTS latest_quarter_filed
 --
 -- The original UI was "add ticker → auto-analyze everything → render three
 -- sections on one page". The redesign turns the analysis into a stepped flow:
---   understanding → red_flags → quality → valuation → decision
--- with three final outcomes (invest / watchlist / discarded) plus an exit ramp
--- at the understanding step (outside_circle). Every step persists state so the
--- user can resume a session and never re-analyzes a ticker blindly.
+--   quality → understanding → red_flags → valuation → decision
+-- Quality runs first so the scorecard tier can short-circuit further AI
+-- spend — if the business fails the tier bar, the user discards at step 1
+-- without spending Claude tokens on Understanding + Red flags (both of
+-- which read the full 10-K). Three final outcomes (invest / watchlist /
+-- discarded) plus an exit ramp at the understanding step (outside_circle).
+-- Every step persists state so the user can resume a session and never
+-- re-analyzes a ticker blindly.
 --
 -- At the moment of deciding "invest" (or adding to an existing position) the
 -- system stores an immutable snapshot of the quality scorecard + valuation +
@@ -479,7 +483,7 @@ CREATE TABLE IF NOT EXISTS analysis_sessions (
     'understanding', 'red_flags', 'quality', 'valuation',
     'decision', 'completed'
   )),
-  furthest_step VARCHAR(20) NOT NULL DEFAULT 'understanding' CHECK (furthest_step IN (
+  furthest_step VARCHAR(20) NOT NULL DEFAULT 'quality' CHECK (furthest_step IN (
     'understanding', 'red_flags', 'quality', 'valuation',
     'decision', 'completed'
   )),
@@ -727,3 +731,42 @@ CREATE TABLE IF NOT EXISTS discovery_filing_dismissals (
 
 CREATE INDEX IF NOT EXISTS idx_dfd_user_dismissed
   ON discovery_filing_dismissals(user_id, dismissed_at DESC);
+
+-- Maps share-class duplicates (GOOG/GOOGL, BRK-B/BRK-A) to a single
+-- canonical ticker so Discovery aggregates conviction by business and
+-- per-ticker IA caches dedupe across share classes. The canonical maps
+-- to itself implicitly: if no row exists for a ticker, it's its own
+-- canonical (consumer code uses COALESCE(canonical_ticker, ticker)).
+-- Hard rule (CHECK): never INSERT a row where ticker = canonical, so the
+-- canonical is always identifiable by the absence of a row keyed on it.
+CREATE TABLE IF NOT EXISTS ticker_aliases (
+  ticker VARCHAR(10) PRIMARY KEY,
+  canonical_ticker VARCHAR(10) NOT NULL,
+  notes TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT chk_alias_not_self CHECK (ticker <> canonical_ticker)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ticker_aliases_canonical
+  ON ticker_aliases(canonical_ticker);
+
+-- Per-ticker valuation chat history. Stores Joseda's questions to the
+-- AI about a ticker's valuation and the AI's answers. Durable per
+-- (user_id, ticker): survives regeneration of the underlying valuations
+-- row. Each turn carries a JSONB snapshot of the valuation context at
+-- the moment of asking, so the UI can render "version dividers" when
+-- the math has been regenerated since (preserves coherence between the
+-- turn's text and the data it referenced).
+CREATE TABLE IF NOT EXISTS valuation_chats (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  ticker VARCHAR(10) NOT NULL,
+  question TEXT NOT NULL,
+  answer TEXT NOT NULL,
+  asked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  answered_with_model VARCHAR(50) NOT NULL,
+  snapshot JSONB NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_valuation_chats_user_ticker
+  ON valuation_chats(user_id, ticker, asked_at);

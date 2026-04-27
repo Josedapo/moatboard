@@ -15,10 +15,11 @@ import type {
 export type DcfTier = "margin" | "acceptable" | "fair" | "premium";
 export type MosTier = DcfTier;
 
-// Relative tier: where the business trades vs its own 10y (or 5-7y) multiple
-// distribution, with IQR-outlier exclusion. Drift M (philosophy review,
-// 2026-04-16) — Buffett/Munger value wonderful businesses against their own
-// history, not against a generic DCF bar.
+// Relative tier: where the business trades vs its own 10y multiple
+// distribution (less for foreign filers without SEC XBRL coverage), with
+// IQR-outlier exclusion. Drift M (philosophy review, 2026-04-16) —
+// Buffett/Munger value wonderful businesses against their own history,
+// not against a generic DCF bar.
 export type RelativeTier = "rare" | "within" | "above" | "stratospheric";
 
 // Compound valuation tier — the public display. Combines DCF + Relative.
