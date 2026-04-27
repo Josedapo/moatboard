@@ -33,6 +33,7 @@ const TIER_RANK: Record<Tier, number> = {
 };
 
 const METHOD_LABEL: Record<ValuationMethod, string> = {
+  implied_return: "Retorno implícito",
   dcf: "Owner-earnings DCF",
   affo_dcf: "AFFO DCF",
   excess_returns: "Excess Returns",

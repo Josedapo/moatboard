@@ -13,6 +13,7 @@ import {
   getTickerState,
   type TickerStatus,
 } from "@/lib/tickerStates";
+import { getCanonicalTicker } from "@/lib/tickerAliases";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
@@ -20,7 +21,6 @@ export type PriorTickerState = {
   ticker: string;
   status: Exclude<TickerStatus, "in_portfolio">;
   reasonMd: string | null;
-  reviewWhen: string | null;
   lastTouchedAt: string;
 };
 
@@ -44,12 +44,24 @@ export async function startAnalysisAction(
     return { error: "Not authenticated" };
   }
 
-  const ticker = String(formData.get("ticker") ?? "").trim();
-  if (!ticker || !/^[A-Za-z.]{1,10}$/.test(ticker)) {
+  const raw = String(formData.get("ticker") ?? "").trim();
+  // Yahoo Finance uses hyphens for share-class separators (BRK-A, BRK-B).
+  // Other providers use dots (BRK.A, typed by users out of habit) or
+  // slashes (BRK/A, returned by OpenFIGI / Bloomberg). Normalize all three
+  // to the Yahoo form before validating.
+  const ticker = raw.replace(/[./]/g, "-");
+  if (!ticker || !/^[A-Za-z-]{1,10}$/.test(ticker)) {
     return { error: "Invalid ticker format" };
   }
 
-  const upper = ticker.toUpperCase();
+  const typed = ticker.toUpperCase();
+  // Dual-class share consolidation: GOOG and GOOGL are the same business
+  // (Alphabet), as are BRK-A and BRK-B (Berkshire). Resolve canonical
+  // before doing anything else so the analysis cache, ticker_state and
+  // wizard URL all share one identity per business. The canonical equals
+  // the input when no alias is configured.
+  const upper = await getCanonicalTicker(typed);
+  const aliasNotice = upper !== typed ? typed : null;
   const confirmReanalysis = formData.get("confirmReanalysis") === "true";
 
   // If the user already owns this (has transactions), redirect to the live
@@ -76,7 +88,6 @@ export async function startAnalysisAction(
           ticker: prior.ticker,
           status: prior.status,
           reasonMd: prior.reason_md,
-          reviewWhen: prior.review_when,
           lastTouchedAt: prior.last_touched_at,
         },
       };
@@ -97,7 +108,13 @@ export async function startAnalysisAction(
   // Get or create the analysis session.
   await startSession({ userId: session.user.id, ticker: upper });
 
-  redirect(`/dashboard/analyze/${upper}`);
+  // Carry the alias notice as a query param so the wizard can render a
+  // one-line italic Spanish notice on first load. Omitted when typed
+  // ticker already equals canonical.
+  const url = aliasNotice
+    ? `/dashboard/analyze/${upper}?aliasNotice=${aliasNotice}`
+    : `/dashboard/analyze/${upper}`;
+  redirect(url);
 }
 
 // Re-enter the wizard for a ticker that already has a non-portfolio state
@@ -144,6 +161,43 @@ export async function markSignalReviewedAction(formData: FormData) {
   const { markSignalReviewed } = await import("@/lib/reviewSignals");
   await markSignalReviewed({ signalId, userId: session.user.id, note });
   revalidatePath("/dashboard");
+}
+
+// Mark several signals as reviewed in one go. Used by the inbox batch
+// toolbar when the user has triaged a cluster of related filings (e.g.
+// every 8-K from the same Q4 wave) and wants to clear them with one
+// click instead of repeating the per-card flow. No note attached — if
+// a single signal needs context, the user picks the per-card path.
+export async function markSignalsReviewedBatchAction(formData: FormData) {
+  const session = await auth();
+  if (!session?.user?.id) return { ok: false as const, count: 0 };
+
+  const raw = formData.get("signalIds");
+  if (typeof raw !== "string" || raw.length === 0) {
+    return { ok: false as const, count: 0 };
+  }
+  const ids = raw
+    .split(",")
+    .map((s) => Number(s.trim()))
+    .filter((n) => Number.isFinite(n));
+  if (ids.length === 0) return { ok: false as const, count: 0 };
+
+  const { markSignalReviewed } = await import("@/lib/reviewSignals");
+  // Sequential to keep ownership checks (markSignalReviewed validates
+  // the signal belongs to the user) deterministic and the error path
+  // straightforward. At inbox scale (<50 signals) the cost is trivial.
+  let count = 0;
+  for (const id of ids) {
+    try {
+      await markSignalReviewed({ signalId: id, userId: session.user.id, note: null });
+      count += 1;
+    } catch (err) {
+      console.error(`markSignalsReviewedBatch: failed for id=${id}:`, err);
+    }
+  }
+  revalidatePath("/dashboard/inbox");
+  revalidatePath("/dashboard");
+  return { ok: true as const, count };
 }
 
 // Restore a signal back to `new`. Typical uses: user clicked "Marcar

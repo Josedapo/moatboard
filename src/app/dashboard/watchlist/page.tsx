@@ -1,7 +1,12 @@
 import Link from "next/link";
 import { auth } from "@/auth";
-import { listTickerStates } from "@/lib/tickerStates";
+import { listTickerStatesEnriched } from "@/lib/tickerStates";
+import { fetchQuoteAndFundamentals } from "@/lib/financial";
 import DashboardNav from "@/components/DashboardNav";
+import {
+  BusinessTierChip,
+  FlagsBadge,
+} from "@/components/shared/BusinessSignalChips";
 import { reanalyzeTickerAction } from "../actions";
 
 export const metadata = {
@@ -14,10 +19,25 @@ export default async function WatchlistPage() {
     return null;
   }
 
-  const items = await listTickerStates({
+  const items = await listTickerStatesEnriched({
     userId: session.user.id,
     status: "watchlist",
   });
+
+  // Same pattern as the Dashboard's watchlistQuotes block: fetch Yahoo
+  // quotes in parallel solely to surface a friendly company name. Cheap
+  // at watchlist scale (typically <15 tickers); not worth caching.
+  const companyNames = new Map<string, string | null>(
+    await Promise.all(
+      items.map(async (item) => {
+        const { quote } = await fetchQuoteAndFundamentals(item.ticker);
+        return [
+          item.ticker,
+          quote?.longName ?? quote?.shortName ?? null,
+        ] as [string, string | null];
+      }),
+    ),
+  );
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -45,22 +65,32 @@ export default async function WatchlistPage() {
                     href={`/dashboard/watchlist/${item.ticker}`}
                     className="flex-1"
                   >
-                    <div className="flex items-baseline gap-3">
-                      <span className="text-lg font-semibold text-navy-900">
-                        {item.ticker}
-                      </span>
+                    <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+                      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                        <span className="text-lg font-semibold text-navy-900">
+                          {item.ticker}
+                        </span>
+                        {companyNames.get(item.ticker) && (
+                          <span className="text-sm text-navy-700">
+                            {companyNames.get(item.ticker)}
+                          </span>
+                        )}
+                      </div>
                       <span className="text-xs text-navy-500">
                         added {formatDate(item.last_touched_at)}
                       </span>
                     </div>
-                    {item.review_when && (
-                      <div className="mt-1 text-sm text-navy-700">
-                        <span className="font-medium">Review when:</span>{" "}
-                        {item.review_when}
-                      </div>
-                    )}
+                    <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1.5">
+                      <BusinessTierChip tier={item.business_tier} />
+                      <FlagsBadge
+                        analyzed={item.business_tier !== null}
+                        serious={item.serious_flag_count}
+                        watch={item.watch_flag_count}
+                        withLabels
+                      />
+                    </div>
                     {item.reason_md && (
-                      <p className="mt-2 whitespace-pre-wrap text-sm text-navy-600">
+                      <p className="mt-3 whitespace-pre-wrap text-sm text-navy-600">
                         {item.reason_md}
                       </p>
                     )}

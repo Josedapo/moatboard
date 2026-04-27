@@ -1,6 +1,6 @@
 import type { ReviewSignal } from "@/lib/reviewSignals";
 import type { CronRun } from "@/lib/cronRuns";
-import SignalCard from "@/components/SignalCard";
+import SignalsInboxClient from "@/components/SignalsInboxClient";
 
 // Dashboard inbox for review signals. Groups by ticker and renders a
 // heartbeat line ("última verificación …") so the "0 signals = calm"
@@ -22,7 +22,6 @@ export default function SignalsInbox({
   cronRun: CronRun | null;
   heartbeatThresholdHours?: number;
 }) {
-  const grouped = groupByTicker(signals);
   const heartbeat = describeHeartbeat(cronRun, heartbeatThresholdHours);
 
   return (
@@ -39,30 +38,10 @@ export default function SignalsInbox({
       {signals.length === 0 ? (
         <EmptyState heartbeat={heartbeat} />
       ) : (
-        <div className="space-y-6">
-          {grouped.map(({ ticker, rows }) => (
-            <div key={ticker}>
-              {grouped.length > 1 && (
-                <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-widest text-navy-500">
-                  {ticker}{" "}
-                  <span className="ml-1 text-navy-400">
-                    · {rows.length}{" "}
-                    {rows.length === 1 ? "señal" : "señales"}
-                  </span>
-                </h3>
-              )}
-              <div className="space-y-3">
-                {rows.map((s) => (
-                  <SignalCard
-                    key={s.id}
-                    signal={s}
-                    positionId={positionIdByTicker[ticker] ?? null}
-                  />
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
+        <SignalsInboxClient
+          signals={signals}
+          positionIdByTicker={positionIdByTicker}
+        />
       )}
     </section>
   );
@@ -96,18 +75,6 @@ function EmptyState({
       )}
     </div>
   );
-}
-
-function groupByTicker(
-  signals: ReviewSignal[],
-): { ticker: string; rows: ReviewSignal[] }[] {
-  const map = new Map<string, ReviewSignal[]>();
-  for (const s of signals) {
-    const arr = map.get(s.ticker) ?? [];
-    arr.push(s);
-    map.set(s.ticker, arr);
-  }
-  return Array.from(map.entries()).map(([ticker, rows]) => ({ ticker, rows }));
 }
 
 // Returns a descriptive line for the heartbeat and a tone class for the

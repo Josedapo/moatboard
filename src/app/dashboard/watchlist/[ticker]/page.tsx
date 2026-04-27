@@ -23,6 +23,10 @@ import BusinessUnderstandingView from "@/components/shared/BusinessUnderstanding
 import RedFlagsList from "@/components/shared/RedFlagsList";
 import MoatboardAnalysisView from "@/components/MoatboardAnalysis";
 import ValuationSection from "@/components/Valuation";
+import ValuationFollowupChat from "@/components/ValuationFollowupChat";
+import { listChatTurnsForTicker } from "@/lib/valuationChats";
+import FundsHoldingCard from "@/components/FundsHoldingCard";
+import { listFundsHoldingTicker } from "@/lib/discoveryFund";
 import { reanalyzeTickerAction } from "../../actions";
 
 // Dedicated per-ticker view for watchlist entries. Mirrors the live
@@ -65,11 +69,15 @@ export default async function WatchlistTickerPage({ params }: Props) {
     signals,
     understanding,
     redFlags,
+    valuationChatHistory,
+    fundsHolding,
   ] = await Promise.all([
     fetchQuoteAndFundamentals(ticker),
     listSignalsForTicker({ userId: session.user.id, ticker }),
     getCurrentUnderstanding(ticker),
     getRedFlags(ticker),
+    listChatTurnsForTicker({ userId: session.user.id, ticker }),
+    listFundsHoldingTicker(ticker),
   ]);
 
   // Badge count for the Señales tab: just the "new" signals for this
@@ -134,49 +142,49 @@ export default async function WatchlistTickerPage({ params }: Props) {
 
   const observacion = (
     <div className="space-y-6">
-      {state.reason_md && (
-        <section className="rounded-2xl border border-navy-100 bg-white p-6 shadow-sm">
-          <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-navy-500">
-            Por qué está en watchlist
-          </h3>
-          <p className="whitespace-pre-line text-sm leading-relaxed text-navy-800">
-            {state.reason_md}
-          </p>
-        </section>
+      {(state.reason_md || quote?.nextEarningsDate) && (
+        <div className="grid gap-6 lg:grid-cols-3">
+          {state.reason_md && (
+            <section className="rounded-2xl border border-navy-100 bg-white p-6 shadow-sm lg:col-span-2">
+              <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-navy-500">
+                Por qué está en watchlist
+              </h3>
+              <p className="whitespace-pre-line text-sm leading-relaxed text-navy-800">
+                {state.reason_md}
+              </p>
+            </section>
+          )}
+
+          {quote?.nextEarningsDate && (
+            <section
+              className={`rounded-2xl border border-navy-100 bg-white p-6 shadow-sm ${
+                state.reason_md ? "lg:col-span-1" : "lg:col-span-3"
+              }`}
+            >
+              <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-navy-500">
+                Próxima presentación
+              </div>
+              <div className="text-sm text-navy-800">
+                <span className="tabular-nums">
+                  {formatDateLong(quote.nextEarningsDate)}
+                </span>
+                {nextEarningsDaysAway !== null && (
+                  <span className="ml-2 text-navy-500">
+                    {relativeDaysLabel(nextEarningsDaysAway)}
+                  </span>
+                )}
+                {nextReportType && (
+                  <span className="ml-2 inline-block rounded border border-navy-200 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-navy-600">
+                    {nextReportType}
+                  </span>
+                )}
+              </div>
+            </section>
+          )}
+        </div>
       )}
 
-      <div className="grid gap-4 sm:grid-cols-2">
-        {state.review_when && (
-          <section className="rounded-2xl border border-navy-100 bg-white p-6 shadow-sm">
-            <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-navy-500">
-              Revisar cuando
-            </div>
-            <div className="text-sm text-navy-800">{state.review_when}</div>
-          </section>
-        )}
-        {quote?.nextEarningsDate && (
-          <section className="rounded-2xl border border-navy-100 bg-white p-6 shadow-sm">
-            <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-navy-500">
-              Próxima presentación
-            </div>
-            <div className="text-sm text-navy-800">
-              <span className="tabular-nums">
-                {formatDateLong(quote.nextEarningsDate)}
-              </span>
-              {nextEarningsDaysAway !== null && (
-                <span className="ml-2 text-navy-500">
-                  {relativeDaysLabel(nextEarningsDaysAway)}
-                </span>
-              )}
-              {nextReportType && (
-                <span className="ml-2 inline-block rounded border border-navy-200 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-navy-600">
-                  {nextReportType}
-                </span>
-              )}
-            </div>
-          </section>
-        )}
-      </div>
+      <FundsHoldingCard ticker={ticker} funds={fundsHolding} />
 
       <section className="rounded-2xl border border-dashed border-navy-200 bg-navy-50/30 p-6">
         <p className="text-sm text-navy-700">
@@ -241,13 +249,23 @@ export default async function WatchlistTickerPage({ params }: Props) {
   );
 
   const valoracion = (
-    <ValuationSection
-      positionId={draftPosition.id}
-      valuation={valuation}
-      guide={valuationGuide}
-      loadError={valuationError}
-      hideRegenerate
-    />
+    <>
+      <ValuationSection
+        positionId={draftPosition.id}
+        ticker={ticker}
+        valuation={valuation}
+        guide={valuationGuide}
+        loadError={valuationError}
+        hideRegenerate
+      />
+      {valuation && (
+        <ValuationFollowupChat
+          positionId={draftPosition.id}
+          ticker={ticker}
+          initialHistory={valuationChatHistory}
+        />
+      )}
+    </>
   );
 
   const presentaciones = (
@@ -327,7 +345,6 @@ export default async function WatchlistTickerPage({ params }: Props) {
             valoracion,
             presentaciones,
           }}
-          labelOverrides={{ razonamiento: "Observación" }}
           badges={{ presentaciones: newSignalsCount }}
         />
       </main>

@@ -47,7 +47,6 @@ export default async function DashboardNav() {
 
       <nav className="flex items-center gap-8 border-b border-rule-soft bg-paper-dim px-14 py-3.5">
         <DashboardNavLinks inboxCount={inboxCount} />
-        <span className="flex-1" />
         {session?.user?.email && (
           <span className="font-display text-[13px] italic text-ink-70">
             {session.user.email}

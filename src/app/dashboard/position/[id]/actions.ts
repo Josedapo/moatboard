@@ -457,3 +457,100 @@ export async function addOperationAction(
   revalidatePath(`/dashboard/position/${positionId}`);
   revalidatePath("/dashboard");
 }
+
+
+// ─── Valuation chat ──────────────────────────────────────────────────────
+
+// Conversational follow-up on a ticker's valuation. Anchored on the
+// current valuation row + cached moat + cached AI guide + the user's
+// own history of turns. Returns ok+turn (the appended row) so the
+// client can update local state without a full revalidate.
+//
+// Sonnet 4.6 always (bypasses the dual-mode caller in claudeClient
+// because chat latency matters more than free local Opus). The cost
+// per turn is ~$0.005 — negligible at personal-tool scale.
+
+export type ValuationChatActionResult =
+  | {
+      ok: true;
+      turn: import('@/lib/valuationChats').ValuationChatTurn;
+    }
+  | { ok: false; error: string };
+
+export async function askValuationFollowupAction(
+  positionId: number,
+  question: string,
+): Promise<ValuationChatActionResult> {
+  try {
+    const trimmed = question.trim();
+    if (trimmed.length < 3) {
+      return { ok: false, error: 'Pregunta demasiado corta.' };
+    }
+
+    const session = await auth();
+    if (!session?.user?.id) return { ok: false, error: 'No autenticado' };
+
+    const position = await getPositionById(positionId, session.user.id);
+    if (!position) return { ok: false, error: 'Posición no encontrada' };
+
+    const { getMoatAssessment } = await import('@/lib/moats');
+    const { getValuationGuide } = await import('@/lib/valuationGuides');
+    const { listChatTurnsForTicker, appendChatTurn } = await import('@/lib/valuationChats');
+    const { answerValuationFollowup } = await import('@/lib/valuationChatAi');
+
+    const [valuation, moat, guide, analysis, history, { quote }] =
+      await Promise.all([
+        getValuationByPositionId(positionId),
+        getMoatAssessment(position.ticker),
+        getValuationGuide(position.ticker),
+        getAnalysisByPositionId(positionId),
+        listChatTurnsForTicker({
+          userId: session.user.id,
+          ticker: position.ticker,
+        }),
+        fetchQuoteAndFundamentals(position.ticker),
+      ]);
+
+    if (!valuation) {
+      return {
+        ok: false,
+        error: 'No hay valoración cacheada todavía — abre la pestaña Valoración primero.',
+      };
+    }
+
+    const { answer, model } = await answerValuationFollowup({
+      ticker: position.ticker,
+      businessName: quote?.longName ?? quote?.shortName ?? null,
+      valuation,
+      guide,
+      moat,
+      qualityTier: analysis?.tier ?? null,
+      history,
+      question: trimmed,
+    });
+
+    const turn = await appendChatTurn({
+      userId: session.user.id,
+      ticker: position.ticker,
+      question: trimmed,
+      answer,
+      model,
+      snapshot: {
+        iv_base: Number(valuation.intrinsic_value),
+        iv_low: Number(valuation.intrinsic_value_low),
+        iv_high: Number(valuation.intrinsic_value_high),
+        method: valuation.method,
+        current_price: Number(valuation.current_price),
+        mos_pct: Number(valuation.margin_of_safety_pct),
+      },
+    });
+
+    revalidatePath(`/dashboard/position/${positionId}`);
+    return { ok: true, turn };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Error desconocido';
+    console.error('askValuationFollowupAction failed:', msg);
+    return { ok: false, error: msg };
+  }
+}
+

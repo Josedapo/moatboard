@@ -28,6 +28,7 @@ src/
 │       ├── watchlist/page.tsx         # Tickers on watchlist. Each row links to watchlist/[ticker]
 │       ├── watchlist/[ticker]/page.tsx # Dedicated per-ticker view — NextEarningsCard + PresentationsPanel (no ficha for watchlist tickers)
 │       ├── history/page.tsx           # Discarded + Outside circle tickers; "Was held" badge → "Open ficha →" for closed positions
+│       ├── learn/valuation/page.tsx   # Pedagogical page (Spanish, 7 sections) explaining the implied-return frame: question, 3 components, growth anchors, decision rule, tier thresholds, why not DCF, edge cases. Linked from ImpliedReturnCalculator.
 │       ├── discovery/
 │       │   ├── page.tsx               # Discovery leaderboard — consensus conviction across 31 curated funds, sortable columns, filter chips by ticker_state, entrantes-nuevos panel, ticker search
 │       │   ├── funds/page.tsx         # Fund roster index grouped by tier, sortable (portfolio value, holdings, top-5 concentration, movements Q, último 13F)
@@ -50,7 +51,8 @@ src/
 │   ├── SignalCard.tsx                 # Client. Per-signal card with severity frame (emerald floor / amber material / navy informational), EDGAR + Evolución links, AI summary (collapsible), actions. `mode` prop: `new` shows "Marcar revisada"; `reviewed` desaturates + ✓ + "Reabrir".
 │   ├── UpcomingEarnings.tsx           # Server. Dashboard "Próximas presentaciones" — one row per portfolio + watchlist ticker with known earningsDate. Information, not alert.
 │   ├── MoatboardAnalysis.tsx          # Scorecard UI (accepts `hideRegenerate` for wizard use)
-│   ├── Valuation.tsx                  # Valuation toolkit UI (recommended tools visible by default; rest in <details>; Reading Signal filtered to recommended)
+│   ├── ImpliedReturnCalculator.tsx    # Primary widget of the Valuation section after 2026-04-25 redesign. Three visual zones top→bottom: ZONE 1 Conclusión (verdict card with checks), ZONE 2 Cálculo (3-col table Componente · Base · Estrés + threshold + floor), ZONE 3 Detalles (collapsed: anchors, formulas, tier rationale). Renders target buy price when verdict is negative.
+│   ├── Valuation.tsx                  # Valuation section dispatcher: routes to ImpliedReturnView when method='implied_return' (post-2026-04-25 default); falls back to legacy 4-tool ValuationToolkit for older rows. Cross-check (DCF/AFFO/Excess Returns/AI multiples) lives collapsed under "Otros métodos · contexto histórico + cross-check".
 │   ├── Thesis.tsx                     # AI/user thesis UI (still in repo; not currently rendered on the position page after the 2026-04-20 redesign)
 │   ├── BusinessDescription.tsx        # Stateless paragraph splitter for Yahoo summary (legacy — no longer rendered on position page after 2026-04-21)
 │   ├── DiscoveryLeaderboard.tsx       # Client. Sortable table, filter chips, ticker search, expandable rows with tier-grouped fund list (fund names link to /fund/[cik])
@@ -103,7 +105,9 @@ src/
 │   ├── verdictAi.ts                   # AI prose composition for verdict_reason (Spanish)
 │   ├── analysis.ts                    # Orchestrator: runAnalysis() ties scorecard + moat + tier + prose
 │   ├── moatboardAnalyses.ts           # CRUD for moatboard_analyses
-│   ├── valuation.ts                   # Pure DCF (two-stage owner earnings) + tier types
+│   ├── valuation.ts                   # Pure DCF (two-stage owner earnings) + tier types — used by the legacy cross-check, not by the primary verdict
+│   ├── impliedReturn.ts               # Pure CAGR formula (FCF Yield + Growth + Δ Multiple), two-step decision rule (atractivo + no-desastre), TIER_THRESHOLDS (12/14/17%), floor (Treasury+2%), computeTargetBuyPrice (inverts on FCF Yield to get the price at which both checks pass). Primary verdict logic since 2026-04-25.
+│   ├── sustainableGrowth.ts           # Pure 2-anchor growth: Historical (revenue CAGR for product/balance-sheet, AFFO/share for REITs) + Fundamental (ROIC × retention for product, ROE × retention for banks, ROA × retention for REITs). Takes the lesser, caps at 20%, stress = base × 0.7. Anchors computed on capMultiYearForScoring(10y) so the growth driving the implied-return verdict matches the scorecard's revenue-growth dimension on the same page.
 │   ├── valuationAi.ts                 # AI multiples fallback (Spanish reasoning)
 │   ├── valuations.ts                  # CRUD for valuations; RelativeValuationSnapshot type
 │   ├── relativeValuation.ts           # Pure distribution stats (median/Q1/Q3/IQR) and classifier
@@ -151,7 +155,7 @@ The script DROPs legacy tables (`theses`, `moatboard_analyses` when their CHECK 
 
 Tables:
 - `users`, `accounts`, `sessions`, `verification_token` — NextAuth (Neon adapter)
-- `positions` — user portfolio entries (`user_id`, `ticker`, `pre_commitment_md`, `pre_commitment_edited_at`, `created_at`). `pre_commitment_md` is the position-level "compromiso de salida" — what would make Joseda lose confidence in this investment. Editable, optional. Cost basis lives in `position_transactions`. Dashboard filters by **net shares > 0** (sum of buys+adds − trims−sells) so closed positions and drafts both disappear from Portfolio automatically.
+- `positions` — user portfolio entries (`user_id`, `ticker`, `pre_commitment_md`, `pre_commitment_edited_at`, `created_at`). `pre_commitment_md` is the position-level "compromiso de salida" — what would make Joseda lose confidence in this investment. Editable, optional. Cost basis lives in `position_transactions`. Dashboard filters by **net shares > 0** (sum of buys+adds − trims−sells) so closed positions and drafts both disappear from Portfolio automatically. **Draft positions persist across terminal decisions** (watchlist / discarded / outside_circle): they are the anchor for cached `moatboard_analyses` / `valuations` / `moat` rows — deleting them would cascade the quality tier away and break Discovery's at-a-glance tier+flag chips. Only promoted-to-live positions gain `position_transactions` rows.
 - `position_transactions` — log of `buy`/`add`/`trim`/`sell` per position (Trim retired from UI 2026-04-20; CHECK still allows it for legacy rows). Each row has `transaction_date`, `price`, `shares`, and optional `pre_commitment_md`. **Semantics shifted 2026-04-20:** the column is now the **operation note** ("why this op"), not a per-transaction pre-commitment. Column name kept for back-compat. Cost basis derived (`getCostBasis`).
 - `fundamentals_snapshots` — immutable frozen frames, per-user per-ticker. `trigger` ∈ `transaction` / `quarterly_10q` / `annual_10k`. Stores tier, scorecard_summary, multi_year, moat JSONB, valuation method + IVs + assumptions + guide, business_understanding_version, thesis_snapshot, current_price, sec_filing_accession. Partial unique index on `(user_id, ticker, sec_filing_accession) WHERE sec_filing_accession IS NOT NULL` prevents duplicating a filing's snapshot.
 - `business_understanding` — AI-generated plain-language summary per ticker, versioned. PK `(ticker, version)`. Regeneration archives the previous row (`archived_at`). Stores `summary_md` (JSON-serialized section list), `questions_and_answers` (pregenerated + user follow-ups), `sources`.
@@ -162,7 +166,7 @@ Tables:
 - `moat_validations` — **per-user, per-snapshot** comparative moat validations (the output of the trajectory "Validar con IA" button). Each row is immutable; multiple validations against the same `from_snapshot_id` are allowed so the table doubles as a revalidation history. Carries the verdict (`intact` / `expanding` / `compressing` / `dissolved`), the original moat at the moment of validation, and the fresh moat read. Created 2026-04-20 via additive migration `scripts/add-moat-validations-table.mjs`.
 - `valuation_guides` — **per-ticker, shared across users**, AI-generated advice on which valuation tools matter most (primary/secondary/cautious + reasoning). Reasoning in Spanish. TTL 365 days.
 - `moatboard_analyses` — per-position verdict (tier, verdict_reason, scorecard_summary, moat snapshot). Verdict prose now in Spanish.
-- `valuations` — per-position IV + MoS (method, intrinsic_value range, current_price, dcf_tier, relative_tier, compound tier, assumptions JSONB including RelativeValuationSnapshot). `method` CHECK constraint allows `'dcf' | 'affo_dcf' | 'excess_returns' | 'ai_multiples'`. Note: the compound `tier`, `dcf_tier` and `relative_tier` columns are legacy — still persisted but no longer read by the UI (see philosophy-review drift M correction, 2026-04-16). The per-method `assumptions` shape differs (owner-earnings DCF, AFFO DCF, Excess Returns, AI multiples)
+- `valuations` — per-position valuation row. `method` CHECK constraint allows `'implied_return' | 'dcf' | 'affo_dcf' | 'excess_returns' | 'ai_multiples'` (extended 2026-04-25 via `scripts/extend-valuations-method-check.mjs`). **Primary method is `implied_return`** (the assumptions JSONB carries fcf_yield, growth anchors, multiple_change_base/stress, threshold, floor, base_cagr, stress_cagr, verdict, verdict_reason, plus the legacy absolute-method computation under `assumptions.cross_check` so users can see DCF/AFFO/Excess Returns as collapsed cross-check). Legacy rows with `method='dcf'/'affo_dcf'/'excess_returns'/'ai_multiples'` keep rendering through the old toolkit. The compound `tier`, `dcf_tier`, `relative_tier` columns and `intrinsic_value*` numeric fields persist for back-compat (populated from cross-check when method='implied_return'); the UI of implied_return reads everything from the assumptions JSONB.
 - `theses` — per-position user thesis (source: 'user' | 'ai', raw_text, structured_content JSONB, `pre_commitment_md`). AI generation is in Spanish; not auto-invoked from the wizard today (decision deferred — see Pending Decisions).
 - `sec_fundamentals_cache` — raw XBRL + parsed_annual + `latest_quarter_{accession,period_end,form,filed}` for quarterly snapshot triggering. `parsed_quarterly` column exists but not yet populated.
 - `review_signals` — **per-user SEC signal inbox** (Phase 6). One row per (user, ticker, accession). Lifecycle `new` → `reviewed` from UI (legacy `dismissed`/`expired` kept in CHECK for forward compat, not written from UI). Carries source (sec_8k/sec_10q/sec_10k/sec_10qa/sec_10ka), event_type + severity (floor/material/informational), source_url (EDGAR), raw_payload (form + items), summary_md + summarized_at + summarized_with_model (AI plain-language summary, lazy-filled on demand). Populated by the daily Vercel Cron.
@@ -204,37 +208,35 @@ The tier itself is **never** AI-driven — only the prose. Reason: reproducibili
 
 The position detail page wraps this in an **"unsupported business" gate** (`isOutsideFramework` in `src/app/dashboard/position/[id]/page.tsx`): when the scorecard has fewer than 5 applicable dimensions, OR when valuation falls to `ai_multiples` with op-margin worst-year below −50%, the page replaces Business Analysis / Valuation / Thesis with a single explanatory notice linking to `/about#coverage`.
 
-### Valuation pipeline
+### Valuation pipeline (post-2026-04-25 redesign)
+
+The primary method is **implied_return**. Frame: "what return can I expect at this price?" instead of "is this below intrinsic?". The frame Buffett post-1985, Smith and Akre use operationally. The legacy absolute-valuation methods (DCF/AFFO/Excess Returns/AI multiples) still run in parallel and persist as `assumptions.cross_check` so users can see the deep-value lens, but never drive the verdict.
 
 ```
-quote + fundamentals + multi-year + treasury + relative-history (yfinance, parallel)
-  → Business-type dispatch (positionFlow.ts: computeAndSaveValuation):
-      · isBalanceSheetBusiness(sector, industry) (banks, insurers, asset mgrs, health insurers, mortgage REITs)
-          → valuation.ts: computeExcessReturnsBase / computeCostOfEquity (CAPM rf + β × 5% ERP)
-          → valuation.ts: computeExcessReturnsValuation / computeExcessReturnsRange
-          → method: "excess_returns"   (fallback: ai_multiples if ROE unstable / BV ≤ 0)
-      · isRealEstate(sector) (excluding mortgage REITs — they go via balance-sheet)
-          → same owner-earnings math, relabeled as AFFO proxy (NI + D&A − 5y avg capex)
-          → method: "affo_dcf"
-      · else (product businesses):
-          → valuation.ts: computeOwnerEarningsBase(), observedGrowthRate()
-          → valuation.ts: computeIntrinsicValueRange() (pure, 10%/12%/14% hurdle rates)
-          → method: "dcf"
-      · AI multiples fallback (when the absolute method is not computable):
-          → valuationAi.ts: estimateWithMultiples() (1 Claude call) → method: "ai_multiples"
-  → positionFlow.ts: computeRelativeValuationContext() (pure)
-      → relativeValuation.ts: computeDistributionStats() for PE, P/FCF, P/B
-      → current percentile vs own-history distribution (IQR outlier trimmed)
-  → valuationGuides.ts: ensureValuationGuide() (get-or-create, cached per ticker)
-      → on miss → valuationGuideAi.ts: assessValuationGuide() (1 Claude call)
-  → save to valuations (valuation row per position + guide row per ticker)
+quote + fundamentals + multi-year + treasury + relative-history (parallel)
+  → positionFlow.ts: computeAndSaveValuation
+      · resolves quality tier (caller-provided or read from moatboard_analyses; fallback 'good')
+      · runs computeLegacyValuation in parallel (DCF/AFFO/Excess Returns/AI multiples per business-type dispatch — same logic as before, now returns shape without saving)
+      · sustainableGrowth.ts: computeSustainableGrowth({ multiYear, fundamentals, sector, industry })
+          → cappedMultiYear = capMultiYearForScoring(multiYear)  // 10y window, matches scorecard
+          → anchor 1: historical CAGR (revenue CAGR for product/balance-sheet, AFFO/share for REITs)
+          → anchor 2: fundamental sostenible (ROIC × retention for product, ROE × retention for banks, ROA × retention for REITs)
+          → base = min(anchors), capped at GROWTH_CAP (20%); stress = base × 0.7; optimistic = max(anchors), capped
+      · FCF yield = (fundamentals.freeCashflow ?? recent SEC FCF) / quote.marketCap
+      · multiple_change_stress = deriveMultipleChangeStress (annualized compression to Q1 PE; 0% if current ≤ Q1)
+      · impliedReturn.ts: computeImpliedReturn → base/stress CAGR + verdict (two-step rule)
+      · save with method='implied_return', assumptions = { fcf_yield, fcf_ttm, market_cap, growth, multiple_change_*, threshold, floor, treasury_yield, base_cagr, stress_cagr, passes_*, verdict, verdict_reason, cross_check, relative_valuation }
 ```
 
-Both `ensureValuation` (first render) and `runValuationAction` (user-triggered regenerate) go through the same `computeAndSaveValuation` helper — dispatch logic lives in one place.
+Decision rule (two steps — both must pass):
+1. **Atractivo:** baseCAGR ≥ tier threshold (Exceptional 12% / Good 14% / Mediocre 17%)
+2. **No-desastre:** stressCAGR ≥ floor (Treasury 10y + 2%)
 
-**No compound verdict on valuation.** The UI renders 4-5 independent tools side by side (DCF range, PE-own-history, P/FCF-own-history, P/B-own-history when book value positive, Cash yield vs 10y Treasury) + the AI guide at the top indicating which tools matter most for the business type. See philosophy-review drift M and its 2026-04-16 correction.
+When the verdict is negative, `computeTargetBuyPrice` (in `lib/impliedReturn.ts`) inverts the formula on the FCF Yield component to surface the price at which both checks would pass — rendered as a white card inside the verdict zone.
 
-User-edited DCF assumptions (`updateValuationAssumptionsAction`) go through pure recompute only — **no AI re-call**. The relative snapshot and the guide are preserved as-is.
+Both `ensureValuation` (first render) and `runValuationAction` (user-triggered regenerate) go through the same `computeAndSaveValuation` helper — dispatch logic lives in one place. `qualityTier` is an optional 5th parameter on both signatures so callers that already loaded the analysis can pass it through; otherwise it's resolved internally.
+
+User-edited DCF assumptions (`updateValuationAssumptionsAction`) go through pure recompute only — **no AI re-call**. The relative snapshot and the guide are preserved as-is. Note this action edits the legacy DCF cross-check; the primary implied-return verdict is read-only in v1 (override editable of `multiple_change_stress` on backlog).
 
 ### Cache philosophy
 
@@ -242,18 +244,32 @@ User-edited DCF assumptions (`updateValuationAssumptionsAction`) go through pure
 - **Per-position, per-user:** `moatboard_analyses`, `valuations`, `theses`. Overwritten on regenerate.
 - **Always fresh:** fundamentals from yfinance (no cache — fast and free enough).
 
-### Valuation toolkit (replaces the old "Margin of Safety" verdict)
+### Valuation UI — Implied Return Calculator (post-2026-04-25)
 
-The Valuation section renders **four independent tools**, navy-neutral, no red/green semantics on the bars, no single verdict. The user weighs them by the kind of business (the AI Valuation Guide at the top suggests the weighting, but never hides a tool):
+The Valuation section is now driven by `ImpliedReturnCalculator.tsx`, organised in three visual zones top→bottom:
 
-1. **Intrinsic value · {method-specific label}** — the absolute-valuation tool. Method adapts to the business type: **Owner earnings two-stage DCF** (product businesses) · **AFFO-based DCF** (REITs, same math relabeled) · **Excess Returns Model** (banks / insurers: book value + PV of (ROE − Ke) × BV over 10y, Ke via CAPM) · **AI multiples fallback** (when no absolute method applies). All four render the same Bear / Base / Bull range bar + price marker for visual consistency.
-2. **PE ratio · vs own history** — current PE vs the business's own 5-7y distribution. Blue mini-bar with Min / Q1 / Median / Q3 / Max + current marker.
-3. **P/FCF ratio · vs own history** — same layout. Inverted from FCF-yield snapshot at display time.
-4. **P/B ratio · vs own history** — only shown if book value has been positive across the history. Primary tool for financials and asset-heavy businesses.
+**Zone 1 · Conclusión** (color-toned card by verdict tone)
+- Veredicto label in editorial italic — "Comprable" / "No comprable — precio caro para la calidad" / "No comprable — riesgo asimétrico" / "No comprable — precio y riesgo no compensan".
+- Two checks inline (Atractivo + No-desastre) with the actual numbers vs threshold/floor.
+- When verdict is negative: white target-price card with `Comprable a partir de $X.XX (-Y%)` + binding constraint + inline rationale ("FCF Yield pasaría de current% → required%").
 
-Cash yield vs Treasury was **retired from the valuation toolkit** (2026-04-18) — it's an indicator of price attractiveness, not a valuation method, so it lives as a context card under "Additional Signals" instead of alongside DCF / PE / P/FCF / P/B.
+**Zone 2 · Cálculo** (white background, dense numbers)
+- 3-column table: **Componente · Caso base · Estrés**.
+- Rows: FCF Yield · + Crecimiento sostenible · + Δ Múltiplo (anualizado) · = CAGR esperado (bold).
+- Two benchmark rows below the total: Umbral (under Base column) + Floor (under Estrés column) with checkmarks aligned with the column they compare against.
 
-The `IV/Price` ratio and `MoS%` are still computed internally (`valuation.ts`) and persisted, but they're no longer surfaced as a colored tier. The `dcf_tier`, `relative_tier`, `tier` (compound) columns remain for legacy DB rows — not read by the UI. Philosophy rationale: see drift M and its 2026-04-16 correction in `../Context/buffett-munger-philosophy-review.md`.
+**Zone 3 · Detalles** (collapsed `<details>`, gray background)
+- FCF Yield breakdown (FCF TTM / Market Cap).
+- Crecimiento sostenible — anchors table with driver mark, formula and notes.
+- Δ Múltiplo explanation (base = stable, stress = compression to Q1 or 0% when current ≤ Q1).
+- Tier thresholds table with rationale for the current tier, plus floor.
+- Link to `/dashboard/learn/valuation` (full pedagogical page, 7 sections).
+
+Below the calculator, a single collapsed `<details>` "Otros métodos de valoración · contexto histórico + cross-check" contains:
+- **Contexto histórico:** PE / P/FCF / P/B distribution panels vs the business's own history (the same tools that were the v1 toolkit).
+- **Cross-check absoluto:** the legacy DCF / AFFO / Excess Returns / AI multiples result, rendered with explicit note "Para compounders de calidad sistemáticamente dicen 'Premium' — útil para detectar precios absurdos, no como veredicto".
+
+The `IV/Price` ratio and `MoS%` are still computed internally (`valuation.ts`) and persisted as part of `cross_check`. The `dcf_tier`, `relative_tier`, `tier` (compound) columns remain for legacy DB rows — not read by the implied-return UI. Philosophy rationale: see philosophy-review drift M (2026-04-16) and the 2026-04-25 redesign of Valuation as implied-return-primary documented in `../moatboard-app/BACKLOG.md` (entry "Cross-sectional anchor + override editable del stress" for what's still pending).
 
 ## Conventions
 
@@ -279,7 +295,7 @@ function getClient(): Anthropic {
 ### TypeScript types
 
 - `Tier = 'exceptional' | 'good' | 'mediocre' | 'poor'` exported from `lib/verdict.ts` (note: `mediocre` replaced the old `average` after drift L fix)
-- `ValuationMethod = 'dcf' | 'affo_dcf' | 'excess_returns' | 'ai_multiples'` exported from `lib/valuations.ts`. The stored `assumptions` JSONB shape depends on `method` (`DcfStoredAssumptions`, `ExcessReturnsStoredAssumptions`, `MultiplesStoredAssumptions`).
+- `ValuationMethod = 'implied_return' | 'dcf' | 'affo_dcf' | 'excess_returns' | 'ai_multiples'` exported from `lib/valuations.ts`. The stored `assumptions` JSONB shape depends on `method`: `ImpliedReturnStoredAssumptions` (primary since 2026-04-25 — carries fcf_yield, fcf_ttm, market_cap, growth {base/stress/optimistic/anchors/driver}, multiple_change_*, threshold, floor, base_cagr, stress_cagr, verdict + verdict_reason, optional cross_check, relative_valuation), `DcfStoredAssumptions`, `ExcessReturnsStoredAssumptions`, `AiMultiplesStoredAssumptions` (legacy, also used inside cross_check).
 - `DcfTier = MosTier = 'margin' | 'acceptable' | 'fair' | 'premium'` exported from `lib/valuation.ts` — kept for the internal DCF classifier only. Not surfaced in UI.
 - `RelativeTier`, `CompoundTier` also in `lib/valuation.ts` — legacy, still persisted but not shown
 - `ToolId = 'dcf' | 'pe' | 'pfcf' | 'pb' | 'cash_yield'` exported from `lib/valuationGuideAi.ts`. The type still carries `cash_yield` for backwards compatibility with historical `valuation_guides` rows, but the AI prompt no longer recommends it and the UI never renders a `cash_yield` tool in the valuation section (it moved to Additional Signals).

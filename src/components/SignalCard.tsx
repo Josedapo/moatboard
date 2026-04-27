@@ -9,7 +9,6 @@ import {
   SEVERITY_SPEC,
 } from "@/lib/signalLabels";
 import {
-  markSignalReviewedAction,
   summarizeSignalAction,
   reopenSignalAction,
 } from "@/app/dashboard/actions";
@@ -24,6 +23,8 @@ export default function SignalCard({
   signal,
   positionId,
   mode = "new",
+  isSelected,
+  onToggleSelected,
 }: {
   signal: ReviewSignal;
   // When the signal's ticker matches a live position, we pass its id so
@@ -32,14 +33,18 @@ export default function SignalCard({
   positionId: number | null;
   // Current inbox tab. Drives which actions appear at the foot.
   mode?: SignalStatus;
+  // Optional batch-selection wiring. When both are provided, the card
+  // renders a checkbox in its header that the parent (SignalsInboxClient)
+  // uses to drive the batch-toolbar state. Omitted in non-batch surfaces
+  // (e.g. PresentationsPanel inside a position ficha) so the card looks
+  // identical to before.
+  isSelected?: boolean;
+  onToggleSelected?: (id: number) => void;
 }) {
-  // "review" expands a textarea for the optional review note. No
-  // dismiss option — signals only have two lifecycle states: new and
-  // reviewed. Discarding was removed 2026-04-20; the per-ticker
-  // Presentaciones tab is the durable store of reviewed history.
-  const [actionMode, setActionMode] = useState<"idle" | "review">("idle");
-  const [text, setText] = useState("");
-  const [isPending, startTransition] = useTransition();
+  const selectable = onToggleSelected !== undefined;
+  // Per-card "Marcar revisada" was removed; marking happens via the
+  // inbox batch toolbar. The per-ticker Presentaciones tab still
+  // surfaces "Reabrir" for reviewed signals.
 
   // Local state for the AI summary so regenerating or summarising for
   // the first time doesn't require a full page revalidate to reflect
@@ -63,17 +68,6 @@ export default function SignalCard({
 
   const spec = SEVERITY_SPEC[signal.severity];
   const formattedDate = formatDate(signal.event_date);
-
-  const submit = () => {
-    startTransition(async () => {
-      const fd = new FormData();
-      fd.append("signalId", String(signal.id));
-      fd.append("note", text);
-      await markSignalReviewedAction(fd);
-      setActionMode("idle");
-      setText("");
-    });
-  };
 
   const [isReopening, startReopenTransition] = useTransition();
   const reopen = () => {
@@ -118,9 +112,18 @@ export default function SignalCard({
 
   return (
     <article
-      className={`flex h-full flex-col rounded-xl border p-4 ${frameClass} ${contentOpacity}`}
+      className={`flex h-full flex-col rounded-xl border px-3.5 py-2.5 ${frameClass} ${contentOpacity}`}
     >
       <header className="flex flex-wrap items-center gap-2">
+        {selectable && (
+          <input
+            type="checkbox"
+            checked={!!isSelected}
+            onChange={() => onToggleSelected!(signal.id)}
+            aria-label={`Seleccionar señal de ${signal.ticker}`}
+            className="h-3.5 w-3.5 cursor-pointer accent-navy-900"
+          />
+        )}
         <span className="inline-flex items-center gap-1 rounded-md bg-navy-900 px-1.5 py-0.5 text-[11px] font-bold text-white">
           {isReviewed && (
             <span aria-hidden className="text-emerald-300">
@@ -149,9 +152,67 @@ export default function SignalCard({
         </span>
       </header>
 
-      <h4 className="mt-2 text-sm font-semibold leading-snug text-navy-900">
-        {EVENT_TYPE_LABEL[signal.event_type]}
-      </h4>
+      {/* Description + inline links: descriptive label, EDGAR (or fund
+          ficha), Evolución, and the optional "Resumir con IA" button
+          collapsed onto a single line. The label keeps semantic weight
+          (semibold); the IA button gets pushed right via ml-auto so it
+          lands just under the date in the header above. */}
+      <div className="mt-1.5 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <h4 className="text-sm font-semibold leading-snug text-navy-900">
+          {EVENT_TYPE_LABEL[signal.event_type]}
+        </h4>
+        {signal.source_url && signal.source === "discovery_13f" ? (
+          <Link
+            href={signal.source_url}
+            className="text-[11px] text-navy-600 hover:text-navy-900"
+          >
+            Ver ficha del fondo →
+          </Link>
+        ) : signal.source_url ? (
+          <a
+            href={signal.source_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-[11px] text-navy-600 hover:text-navy-900"
+          >
+            EDGAR ↗
+          </a>
+        ) : null}
+        {positionId !== null && (
+          <Link
+            href={`/dashboard/position/${positionId}/trajectory`}
+            className="text-[11px] text-navy-600 hover:text-navy-900"
+          >
+            Evolución →
+          </Link>
+        )}
+        {!summaryMd &&
+          mode === "new" &&
+          signal.source !== "snapshot_diff" &&
+          signal.source !== "discovery_13f" &&
+          signal.source !== "sec_form4" && (
+            <button
+              type="button"
+              onClick={summarise}
+              disabled={isSummarising || !signal.source_url}
+              className="ml-auto inline-flex items-center gap-1 rounded-md border border-navy-200 bg-white px-2 py-0.5 text-[11px] font-medium text-navy-700 hover:border-navy-300 hover:bg-navy-50 hover:text-navy-900 disabled:opacity-50"
+              title={
+                !signal.source_url
+                  ? "Esta señal no tiene documento asociado"
+                  : "Genera un resumen ejecutivo en lenguaje llano"
+              }
+            >
+              {isSummarising ? (
+                <>Resumiendo…</>
+              ) : (
+                <>
+                  <span aria-hidden>✨</span>
+                  Resumir con IA
+                </>
+              )}
+            </button>
+          )}
+      </div>
 
       {signal.event_type === "material_fundamentals_change" && (
         <DeltaChangeBlock payload={signal.raw_payload} />
@@ -163,36 +224,6 @@ export default function SignalCard({
 
       {signal.source === "sec_form4" && (
         <InsiderPurchaseBlock payload={signal.raw_payload} />
-      )}
-
-      {(signal.source_url || positionId !== null) && (
-        <div className="mt-1 flex flex-wrap items-center gap-3 text-[11px]">
-          {signal.source_url && signal.source === "discovery_13f" ? (
-            <Link
-              href={signal.source_url}
-              className="text-navy-600 hover:text-navy-900"
-            >
-              Ver ficha del fondo →
-            </Link>
-          ) : signal.source_url ? (
-            <a
-              href={signal.source_url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-navy-600 hover:text-navy-900"
-            >
-              EDGAR ↗
-            </a>
-          ) : null}
-          {positionId !== null && (
-            <Link
-              href={`/dashboard/position/${positionId}/trajectory`}
-              className="text-navy-600 hover:text-navy-900"
-            >
-              Evolución →
-            </Link>
-          )}
-        </div>
       )}
 
       {/* AI summary block — collapsible. Header is a toggle button; the
@@ -250,92 +281,25 @@ export default function SignalCard({
         </div>
       )}
 
-      {/* Actions row at the foot. mt-auto keeps cards aligned in grid. */}
-      {actionMode === "idle" && (
-        <div className="mt-auto flex flex-wrap items-center gap-2 pt-3">
-          {!summaryMd &&
-            signal.source !== "snapshot_diff" &&
-            signal.source !== "discovery_13f" &&
-            signal.source !== "sec_form4" && (
-            <button
-              type="button"
-              onClick={summarise}
-              disabled={isSummarising || !signal.source_url}
-              className="inline-flex items-center gap-1.5 rounded-md border border-navy-200 bg-white px-2.5 py-1 text-xs font-medium text-navy-700 hover:border-navy-300 hover:bg-navy-50 hover:text-navy-900 disabled:opacity-50"
-              title={
-                !signal.source_url
-                  ? "Esta señal no tiene documento asociado"
-                  : "Genera un resumen ejecutivo en lenguaje llano"
-              }
-            >
-              {isSummarising ? (
-                <>Resumiendo…</>
-              ) : (
-                <>
-                  <span aria-hidden>✨</span>
-                  Resumir con IA
-                </>
-              )}
-            </button>
-          )}
-          {mode === "new" ? (
-            <button
-              type="button"
-              onClick={() => setActionMode("review")}
-              disabled={isPending}
-              className="ml-auto rounded-md border border-navy-200 bg-white px-2.5 py-1 text-xs font-medium text-navy-700 hover:border-navy-300 hover:bg-navy-50 hover:text-navy-900 disabled:opacity-50"
-            >
-              Marcar revisada
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={reopen}
-              disabled={isReopening}
-              className="ml-auto rounded-md border border-transparent px-2.5 py-1 text-xs font-medium text-navy-500 hover:text-navy-700 disabled:opacity-50"
-            >
-              {isReopening ? "Reabriendo…" : "Reabrir"}
-            </button>
-          )}
-          {summaryError && (
-            <span className="mt-1 basis-full text-[11px] text-red-700">
-              {summaryError}
-            </span>
-          )}
+      {/* Footer for the "reviewed" tab only: "Reabrir" lives here
+          because PresentationsPanel needs a way back to "new". For
+          new signals there's no per-card primary action — marking
+          happens via the inbox batch toolbar. */}
+      {mode === "reviewed" && (
+        <div className="mt-auto flex flex-wrap items-center gap-2 pt-2">
+          <button
+            type="button"
+            onClick={reopen}
+            disabled={isReopening}
+            className="rounded-md border border-transparent px-2.5 py-1 text-xs font-medium text-navy-500 hover:text-navy-700 disabled:opacity-50"
+          >
+            {isReopening ? "Reabriendo…" : "Reabrir"}
+          </button>
         </div>
       )}
 
-      {actionMode === "review" && (
-        <div className="mt-3 space-y-2">
-          <textarea
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            placeholder="Nota (opcional) — qué has mirado, conclusión, próximo paso"
-            rows={2}
-            className="w-full rounded-md border border-navy-200 bg-white px-3 py-2 text-xs text-navy-800 placeholder-navy-400 focus:border-navy-400 focus:outline-none"
-          />
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={submit}
-              disabled={isPending}
-              className="rounded-md bg-navy-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-navy-800 disabled:opacity-50"
-            >
-              {isPending ? "Guardando…" : "Confirmar revisada"}
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setActionMode("idle");
-                setText("");
-              }}
-              disabled={isPending}
-              className="text-xs text-navy-500 hover:text-navy-700 disabled:opacity-50"
-            >
-              Cancelar
-            </button>
-          </div>
-        </div>
+      {summaryError && (
+        <span className="mt-2 text-[11px] text-red-700">{summaryError}</span>
       )}
     </article>
   );
@@ -441,7 +405,7 @@ function InsiderPurchaseBlock({ payload }: { payload: unknown }) {
   const any10b5_1 = p.transactions.some((t) => t.rule10b5_1_flag === true);
 
   return (
-    <div className="mt-2 space-y-1.5 rounded-lg border border-navy-200 bg-white/70 px-3 py-2 text-xs text-navy-800">
+    <div className="mt-1.5 space-y-1 rounded-lg border border-navy-200 bg-white/70 px-2.5 py-1.5 text-xs text-navy-800">
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-semibold text-navy-900">
           {p.reporting_owner_name}
@@ -576,7 +540,7 @@ function FundMovementBlock({ payload }: { payload: unknown }) {
         : null;
 
   return (
-    <div className="mt-2 space-y-1.5 rounded-lg border border-navy-200 bg-white/70 px-3 py-2 text-xs text-navy-800">
+    <div className="mt-1.5 space-y-1 rounded-lg border border-navy-200 bg-white/70 px-2.5 py-1.5 text-xs text-navy-800">
       <div className="flex flex-wrap items-center gap-2">
         <span
           className={`inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${FUND_TIER_CHIP[p.fund_tier]}`}
@@ -617,7 +581,7 @@ function DeltaChangeBlock({ payload }: { payload: unknown }) {
   if (!hasTierDrop && !hasGateActivated && drops.length === 0) return null;
 
   return (
-    <div className="mt-2 space-y-1.5 rounded-lg border border-navy-200 bg-white/70 px-3 py-2 text-xs text-navy-800">
+    <div className="mt-1.5 space-y-1 rounded-lg border border-navy-200 bg-white/70 px-2.5 py-1.5 text-xs text-navy-800">
       {hasTierDrop && tier && tier.before && tier.after && (
         <div>
           <span className="font-semibold">Tier:</span>{" "}

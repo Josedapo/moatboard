@@ -39,6 +39,10 @@ import type { RelativeValuationSnapshot } from "@/lib/valuations";
 import DashboardNav from "@/components/DashboardNav";
 import MoatboardAnalysis from "@/components/MoatboardAnalysis";
 import ValuationSection from "@/components/Valuation";
+import ValuationFollowupChat from "@/components/ValuationFollowupChat";
+import { listChatTurnsForTicker } from "@/lib/valuationChats";
+import FundsHoldingCard from "@/components/FundsHoldingCard";
+import { listFundsHoldingTicker } from "@/lib/discoveryFund";
 import QualityBadge from "@/components/QualityBadge";
 import FollowupChat from "@/components/analysis/FollowupChat";
 import TransactionOperationNotesList from "@/components/shared/TransactionOperationNotesList";
@@ -200,6 +204,18 @@ export default async function PositionDetail({
     );
   }
 
+  // Per-ticker chat history. Empty for tickers Joseda hasn't asked
+  // about yet. Cheap query (single index on user_id, ticker).
+  const valuationChatHistory = await listChatTurnsForTicker({
+    userId: session.user.id,
+    ticker: position.ticker,
+  });
+
+  // Curated funds (Discovery roster) currently holding this business.
+  // Pulled in parallel-ish via the same get-then-render server flow;
+  // empty array for businesses outside the consensus circle.
+  const fundsHolding = await listFundsHoldingTicker(position.ticker);
+
   const currentPrice = quote?.regularMarketPrice ?? null;
   // Signed offset for the next earnings release; positive = future,
   // negative = past (yfinance estimate not yet updated). Null propagates
@@ -331,6 +347,8 @@ export default async function PositionDetail({
             isUnderstandingStale,
             latestAnnualFiling,
             understandingSourceFiling: understandingSourceFiling ?? null,
+            valuationChatHistory,
+            fundsHolding,
           })}
         />
       </main>
@@ -370,6 +388,8 @@ function buildPanels(args: {
   understandingSourceFiling:
     | import("@/lib/businessUnderstanding").BusinessUnderstandingSource
     | null;
+  valuationChatHistory: import("@/lib/valuationChats").ValuationChatTurn[];
+  fundsHolding: import("@/lib/discoveryFund").FundHoldingTicker[];
 }): Record<PositionTabId, React.ReactNode> {
   const {
     ticker,
@@ -399,9 +419,12 @@ function buildPanels(args: {
     isUnderstandingStale,
     latestAnnualFiling,
     understandingSourceFiling,
+    valuationChatHistory,
+    fundsHolding,
   } = args;
 
   const razonamiento = (
+    <div className="space-y-6">
     <section className="rounded-2xl border border-navy-100 bg-white p-6 shadow-sm">
       {nextEarningsDate && nextEarningsDaysAway !== null && (
         <div className="mb-6">
@@ -451,6 +474,9 @@ function buildPanels(args: {
         />
       </div>
     </section>
+
+    <FundsHoldingCard ticker={ticker} funds={fundsHolding} />
+    </div>
   );
 
   const negocio = (
@@ -554,12 +580,22 @@ function buildPanels(args: {
   const valoracion = outsideFramework ? (
     <UnsupportedBusinessNotice />
   ) : (
-    <ValuationSection
-      positionId={positionId}
-      valuation={valuation}
-      guide={guide}
-      loadError={valuationError}
-    />
+    <>
+      <ValuationSection
+        positionId={positionId}
+        ticker={ticker}
+        valuation={valuation}
+        guide={guide}
+        loadError={valuationError}
+      />
+      {valuation && (
+        <ValuationFollowupChat
+          positionId={positionId}
+          ticker={ticker}
+          initialHistory={valuationChatHistory}
+        />
+      )}
+    </>
   );
 
   const presentaciones = (
