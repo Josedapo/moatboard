@@ -55,11 +55,17 @@ export default function ImpliedReturnCalculator({
   ticker,
   currentPrice,
   assumptions,
+  ephemeral = false,
 }: {
   positionId: number;
   ticker: string;
   currentPrice: number;
   assumptions: ImpliedReturnStoredAssumptions;
+  // Render-only mode: no per-row override editors. Used by the unified
+  // ficha at /dashboard/ticker/[symbol] when there's no per-position
+  // valuation row (Discovery puro / closed positions). The Analizar CTA
+  // lives at the ficha level, not inside the calculator.
+  ephemeral?: boolean;
 }) {
   const verdictTone =
     assumptions.verdict === "comprable" ? "positive" : "negative";
@@ -93,7 +99,11 @@ export default function ImpliedReturnCalculator({
       />
 
       {/* ─── ZONE 2 · CÁLCULO ─────────────────────────────────────── */}
-      <CalculationZone positionId={positionId} assumptions={assumptions} />
+      <CalculationZone
+        positionId={positionId}
+        assumptions={assumptions}
+        ephemeral={ephemeral}
+      />
 
       {/* ─── ZONE 3 · DETALLES (collapsed) ───────────────────────── */}
       <DetailsZone assumptions={assumptions} />
@@ -240,9 +250,11 @@ function PeerMedianDisclaimer({
 function CalculationZone({
   positionId,
   assumptions,
+  ephemeral,
 }: {
   positionId: number;
   assumptions: ImpliedReturnStoredAssumptions;
+  ephemeral: boolean;
 }) {
   return (
     <div className="px-6 py-5">
@@ -254,6 +266,13 @@ function CalculationZone({
           CAGR ≈ FCF Yield + Growth + Δ Múltiplo
         </div>
       </div>
+
+      {ephemeral && (
+        <p className="mb-3 rounded-md border border-dashed border-navy-200 bg-navy-50/40 px-3 py-2 text-[11px] italic text-navy-600">
+          Asunciones por defecto. Para personalizar el growth o el múltiplo
+          terminal, analiza el ticker desde el wizard.
+        </p>
+      )}
 
       <table className="w-full border-collapse text-sm">
         <thead>
@@ -272,10 +291,12 @@ function CalculationZone({
           <GrowthRowEditable
             positionId={positionId}
             assumptions={assumptions}
+            ephemeral={ephemeral}
           />
           <MultipleRowEditable
             positionId={positionId}
             assumptions={assumptions}
+            ephemeral={ephemeral}
           />
           <tr className="border-t-2 border-navy-300 text-base font-bold">
             <td className="py-3 text-navy-900">= CAGR esperado</td>

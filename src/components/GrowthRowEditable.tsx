@@ -16,9 +16,13 @@ import { updateImpliedReturnOverrideAction } from "@/app/dashboard/position/[id]
 export default function GrowthRowEditable({
   positionId,
   assumptions,
+  ephemeral = false,
 }: {
   positionId: number;
   assumptions: ImpliedReturnStoredAssumptions;
+  // See MultipleRowEditable.tsx for the contract — read-only render
+  // when true (no pencil ✎, no inline editor).
+  ephemeral?: boolean;
 }) {
   const autoBase = assumptions.growth.base;
   const autoStress = assumptions.growth.stress;
@@ -33,6 +37,7 @@ export default function GrowthRowEditable({
       <td className="py-2 align-top text-right tabular-nums">
         <ScenarioCell
           positionId={positionId}
+          ephemeral={ephemeral}
           scenario="base"
           effective={effectiveBase}
           autoValue={autoBase}
@@ -42,6 +47,7 @@ export default function GrowthRowEditable({
       <td className="py-2 align-top text-right tabular-nums text-navy-700">
         <ScenarioCell
           positionId={positionId}
+          ephemeral={ephemeral}
           scenario="stress"
           effective={effectiveStress}
           autoValue={autoStress}
@@ -54,12 +60,14 @@ export default function GrowthRowEditable({
 
 function ScenarioCell({
   positionId,
+  ephemeral,
   scenario,
   effective,
   autoValue,
   override,
 }: {
   positionId: number;
+  ephemeral: boolean;
   scenario: "base" | "stress";
   effective: number;
   autoValue: number;
@@ -170,15 +178,17 @@ function ScenarioCell({
         >
           {formatPct(effective)}
         </span>
-        <button
-          type="button"
-          onClick={openEditor}
-          aria-label={`Editar growth ${scenario}`}
-          title="Editar manualmente"
-          className="text-navy-400 hover:text-navy-700"
-        >
-          <PencilIcon />
-        </button>
+        {!ephemeral && (
+          <button
+            type="button"
+            onClick={openEditor}
+            aria-label={`Editar growth ${scenario}`}
+            title="Editar manualmente"
+            className="text-navy-400 hover:text-navy-700"
+          >
+            <PencilIcon />
+          </button>
+        )}
       </div>
       {isOverride && (
         <div className="text-[11px] font-normal italic text-navy-400">

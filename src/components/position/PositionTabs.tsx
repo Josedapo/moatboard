@@ -7,15 +7,21 @@ export type PositionTabId =
   | "negocio"
   | "calidad"
   | "valoracion"
+  | "decision"
   | "presentaciones";
 
 // The "razonamiento" id stays as-is internally to avoid rippling the
-// rename through callers; only the user-facing label changes.
+// rename through callers; only the user-facing label changes. Tab
+// order after Overview mirrors the analysis wizard sequence
+// (Calidad → Negocio → Valoración → Decisión) so the ficha reads in
+// the same flow the user just walked through. Señales es operacional,
+// vive al final.
 const TABS: Array<{ id: PositionTabId; label: string }> = [
   { id: "razonamiento", label: "Overview" },
-  { id: "negocio", label: "Negocio" },
   { id: "calidad", label: "Calidad" },
+  { id: "negocio", label: "Negocio" },
   { id: "valoracion", label: "Valoración" },
+  { id: "decision", label: "Decisión" },
   { id: "presentaciones", label: "Señales" },
 ];
 

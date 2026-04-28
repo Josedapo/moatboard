@@ -2,21 +2,16 @@ import type { BusinessUnderstanding } from "@/lib/businessUnderstanding";
 import type { SerializedSummary } from "@/lib/businessUnderstandingAi";
 
 // Pure presentational view of a business_understanding row. Renders the
-// 5-section Spanish summary, the pregenerated Q&A list (collapsed), and the
-// user follow-up history. No regenerate button, no chat input — wrappers
-// (wizard step or position page card) add those around it.
+// 5-section Spanish summary and the pregenerated Q&A list (collapsed).
+// No regenerate button — wrappers (wizard step or position page card)
+// add that around it.
 export default function BusinessUnderstandingView({
   understanding,
 }: {
   understanding: BusinessUnderstanding;
 }) {
   const sections = parseSections(understanding.summary_md);
-  const preQA = understanding.questions_and_answers.filter(
-    (q) => q.type === "pregenerated",
-  );
-  const followups = understanding.questions_and_answers.filter(
-    (q) => q.type === "user_followup",
-  );
+  const preQA = understanding.questions_and_answers;
 
   return (
     <div className="space-y-6">
@@ -59,26 +54,6 @@ export default function BusinessUnderstandingView({
                   {qa.answer}
                 </div>
               </details>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {followups.length > 0 && (
-        <div>
-          <h3 className="mb-3 text-base font-semibold text-navy-900">
-            Tus preguntas
-          </h3>
-          <div className="space-y-3">
-            {followups.map((qa, i) => (
-              <div key={i} className="border-l-2 border-navy-300 pl-3">
-                <p className="mb-1 text-sm font-medium text-navy-900">
-                  {qa.question}
-                </p>
-                <p className="text-sm leading-relaxed text-navy-700">
-                  {qa.answer}
-                </p>
-              </div>
             ))}
           </div>
         </div>

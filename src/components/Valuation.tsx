@@ -26,10 +26,7 @@ import type {
 import type { ValuationGuide } from "@/lib/valuationGuides";
 import type { ToolId } from "@/lib/valuationGuideAi";
 import { MOS_TIER_LABELS, type DcfTier } from "@/lib/valuation";
-import {
-  runValuationAction,
-  updateValuationAssumptionsAction,
-} from "@/app/dashboard/position/[id]/actions";
+import { updateValuationAssumptionsAction } from "@/app/dashboard/position/[id]/actions";
 import ImpliedReturnCalculator from "@/components/ImpliedReturnCalculator";
 
 export default function ValuationSection({
@@ -38,7 +35,7 @@ export default function ValuationSection({
   valuation,
   guide,
   loadError,
-  hideRegenerate = false,
+  ephemeral = false,
 }: {
   positionId: number;
   // Optional — passed by callers that have it (position page, watchlist
@@ -48,43 +45,21 @@ export default function ValuationSection({
   valuation: Valuation | null;
   guide: ValuationGuide | null;
   loadError?: string | null;
-  // Set true inside the analysis wizard — see MoatboardAnalysis.tsx for
-  // rationale. Regeneration comes back on the live position page.
-  hideRegenerate?: boolean;
+  // True when the valuation came from `computeImpliedReturnEphemeral`
+  // (no per-position row exists). Disables per-row override editors.
+  // The ficha's "Analizar" CTA replaces the override path.
+  ephemeral?: boolean;
 }) {
-  const [isPending, startTransition] = useTransition();
-  const [error, setError] = useState<string | null>(loadError ?? null);
-
-  function handleRegenerate() {
-    setError(null);
-    startTransition(async () => {
-      try {
-        await runValuationAction(positionId);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to regenerate");
-      }
-    });
-  }
+  const error = loadError ?? null;
 
   return (
     <section className="mb-6 rounded-2xl border border-navy-100 bg-white p-6 shadow-sm">
-      <div className="mb-5 flex items-center justify-between gap-3">
-        <div>
-          <h2 className="text-xl font-bold text-navy-950">Valuation</h2>
-          <p className="mt-1 text-xs text-navy-500">
-            Four independent tools. No single verdict — weigh them by the
-            kind of business and your own judgment.
-          </p>
-        </div>
-        {valuation && !hideRegenerate && (
-          <button
-            onClick={handleRegenerate}
-            disabled={isPending}
-            className="text-sm font-medium text-navy-600 hover:text-navy-900 disabled:opacity-50"
-          >
-            {isPending ? "Regenerating..." : "Regenerate"}
-          </button>
-        )}
+      <div className="mb-5">
+        <h2 className="text-xl font-bold text-navy-950">Valuation</h2>
+        <p className="mt-1 text-xs text-navy-500">
+          Four independent tools. No single verdict — weigh them by the
+          kind of business and your own judgment.
+        </p>
       </div>
 
       {error && (
@@ -99,12 +74,12 @@ export default function ValuationSection({
           ticker={ticker ?? ""}
           valuation={valuation}
           guide={guide}
+          ephemeral={ephemeral}
         />
       ) : (
         <p className="text-sm text-navy-500">
-          {loadError
-            ? "Could not compute the intrinsic value automatically. Try Regenerate above."
-            : "Intrinsic value estimate is not available — usually because current market price could not be fetched."}
+          Intrinsic value estimate is not available — usually because
+          current market price could not be fetched.
         </p>
       )}
     </section>
@@ -130,11 +105,13 @@ function ValuationToolkit({
   ticker,
   valuation,
   guide,
+  ephemeral = false,
 }: {
   positionId: number;
   ticker: string;
   valuation: Valuation;
   guide: ValuationGuide | null;
+  ephemeral?: boolean;
 }) {
   // 2026-04-25 redesign: implied_return is the primary method. The widget
   // dispatches based on `method` so legacy rows (DCF / AFFO / Excess
@@ -146,6 +123,7 @@ function ValuationToolkit({
         positionId={positionId}
         ticker={ticker}
         valuation={valuation}
+        ephemeral={ephemeral}
       />
     );
   }
@@ -355,10 +333,12 @@ function ImpliedReturnView({
   positionId,
   ticker,
   valuation,
+  ephemeral = false,
 }: {
   positionId: number;
   ticker: string;
   valuation: Valuation;
+  ephemeral?: boolean;
 }) {
   const assumptions = valuation.assumptions as ImpliedReturnStoredAssumptions;
   const currentPrice = Number(valuation.current_price);
@@ -373,6 +353,7 @@ function ImpliedReturnView({
         ticker={ticker}
         currentPrice={currentPrice}
         assumptions={assumptions}
+        ephemeral={ephemeral}
       />
 
       {hasOtherMethods && (

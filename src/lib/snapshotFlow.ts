@@ -28,6 +28,7 @@ import { getMoatAssessment } from "@/lib/moats";
 import { getCurrentUnderstanding } from "@/lib/businessUnderstanding";
 import { getThesisByPositionId } from "@/lib/theses";
 import { ensureSecFundamentals } from "@/lib/sec";
+import { recordIrisAction } from "@/lib/irisActions";
 import {
   createSnapshot,
   getSnapshotByFiling,
@@ -45,6 +46,7 @@ import {
 } from "@/lib/snapshotDiff";
 import { createSignalIfMissing } from "@/lib/reviewSignals";
 import { buildFilingIndexUrlFromAccession } from "@/lib/secFilings";
+import { refreshScorecardOnly } from "@/lib/preAnalysisFlow";
 import type {
   RelativeValuationSnapshot,
   Valuation,
@@ -145,6 +147,38 @@ export async function ensureQuarterlySnapshots({
     console.error(
       `maybeEmitDeltaSignal failed for ${ticker} accession ${filing.accession}: ${(err as Error).message}`,
     );
+  });
+
+  // Refresh the shared per-ticker scorecard cache with the fresh
+  // numbers. Quarterly trigger (10-Q): scorecard + tier recompute, no
+  // IA — moat and red flags stay anchored to the latest 10-K.
+  // Annual trigger (10-K): the daily SEC signals cron handles the full
+  // IA refresh once per ticker per year, so we skip it here to avoid
+  // duplicating the work when the position page loads first.
+  if (trigger === "quarterly_10q") {
+    refreshScorecardOnly(ticker).catch((err) => {
+      console.error(
+        `refreshScorecardOnly failed for ${ticker}: ${(err as Error).message}`,
+      );
+    });
+  }
+
+  // Iris log: snapshot creation. Per-user side effect (snapshots are
+  // per-user) but the action is keyed by ticker so the public log
+  // surfaces the work too. Best-effort: a logging failure must not
+  // affect the user-facing flow.
+  await recordIrisAction({
+    actionType: "snapshot_created",
+    ticker,
+    narrationMd:
+      trigger === "annual_10k"
+        ? `${ticker} cerró su año fiscal: snapshot anual congelado para Evolución.`
+        : `Trimestral de ${ticker} congelada: snapshot disponible para la línea de Evolución.`,
+    metadata: {
+      trigger,
+      accession: filing.accession,
+      form: filing.form,
+    },
   });
 
   return { createdCount: 1, latestFiling: filing, snapshot };

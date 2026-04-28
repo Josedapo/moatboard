@@ -1,10 +1,8 @@
 "use client";
 
-import { useState, useTransition } from "react";
 import type { MoatboardAnalysis as Analysis } from "@/lib/moatboardAnalyses";
 import type { Fundamentals } from "@/lib/financial";
 import type { Tier, MoatArchetype, MoatStrength } from "@/lib/verdict";
-import { runAnalysisAction } from "@/app/dashboard/position/[id]/actions";
 import { scoreMetric, type MultiYearScore } from "@/lib/scorecard";
 import QualityBadge from "@/components/QualityBadge";
 import ScorecardCard from "@/components/ScorecardCard";
@@ -27,15 +25,12 @@ const STRENGTH_LABELS: Record<MoatStrength, string> = {
 };
 
 export default function MoatboardAnalysis({
-  positionId,
   ticker,
   analysis,
   fundamentals,
   cashYieldContext,
   loadError,
-  hideRegenerate = false,
 }: {
-  positionId: number;
   ticker: string;
   analysis: Analysis | null;
   fundamentals: Fundamentals | null;
@@ -44,24 +39,8 @@ export default function MoatboardAnalysis({
   // null when either input is missing, in which case the card hides.
   cashYieldContext?: { fcfYield: number; treasuryYield: number } | null;
   loadError?: string | null;
-  // Set true inside the analysis wizard where the user is walking through
-  // the analysis once. Regeneration is available later from the position
-  // page after investing.
-  hideRegenerate?: boolean;
 }) {
-  const [isPending, startTransition] = useTransition();
-  const [error, setError] = useState<string | null>(loadError ?? null);
-
-  function handleRegenerate() {
-    setError(null);
-    startTransition(async () => {
-      try {
-        await runAnalysisAction(positionId);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to regenerate");
-      }
-    });
-  }
+  const error = loadError ?? null;
 
   return (
     <section className="mb-6 rounded-2xl border border-navy-100 bg-white p-6 shadow-sm">
@@ -75,18 +54,7 @@ export default function MoatboardAnalysis({
             cash, balance sheet.
           </p>
         </div>
-        <div className="flex items-center gap-3">
-          {analysis && <QualityBadge tier={analysis.tier} size="lg" />}
-          {analysis && !hideRegenerate && (
-            <button
-              onClick={handleRegenerate}
-              disabled={isPending}
-              className="text-sm font-medium text-navy-600 hover:text-navy-900 disabled:opacity-50"
-            >
-              {isPending ? "Regenerating..." : "Regenerate"}
-            </button>
-          )}
-        </div>
+        {analysis && <QualityBadge tier={analysis.tier} size="lg" />}
       </div>
 
       {analysis && (

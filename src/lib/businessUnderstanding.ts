@@ -1,14 +1,13 @@
 import { sql } from "@/lib/db";
 import { getCanonicalTicker } from "@/lib/tickerAliases";
 
-// A single Q&A entry. `pregenerated` are the 5-7 common questions the AI
-// pre-answers with the summary; `user_followup` are questions the user asked
-// in the chat after reading the summary.
+// A single Q&A entry. The AI pre-answers 5-7 common questions alongside
+// the summary; the type discriminator is kept narrow because only this
+// kind of entry is ever written.
 export type QnA = {
   question: string;
   answer: string;
-  type: "pregenerated" | "user_followup";
-  created_at?: string; // ISO; only present on user_followup
+  type: "pregenerated";
 };
 
 export type BusinessUnderstandingSource = {
@@ -153,26 +152,3 @@ export function isBusinessUnderstandingStale(
   return cached.last_10k_accession !== latest10kAccession;
 }
 
-// Append a user follow-up Q&A to a specific (usually current) version's chat
-// history. Does not bump version — follow-ups accumulate inside the same spec.
-export async function appendFollowupQA({
-  ticker,
-  version,
-  qa,
-}: {
-  ticker: string;
-  version: number;
-  qa: Omit<QnA, "type">;
-}): Promise<void> {
-  const canonical = await getCanonicalTicker(ticker);
-  const entry: QnA = {
-    ...qa,
-    type: "user_followup",
-    created_at: qa.created_at ?? new Date().toISOString(),
-  };
-  await sql`
-    UPDATE business_understanding
-    SET questions_and_answers = questions_and_answers || ${JSON.stringify([entry])}::jsonb
-    WHERE ticker = ${canonical} AND version = ${version}
-  `;
-}

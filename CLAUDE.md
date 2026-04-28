@@ -36,10 +36,10 @@ src/
 │       ├── api/cron/signals/route.ts  # Vercel Cron endpoint (0 7 * * * UTC, CRON_SECRET-protected) — invokes runDailySignalsJob + expireOldSignals
 │       ├── analyze/[ticker]/
 │       │   ├── page.tsx               # Wizard dispatch (reads analysis_sessions.current_step, renders corresponding Step*) — 5 steps after business_type was consolidated into Quality
-│       │   └── actions.ts             # advanceStepAction, navigateToStepAction, decide{Invest,Watchlist,Discard}, markOutsideCircleAction, askFollowupAction, regenerate{Understanding,RedFlags}Action, exit/restart
+│       │   └── actions.ts             # advanceStepAction, navigateToStepAction, decide{Invest,Watchlist,Discard}, markOutsideCircleAction, exit/restart (regenerate actions removed — Iris owns refresh)
 │       └── position/[id]/
 │           ├── page.tsx               # Tabbed position detail (Overview / Negocio / Calidad / Valoración / Presentaciones) + chrome (header w/ 52w mini-bar, Decision context strip, "Ver evolución" outline button). Overview includes NextEarningsCard on top.
-│           ├── actions.ts             # runAnalysisAction, runValuationAction, thesis actions, updatePositionPreCommitmentAction, addOperationAction
+│           ├── actions.ts             # thesis actions, updatePositionPreCommitmentAction, addOperationAction, updateValuationAssumptionsAction, updateImpliedReturnOverrideAction (regenerate actions removed — Iris owns refresh)
 │           └── trajectory/            # URL stays /trajectory for bookmark stability; user-facing label is "Evolución"
 │               ├── page.tsx           # Full Evolución view — builds synthetic "hoy" pseudo-snapshot (id=-1), loads preloaded moat validations, renders TrajectoryExplorer
 │               └── actions.ts         # revalidateMoatAction — writes to moat_validations table, does NOT touch moat_assessments cache
@@ -50,7 +50,7 @@ src/
 │   ├── SignalsInbox.tsx               # Server. Inbox list component shared by /dashboard/inbox; groups signals by ticker + heartbeat line consuming `cron_runs`.
 │   ├── SignalCard.tsx                 # Client. Per-signal card with severity frame (emerald floor / amber material / navy informational), EDGAR + Evolución links, AI summary (collapsible), actions. `mode` prop: `new` shows "Marcar revisada"; `reviewed` desaturates + ✓ + "Reabrir".
 │   ├── UpcomingEarnings.tsx           # Server. Dashboard "Próximas presentaciones" — one row per portfolio + watchlist ticker with known earningsDate. Information, not alert.
-│   ├── MoatboardAnalysis.tsx          # Scorecard UI (accepts `hideRegenerate` for wizard use)
+│   ├── MoatboardAnalysis.tsx          # Scorecard UI (read-only — no regenerate button, refresh driven by Iris)
 │   ├── ImpliedReturnCalculator.tsx    # Primary widget of the Valuation section after 2026-04-25 redesign. Three visual zones top→bottom: ZONE 1 Conclusión (verdict card with checks), ZONE 2 Cálculo (3-col table Componente · Base · Estrés + threshold + floor), ZONE 3 Detalles (collapsed: anchors, formulas, tier rationale). Renders target buy price when verdict is negative.
 │   ├── Valuation.tsx                  # Valuation section dispatcher: routes to ImpliedReturnView when method='implied_return' (post-2026-04-25 default); falls back to legacy 4-tool ValuationToolkit for older rows. Cross-check (DCF/AFFO/Excess Returns/AI multiples) lives collapsed under "Otros métodos · contexto histórico + cross-check".
 │   ├── Thesis.tsx                     # AI/user thesis UI (still in repo; not currently rendered on the position page after the 2026-04-20 redesign)
@@ -67,10 +67,10 @@ src/
 │   │   ├── BusinessTypeHeader.tsx     # Compact pill + chips renderered at the top of StepQuality (no longer its own step)
 │   │   ├── StepQuality.tsx            # Renders BusinessTypeHeader + MoatboardAnalysis; "Continue to valuation" + "Skip to decision"; gates <5 dims
 │   │   ├── StepValuation.tsx          # Reuses ValuationSection with the guide
-│   │   ├── StepDecision.tsx           # Invest form captures position_pre_commitment (optional) + operation_note (optional) + price/shares/date; Watchlist + Discard
-│   │   └── FollowupChat.tsx           # Client-only chat input for understanding follow-ups
+│   │   └── StepDecision.tsx           # Invest form captures position_pre_commitment (optional) + operation_note (optional) + price/shares/date; Watchlist + Discard
 │   ├── position/                      # Position-page-specific components
-│   │   ├── PositionTabs.tsx           # Client tab shell (Overview / Negocio / Calidad / Valoración / Presentaciones) — useState, panels rendered server-side, optional `badges` prop for per-tab numeric counts (used on Presentaciones for pending signals)
+│   │   ├── PositionTabs.tsx           # Client tab shell (Overview / Calidad / Negocio / Valoración / Decisión / Señales) — useState, panels rendered server-side, optional `badges` prop for per-tab numeric counts (used on Señales for pending signals)
+│   │   ├── DecisionPanel.tsx          # Server. Centraliza transiciones de lifecycle (in_portfolio / watchlist / discarded / discovery) en la pestaña Decisión. Reemplaza los botones "Re-analizar" diseminados antes
 │   │   ├── NextEarningsCard.tsx       # Anticipation-only banner with next earnings date + relative day count. Accepts optional reportType ("10-K" | "10-Q") which renders as a pill when inferable.
 │   │   ├── PresentationsPanel.tsx     # Server. NextEarningsCard + vertical list of all signals for the ticker (new + reviewed), with pending/reviewed counts.
 │   │   ├── PositionPreCommitment.tsx  # Client. Compromiso de salida block with inline edit; navy left-border accent + blockquote body
@@ -248,7 +248,7 @@ Decision rule (two steps — both must pass):
 
 When the verdict is negative, `computeTargetBuyPrice` (in `lib/impliedReturn.ts`) inverts the formula on the FCF Yield component to surface the price at which both checks would pass — rendered as a white card inside the verdict zone.
 
-Both `ensureValuation` (first render) and `runValuationAction` (user-triggered regenerate) go through the same `computeAndSaveValuation` helper — dispatch logic lives in one place. `qualityTier` is an optional 5th parameter on both signatures so callers that already loaded the analysis can pass it through; otherwise it's resolved internally.
+Both `ensureValuation` (first render) and Iris's `refreshValuationOnly` (10-K + 10-Q hooks) go through the same `computeAndSaveValuation` helper — dispatch logic lives in one place. `qualityTier` is an optional 5th parameter on both signatures so callers that already loaded the analysis can pass it through; otherwise it's resolved internally.
 
 User-edited DCF assumptions (`updateValuationAssumptionsAction`) go through pure recompute only — **no AI re-call**. The relative snapshot and the guide are preserved as-is. Note this action edits the legacy DCF cross-check.
 
@@ -260,9 +260,25 @@ User-edited DCF assumptions (`updateValuationAssumptionsAction`) go through pure
 
 ### Cache philosophy
 
-- **Per-ticker, shared across users:** `moat_assessments`, `valuation_guides`. Refreshed yearly via TTL. Future Quality Universe will batch-populate `moat_assessments`.
+- **Per-ticker, shared across users:** `moat_assessments`, `valuation_guides`, `business_understanding`, `qualitative_red_flags`, `discovery_pre_analyses`. Refreshed via 10-K accession invalidation + the daily SEC signals cron (post-2026-04-28).
 - **Per-position, per-user:** `moatboard_analyses`, `valuations`, `theses`. Overwritten on regenerate.
 - **Always fresh:** fundamentals from yfinance (no cache — fast and free enough).
+
+### Shared per-ticker analysis cache (post-2026-04-28)
+
+`discovery_pre_analyses` is the global per-ticker view of Quality + Moat + Red flags. The model is **"analyze once, benefit all users"** — no agentic mass batch (killed because it consumed full Max tokens after 46 tickers).
+
+Three populating paths:
+
+1. **User completes wizard.** `advanceStepAction(ticker, 'valuation' | 'decision')` calls `upsertPreAnalysisFromExisting(ticker)` which lifts the rows the user just wrote (`moatboard_analyses` + `moat_assessments` + `qualitative_red_flags` + `sec_fundamentals_cache.latest_quarter_*`) into the shared row. Zero AI calls — pure DB read + upsert. Idempotent. Best-effort (errors logged, never block the wizard).
+
+2. **New 10-K detected** (full IA refresh, ~1×/year/ticker amortized across users). The daily SEC signals cron (`runDailySignalsJob`) tracks newly-inserted 10-K accessions per ticker in `EnsureSignalsResult.newTenKAccessions`. Post-loop, for each ticker that (a) reported a fresh 10-K AND (b) already has a row in `discovery_pre_analyses`, calls `processPreAnalysisForTicker(ticker)` exactly once: re-runs Quality + Moat (via `runAnalysis` — moat is invalidated by accession via `isMoatStale`) + Red flags (`generateRedFlags` over Item 1A) + business understanding (`refreshUnderstandingIfStale`) + per-user valuations (`refreshValuationOnly` re-runs `computeAndSaveValuation` on every existing `valuations` row whose canonical matches; user growth/multiple overrides carry forward). 10-K/A amendments don't trigger — they touch the same fiscal year already processed.
+
+3. **New 10-Q detected** (scorecard + valuation recompute, no AI). When `ensureQuarterlySnapshots` creates a `quarterly_10q` snapshot, it calls `refreshScorecardOnly(ticker)` which re-runs the scorecard with fresh SEC numbers, reuses cached moat (last_10k_accession unchanged means no IA invalidation), preserves existing red flag counts (Item 1A lives only in 10-K), and finally runs `refreshValuationOnly(ticker)` so per-user `valuations` rows pick up the new FCF TTM + multiple distributions (valuation guide cached 365d → no IA). Updates tier if numerics moved enough. Best-effort.
+
+Tickers that fail the coverage gate (<5 applicable scorecard dimensions, e.g. recent IPOs / niche industries / broken data) get `status='not_covered'` with a reason — the leaderboard renders "no soportado" italic with the reason in tooltip instead of a silent dash.
+
+The `tier_preset` column (default `'moatboard_default'`) lives on every row but ships with one preset only. The CAPA 1 (objective: scorecard, moat, red flags counts, 10-K accession) / CAPA 2 (opinion: tier + applicable_dimensions) split is preparation for future per-user presets — not active.
 
 ### Valuation UI — Implied Return Calculator (post-2026-04-25)
 

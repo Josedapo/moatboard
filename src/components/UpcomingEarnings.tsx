@@ -58,16 +58,12 @@ export default function UpcomingEarnings({
         );
         return (
           <li key={e.ticker}>
-            {e.positionId !== null ? (
-              <Link
-                href={`/dashboard/position/${e.positionId}`}
-                className="block no-underline text-ink"
-              >
-                {row}
-              </Link>
-            ) : (
-              row
-            )}
+            <Link
+              href={`/dashboard/ticker/${e.ticker}`}
+              className="block no-underline text-ink"
+            >
+              {row}
+            </Link>
           </li>
         );
       })}

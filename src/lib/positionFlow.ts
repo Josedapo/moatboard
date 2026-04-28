@@ -521,6 +521,187 @@ export async function computeAndSaveValuation(
   });
 }
 
+// Render-only: compute the Implied Return verdict for a ticker without
+// touching the DB. Returned shape mirrors a persisted `Valuation` row
+// (with sentinel `id = -1`, `position_id = -1`) so existing components
+// can render it unchanged. Cross-check (legacy DCF / Excess Returns / AI
+// multiples) is intentionally skipped — for the ephemeral path we only
+// surface the primary verdict; the deep-value lens shows up when the
+// user actually analyzes the ticker and the per-position row is saved.
+//
+// Used by the unified ficha at /dashboard/ticker/[symbol] when the user
+// has no per-position valuation row yet (Discovery puro, or a closed
+// position whose valuation row was never written). All inputs the math
+// depends on (SEC fundamentals, treasury, valuation guide, peer median)
+// are already shared/cached per-ticker, so the cost is identical to a
+// cold-cache `ensureValuation` minus the DB write.
+export async function computeImpliedReturnEphemeral(
+  ticker: string,
+  quote: Quote | null,
+  fundamentals: Fundamentals | null,
+  qualityTier?: Tier,
+): Promise<Valuation | null> {
+  if (!quote || quote.regularMarketPrice == null) return null;
+
+  const currentPrice = quote.regularMarketPrice;
+  const marketCap = quote.marketCap;
+  const resolvedTier: Tier = qualityTier ?? "good";
+
+  const [multiYear, treasury, relativeContext] = await Promise.all([
+    fetchMultiYearFundamentals(ticker),
+    fetchTenYearTreasuryYieldAverage(),
+    computeRelativeValuationContext(ticker),
+  ]);
+
+  const sector = quote.sector ?? null;
+  const industry = quote.industry ?? null;
+
+  const growth = computeSustainableGrowth({
+    multiYear,
+    fundamentals,
+    sector,
+    industry,
+  });
+
+  const fcfTtm =
+    fundamentals?.freeCashflow !== null && fundamentals?.freeCashflow !== undefined
+      ? fundamentals.freeCashflow
+      : null;
+  const recentSecFcf =
+    multiYear && multiYear.years.length > 0
+      ? (multiYear.years[multiYear.years.length - 1].freeCashFlow ?? null)
+      : null;
+  const fcf = fcfTtm ?? recentSecFcf ?? 0;
+  const fcfYield = marketCap && marketCap > 0 ? fcf / marketCap : 0;
+
+  const isDistributionReady = (
+    s:
+      | { current: number | null; median: number | null; q1: number | null; q3: number | null; min: number | null; max: number | null }
+      | null
+      | undefined,
+  ) =>
+    !!s &&
+    s.current !== null &&
+    s.median !== null &&
+    s.q1 !== null &&
+    s.q3 !== null &&
+    s.min !== null &&
+    s.max !== null;
+
+  // Guide is per-ticker shared cache; always safe to fetch even without
+  // a position row. Failure is silent — primary multiple selection falls
+  // back to deterministic business-type dispatch.
+  const valuationGuide = await ensureValuationGuide(
+    ticker,
+    quote,
+    fundamentals,
+    {
+      pe: isDistributionReady(relativeContext?.snapshot.pe),
+      pfcf: isDistributionReady(relativeContext?.snapshot.fcf_yield),
+      pb: isDistributionReady(relativeContext?.snapshot.pb),
+    },
+  ).catch(() => null);
+
+  const primaryMultiple = selectPrimaryMultipleSnapshot({
+    guide: valuationGuide,
+    relative: relativeContext?.snapshot,
+    sector,
+    industry,
+  });
+  const primarySnapshot = primaryMultiple?.snapshot ?? null;
+  const multipleChangeBase = deriveMultipleChangeBase(primarySnapshot);
+  const multipleChangeStress = deriveMultipleChangeStress(primarySnapshot);
+  const baseTerminalMultiple = deriveBaseMultiple(primarySnapshot);
+  const stressTerminalMultiple = deriveStressMultiple(primarySnapshot);
+
+  const peerMedian = primaryMultiple
+    ? getPeerMedian({
+        sector,
+        industry,
+        multipleLabel: primaryMultiple.label,
+      })
+    : null;
+
+  const impliedReturn = computeImpliedReturn({
+    fcfYield,
+    growthBase: growth.base,
+    growthStress: growth.stress,
+    multipleChangeBase,
+    multipleChangeStress,
+    qualityTier: resolvedTier,
+    treasuryYield: treasury.currentPct,
+  });
+
+  const stored: ImpliedReturnStoredAssumptions = {
+    fcf_yield: fcfYield,
+    fcf_ttm: fcf,
+    market_cap: marketCap ?? 0,
+    growth: {
+      base: growth.base,
+      stress: growth.stress,
+      optimistic: growth.optimistic,
+      driver: growth.driver,
+      cap_applied: growth.capApplied,
+      note: growth.note,
+      anchors: growth.anchors,
+    },
+    growth_base_override: null,
+    growth_stress_override: null,
+    multiple_change_base: multipleChangeBase,
+    multiple_change_stress: multipleChangeStress,
+    multiple_change_base_override: null,
+    multiple_change_stress_override: null,
+    multiple_label: primaryMultiple?.label,
+    multiple_source: primaryMultiple?.source,
+    multiple_current: primaryMultiple?.current ?? null,
+    multiple_median: primaryMultiple?.median ?? null,
+    multiple_q1: primaryMultiple?.q1 ?? null,
+    multiple_base_terminal: baseTerminalMultiple,
+    multiple_stress_terminal: stressTerminalMultiple,
+    peer_median: peerMedian?.value ?? null,
+    peer_median_label: primaryMultiple?.label,
+    peer_median_source: peerMedian?.source ?? null,
+    peer_median_match_key: peerMedian?.matchKey ?? null,
+    quality_tier: resolvedTier,
+    threshold: impliedReturn.threshold,
+    floor: impliedReturn.floor,
+    treasury_yield: treasury.currentPct,
+    base_cagr: impliedReturn.baseCAGR,
+    stress_cagr: impliedReturn.stressCAGR,
+    optimistic_cagr: impliedReturn.optimisticCAGR,
+    passes_attractiveness: impliedReturn.passesAttractiveness,
+    passes_no_disaster: impliedReturn.passesNoDisaster,
+    verdict: impliedReturn.verdict,
+    verdict_reason: impliedReturn.reason,
+    cross_check: undefined,
+    relative_valuation: relativeContext?.snapshot,
+  };
+
+  // Numeric columns persist as Postgres `numeric` and surface as strings.
+  // The ephemeral row mirrors that contract so consuming components don't
+  // need a parallel "in-memory only" code path. For implied_return the
+  // intrinsic_value* triple is unused by the UI (it reads the assumptions
+  // JSONB); we fill with the current price so legacy back-compat code that
+  // touches these columns gets a coherent — if uninformative — value.
+  const priceStr = currentPrice.toFixed(4);
+  return {
+    id: -1,
+    position_id: -1,
+    method: "implied_return",
+    intrinsic_value: priceStr,
+    intrinsic_value_low: priceStr,
+    intrinsic_value_high: priceStr,
+    current_price: priceStr,
+    margin_of_safety_pct: "0",
+    tier: "dcf_only",
+    dcf_tier: "fair",
+    relative_tier: relativeContext?.relativeTier ?? null,
+    assumptions: stored,
+    reasoning: impliedReturn.reason,
+    generated_at: new Date().toISOString(),
+  };
+}
+
 // ─── Legacy absolute-valuation pipeline (now: cross-check, not verdict) ──
 // Pure compute — does not write to DB. Returns null when the ticker has no
 // usable absolute-valuation method (negative shares, no FCF history, no

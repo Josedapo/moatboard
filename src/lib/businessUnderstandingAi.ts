@@ -11,17 +11,10 @@
 // a secondary context signal. When no 10-K is available (very recent IPO,
 // SEC fetch failure), we fall back to the pre-10K behaviour and tag the
 // `sources` array accordingly so the row is honest about its ancestry.
-//
-// Two entry points:
-//   1. `generateBusinessUnderstanding` — full first-pass generation (summary
-//      + 5-7 pre-generated Q&A). Persisted via `saveNewUnderstanding`.
-//   2. `answerFollowupQuestion` — single-turn Q&A against an existing summary,
-//      appended to the record via `appendFollowupQA`.
 
-import { callJson, callText } from "@/lib/claudeClient";
+import { callJson } from "@/lib/claudeClient";
 import type { Quote, Fundamentals } from "@/lib/financial";
 import type {
-  BusinessUnderstanding,
   QnA,
   BusinessUnderstandingSource,
 } from "@/lib/businessUnderstanding";
@@ -129,45 +122,6 @@ LONGITUD (crítico): cada sección debe tener 1-2 párrafos; cada párrafo 2-3 f
 Después, anticipa 5-7 preguntas que un inversor con criterio se haría y respóndelas tú mismo. Las preguntas deben ser CONCRETAS y específicas de este negocio, no genéricas ("¿es rentable?" no vale; "¿qué pasa con los volúmenes si las tasas bajan 200bp?" sí). Las respuestas 1-3 frases, directas.
 
 Llama a la tool submit_business_understanding con exactamente 5 secciones (en el orden indicado) y 5-7 Q&A. No escribas texto plano fuera de la tool.`;
-}
-
-function buildFollowupPrompt(
-  ticker: string,
-  understanding: BusinessUnderstanding,
-  question: string,
-): string {
-  const priorQnA = understanding.questions_and_answers
-    .map((qa) => `Q: ${qa.question}\nA: ${qa.answer}`)
-    .join("\n\n");
-
-  // Summary is stored as a JSON-serialized SerializedSummary. Flatten it
-  // back to readable text so Claude has the full prior context.
-  let summaryText = understanding.summary_md;
-  try {
-    const parsed = JSON.parse(understanding.summary_md) as SerializedSummary;
-    summaryText = parsed.sections
-      .map((s) => `## ${s.title}\n\n${s.paragraphs.join("\n\n")}`)
-      .join("\n\n");
-  } catch {
-    // fall through — use the raw string if not parseable
-  }
-
-  return `${TONE_PREAMBLE}
-
-Conoces esta empresa: ${understanding.ticker}.
-
-Resumen ya escrito:
-${summaryText}
-
-Preguntas ya respondidas en esta sesión:
-${priorQnA}
-
-NUEVA PREGUNTA del inversor:
-"${question}"
-
-Respóndele en 2-5 frases, mismo tono, sin repetir lo que ya está en el resumen. Si la pregunta se sale del alcance (noticias recientísimas, predicciones de precio), dilo honestamente.
-
-FORMATO: Texto plano, sin JSON, sin preámbulo. Sólo la respuesta.`;
 }
 
 export async function generateBusinessUnderstanding(
@@ -292,21 +246,6 @@ export async function generateBusinessUnderstanding(
     },
     model,
   };
-}
-
-export async function answerFollowupQuestion(
-  ticker: string,
-  understanding: BusinessUnderstanding,
-  question: string,
-): Promise<{ answer: string; model: string }> {
-  const prompt = buildFollowupPrompt(ticker, understanding, question);
-
-  const { text, model } = await callText(prompt, { maxTokens: 800 });
-  const answer = text.trim();
-  if (answer.length < 10) {
-    throw new Error("Follow-up answer was empty or too short");
-  }
-  return { answer, model };
 }
 
 function formatPct(value: number | null | undefined): string {

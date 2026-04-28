@@ -21,9 +21,15 @@ import { updateImpliedReturnOverrideAction } from "@/app/dashboard/position/[id]
 export default function MultipleRowEditable({
   positionId,
   assumptions,
+  ephemeral = false,
 }: {
   positionId: number;
   assumptions: ImpliedReturnStoredAssumptions;
+  // When true, renders the row read-only: no pencil ✎, no inline editor.
+  // Used by /dashboard/ticker/[symbol] for users without a per-position
+  // valuation row (Discovery puro). The CTA to analyze lives at the
+  // calculator level, not on each cell.
+  ephemeral?: boolean;
 }) {
   const label = assumptions.multiple_label ?? null;
   const current = assumptions.multiple_current ?? null;
@@ -56,6 +62,7 @@ export default function MultipleRowEditable({
       <td className="py-2 align-top text-right tabular-nums">
         <ScenarioCell
           positionId={positionId}
+          ephemeral={ephemeral}
           scenario="base"
           label={label}
           current={current}
@@ -83,6 +90,7 @@ export default function MultipleRowEditable({
       <td className="py-2 align-top text-right tabular-nums">
         <ScenarioCell
           positionId={positionId}
+          ephemeral={ephemeral}
           scenario="stress"
           label={label}
           current={current}
@@ -109,6 +117,7 @@ export default function MultipleRowEditable({
 
 function ScenarioCell({
   positionId,
+  ephemeral,
   scenario,
   label,
   current,
@@ -119,6 +128,7 @@ function ScenarioCell({
   autoTerminal,
 }: {
   positionId: number;
+  ephemeral: boolean;
   scenario: "base" | "stress";
   label: "P/E" | "P/FCF" | "P/B";
   current: number;
@@ -234,15 +244,17 @@ function ScenarioCell({
         >
           {terminal.toFixed(1)}x
         </span>
-        <button
-          type="button"
-          onClick={openEditor}
-          aria-label={`Editar múltiplo ${scenario}`}
-          title="Editar manualmente"
-          className="text-navy-400 hover:text-navy-700"
-        >
-          <PencilIcon />
-        </button>
+        {!ephemeral && (
+          <button
+            type="button"
+            onClick={openEditor}
+            aria-label={`Editar múltiplo ${scenario}`}
+            title="Editar manualmente"
+            className="text-navy-400 hover:text-navy-700"
+          >
+            <PencilIcon />
+          </button>
+        )}
       </div>
       <div className="text-[11px] font-normal text-navy-500">
         {isOverride ? "manual override" : autoCaption}

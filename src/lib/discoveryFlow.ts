@@ -13,6 +13,7 @@ import {
 } from "@/lib/thirteenF";
 import { resolveCusips } from "@/lib/cusip";
 import { generateCrossSignalsForFiling } from "@/lib/discoveryCrossSignals";
+import { recordIrisAction } from "@/lib/irisActions";
 
 export type IngestResult =
   | {
@@ -171,6 +172,27 @@ export async function runWeeklyDiscoveryJob(): Promise<{
         });
       }
     }
+
+    // Iris log entry summarising the weekly 13F sweep.
+    const filingsPart =
+      newFilings === 0
+        ? "Sin 13F nuevos esta semana."
+        : `${newFilings} ${newFilings === 1 ? "13F nuevo" : "13F nuevos"} parseados.`;
+    const movementsPart =
+      crossSignalsCreated > 0
+        ? ` Detectados ${crossSignalsCreated} ${crossSignalsCreated === 1 ? "movimiento" : "movimientos"} en tus tickers.`
+        : "";
+    await recordIrisAction({
+      actionType: "weekly_13f_scan",
+      ticker: null,
+      narrationMd: `Revisión semanal de los fondos curados. ${summary.length} fondos consultados. ${filingsPart}${movementsPart}`,
+      metadata: {
+        funds_processed: summary.length,
+        new_filings: newFilings,
+        cross_signals_created: crossSignalsCreated,
+        errors: errorCount,
+      },
+    });
 
     await sql`
       UPDATE cron_runs
