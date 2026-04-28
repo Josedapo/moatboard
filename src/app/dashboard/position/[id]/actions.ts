@@ -30,10 +30,7 @@ import {
   classifyMarginOfSafety,
   computeIntrinsicValueRange,
 } from "@/lib/valuation";
-import {
-  computeAndSaveValuation,
-  deriveCompoundTier,
-} from "@/lib/positionFlow";
+import { deriveCompoundTier } from "@/lib/positionFlow";
 import {
   getValuationByPositionId,
   saveValuation,
@@ -49,7 +46,6 @@ import {
   getCostBasis,
 } from "@/lib/positionTransactions";
 import { createTransactionalSnapshot } from "@/lib/snapshotFlow";
-import { getTickerState, upsertTickerState } from "@/lib/tickerStates";
 import { revalidatePath } from "next/cache";
 
 async function assertPositionOwner(positionId: number) {
@@ -62,22 +58,6 @@ async function assertPositionOwner(positionId: number) {
     throw new Error("Position not found");
   }
   return position;
-}
-
-// ─── Moatboard Business Analysis ─────────────────────────────────────────
-
-export async function runAnalysisAction(positionId: number) {
-  const position = await assertPositionOwner(positionId);
-  const result = await runAnalysis(position.ticker);
-  await saveAnalysis({
-    positionId,
-    tier: result.tier,
-    verdictReason: result.verdict_reason,
-    scorecardSummary: result.scorecard_summary,
-    moatStrength: result.moat_strength,
-    moatArchetype: result.moat_archetype,
-  });
-  revalidatePath(`/dashboard/position/${positionId}`);
 }
 
 // ─── Thesis ──────────────────────────────────────────────────────────────
@@ -195,30 +175,6 @@ export async function deleteThesisAction(positionId: number) {
 }
 
 // ─── Valuation ───────────────────────────────────────────────────────────
-
-export async function runValuationAction(positionId: number) {
-  const position = await assertPositionOwner(positionId);
-  const { quote, fundamentals } = await fetchQuoteAndFundamentals(
-    position.ticker,
-  );
-
-  if (!quote || quote.regularMarketPrice == null) {
-    throw new Error(
-      "Cannot compute valuation — current market price is unavailable.",
-    );
-  }
-
-  // Single source of truth: sector-aware dispatch lives in positionFlow.
-  // Banks → Excess Returns, REITs → AFFO, rest → Owner Earnings DCF.
-  await computeAndSaveValuation(
-    positionId,
-    position.ticker,
-    quote,
-    fundamentals,
-  );
-
-  revalidatePath(`/dashboard/position/${positionId}`);
-}
 
 // User can override the derived stage-one growth and terminal growth.
 // Hurdle rates are fixed (10/12/14%) to preserve the philosophical frame:
@@ -556,11 +512,11 @@ export async function updatePositionPreCommitmentAction({
 // ─── Add operation (add / trim / sell on a live position) ────────────────
 
 // Records a follow-up operation on an existing position. The first buy goes
-// through the wizard's decideInvestAction; this is the path for everything
-// after that. Snapshots fire on every operation (frozen frame of the quality
-// + valuation picture at that moment). If a sell zeroes the position, the
-// ticker_state flips to 'discarded' so the Closed position surfaces in
-// /dashboard/history.
+// through /dashboard/comprar/[ticker]; this is the path for adds and sells
+// on a live position. Snapshots fire on every operation (frozen frame of
+// the quality + valuation picture at that moment). Sell-to-zero leaves
+// the position with net=0 so the dashboard query hides it automatically;
+// no state flip needed (post-2026-04-28 watchlist refactor).
 export async function addOperationAction(
   positionId: number,
   formData: FormData,
@@ -568,7 +524,7 @@ export async function addOperationAction(
   const session = await auth();
   if (!session?.user?.id) throw new Error("Not authenticated");
   const userId = session.user.id;
-  const position = await assertPositionOwner(positionId);
+  await assertPositionOwner(positionId);
 
   const type = String(formData.get("type") ?? "");
   const transactionDate = String(formData.get("transaction_date") ?? "");
@@ -618,136 +574,11 @@ export async function addOperationAction(
     transactionId: txn.id,
   });
 
-  // Reconcile ticker_state with post-op share count:
-  //   · sell-to-zero on a live position → flip to 'discarded' so it leaves
-  //     Portfolio and lands in /dashboard/history
-  //   · add that brings shares from 0 (or any non-portfolio state) back to
-  //     positive → flip to 'in_portfolio' so the position resurrects in
-  //     Portfolio. Reason carries over the position-level commitment.
-  // Position rows are never deleted; the trail is the value.
-  const newBasis = await getCostBasis(positionId);
-  const currentTickerState = await getTickerState({
-    userId,
-    ticker: position.ticker,
-  });
-  if (newBasis.shares <= 1e-9) {
-    if (currentTickerState?.status !== "discarded") {
-      await upsertTickerState({
-        userId,
-        ticker: position.ticker,
-        status: "discarded",
-        reasonMd: note.length > 0 ? note : "Position closed",
-      });
-    }
-  } else if (
-    currentTickerState &&
-    currentTickerState.status !== "in_portfolio"
-  ) {
-    await upsertTickerState({
-      userId,
-      ticker: position.ticker,
-      status: "in_portfolio",
-      reasonMd: position.pre_commitment_md,
-    });
-  }
+  // Post-2026-04-28: cartera derives from positions with net>0. Sell-to-zero
+  // doesn't need a state flip — the dashboard query (EXISTS transactions WITH
+  // net>0) hides the position automatically. Watchlist is independent of
+  // ownership and stays untouched on transactions.
 
   revalidatePath(`/dashboard/position/${positionId}`);
   revalidatePath("/dashboard");
 }
-
-
-// ─── Valuation chat ──────────────────────────────────────────────────────
-
-// Conversational follow-up on a ticker's valuation. Anchored on the
-// current valuation row + cached moat + cached AI guide + the user's
-// own history of turns. Returns ok+turn (the appended row) so the
-// client can update local state without a full revalidate.
-//
-// Sonnet 4.6 always (bypasses the dual-mode caller in claudeClient
-// because chat latency matters more than free local Opus). The cost
-// per turn is ~$0.005 — negligible at personal-tool scale.
-
-export type ValuationChatActionResult =
-  | {
-      ok: true;
-      turn: import('@/lib/valuationChats').ValuationChatTurn;
-    }
-  | { ok: false; error: string };
-
-export async function askValuationFollowupAction(
-  positionId: number,
-  question: string,
-): Promise<ValuationChatActionResult> {
-  try {
-    const trimmed = question.trim();
-    if (trimmed.length < 3) {
-      return { ok: false, error: 'Pregunta demasiado corta.' };
-    }
-
-    const session = await auth();
-    if (!session?.user?.id) return { ok: false, error: 'No autenticado' };
-
-    const position = await getPositionById(positionId, session.user.id);
-    if (!position) return { ok: false, error: 'Posición no encontrada' };
-
-    const { getMoatAssessment } = await import('@/lib/moats');
-    const { getValuationGuide } = await import('@/lib/valuationGuides');
-    const { listChatTurnsForTicker, appendChatTurn } = await import('@/lib/valuationChats');
-    const { answerValuationFollowup } = await import('@/lib/valuationChatAi');
-
-    const [valuation, moat, guide, analysis, history, { quote }] =
-      await Promise.all([
-        getValuationByPositionId(positionId),
-        getMoatAssessment(position.ticker),
-        getValuationGuide(position.ticker),
-        getAnalysisByPositionId(positionId),
-        listChatTurnsForTicker({
-          userId: session.user.id,
-          ticker: position.ticker,
-        }),
-        fetchQuoteAndFundamentals(position.ticker),
-      ]);
-
-    if (!valuation) {
-      return {
-        ok: false,
-        error: 'No hay valoración cacheada todavía — abre la pestaña Valoración primero.',
-      };
-    }
-
-    const { answer, model } = await answerValuationFollowup({
-      ticker: position.ticker,
-      businessName: quote?.longName ?? quote?.shortName ?? null,
-      valuation,
-      guide,
-      moat,
-      qualityTier: analysis?.tier ?? null,
-      history,
-      question: trimmed,
-    });
-
-    const turn = await appendChatTurn({
-      userId: session.user.id,
-      ticker: position.ticker,
-      question: trimmed,
-      answer,
-      model,
-      snapshot: {
-        iv_base: Number(valuation.intrinsic_value),
-        iv_low: Number(valuation.intrinsic_value_low),
-        iv_high: Number(valuation.intrinsic_value_high),
-        method: valuation.method,
-        current_price: Number(valuation.current_price),
-        mos_pct: Number(valuation.margin_of_safety_pct),
-      },
-    });
-
-    revalidatePath(`/dashboard/position/${positionId}`);
-    return { ok: true, turn };
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : 'Error desconocido';
-    console.error('askValuationFollowupAction failed:', msg);
-    return { ok: false, error: msg };
-  }
-}
-

@@ -9,9 +9,9 @@ import { usePathname } from "next/navigation";
 //
 // align='right' items render flush to the right edge of the nav links
 // area, separated from the main left-aligned items. Used today only
-// for "Agentes" — the operational/admin surface that doesn't share
-// scanning patterns with the analytical tabs (Cartera / Watchlist /
-// Discovery / Inbox).
+// for "Agente" — the operational surface where Iris (la operadora del
+// observatorio) deja su rastro. No comparte patrones de escaneo con
+// las pestañas analíticas (Cartera / Watchlist / Discovery / Inbox).
 type NavItem = {
   href: string;
   label: string;
@@ -22,10 +22,9 @@ type NavItem = {
 const NAV: NavItem[] = [
   { href: "/dashboard", label: "Cartera", exact: true },
   { href: "/dashboard/watchlist", label: "Watchlist", exact: false },
-  { href: "/dashboard/history", label: "Descartes", exact: false },
   { href: "/dashboard/discovery", label: "Discovery", exact: false },
   { href: "/dashboard/inbox", label: "Inbox", exact: false },
-  { href: "/dashboard/agents", label: "Agentes", exact: false, align: "right" },
+  { href: "/dashboard/agent", label: "Agente", exact: false, align: "right" },
 ];
 
 export default function DashboardNavLinks({

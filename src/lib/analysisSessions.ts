@@ -1,24 +1,24 @@
 import { sql } from "@/lib/db";
 
+// The wizard is now 4 linear steps + 'completed' for legacy rows that
+// were terminated under the pre-2026-04-28 model. New sessions never
+// transition to 'completed' — closing the wizard is purely a UI gesture
+// and the row stays resumable forever.
 export type AnalysisStep =
   | "understanding"
   | "red_flags"
   | "quality"
   | "valuation"
-  | "decision"
   | "completed";
-
-export type AnalysisOutcome =
-  | "invested"
-  | "watchlist"
-  | "discarded"
-  | "abandoned";
 
 export type UnderstoodFlag =
   | "understood"
   | "doubts_resolved"
   | "not_understood";
 
+// Post-2026-04-28: completed_at + outcome columns dropped. One eternal
+// session per (user, ticker) — never explicitly terminated, just
+// resumable forever.
 export type AnalysisSession = {
   id: number;
   user_id: number;
@@ -27,8 +27,6 @@ export type AnalysisSession = {
   furthest_step: AnalysisStep;
   started_at: string;
   last_active_at: string;
-  completed_at: string | null;
-  outcome: AnalysisOutcome | null;
   business_understanding_version: number | null;
   understood_flag: UnderstoodFlag | null;
 };
@@ -46,13 +44,17 @@ export const STEP_ORDER: AnalysisStep[] = [
   "understanding",
   "red_flags",
   "valuation",
-  "decision",
   "completed",
 ];
 
 export function stepIndex(step: AnalysisStep): number {
   return STEP_ORDER.indexOf(step);
 }
+
+const SESSION_COLUMNS = `
+  id, user_id, ticker, current_step, furthest_step, started_at,
+  last_active_at, business_understanding_version, understood_flag
+`;
 
 export async function getActiveSession({
   userId,
@@ -62,12 +64,11 @@ export async function getActiveSession({
   ticker: string;
 }): Promise<AnalysisSession | null> {
   const rows = (await sql`
-    SELECT id, user_id, ticker, current_step, furthest_step, started_at, last_active_at,
-           completed_at, outcome, business_understanding_version, understood_flag
+    SELECT id, user_id, ticker, current_step, furthest_step, started_at,
+           last_active_at, business_understanding_version, understood_flag
     FROM analysis_sessions
     WHERE user_id = ${userId}
       AND ticker = ${ticker.toUpperCase()}
-      AND completed_at IS NULL
     LIMIT 1
   `) as unknown as AnalysisSession[];
   return rows[0] ?? null;
@@ -81,8 +82,8 @@ export async function listSessionsForTicker({
   ticker: string;
 }): Promise<AnalysisSession[]> {
   const rows = (await sql`
-    SELECT id, user_id, ticker, current_step, furthest_step, started_at, last_active_at,
-           completed_at, outcome, business_understanding_version, understood_flag
+    SELECT id, user_id, ticker, current_step, furthest_step, started_at,
+           last_active_at, business_understanding_version, understood_flag
     FROM analysis_sessions
     WHERE user_id = ${userId} AND ticker = ${ticker.toUpperCase()}
     ORDER BY started_at DESC
@@ -90,10 +91,9 @@ export async function listSessionsForTicker({
   return rows;
 }
 
-// Start a new session. If an active one exists, return it (idempotent —
-// the partial unique index on (user_id, ticker) WHERE completed_at IS NULL
-// guarantees at most one active session per ticker, so resuming is the right
-// behavior).
+// Start a new session. If one exists for (user, ticker), return it
+// (idempotent — the unique index guarantees at most one row per pair,
+// so resuming is the right behavior).
 export async function startSession({
   userId,
   ticker,
@@ -106,8 +106,8 @@ export async function startSession({
   const rows = (await sql`
     INSERT INTO analysis_sessions (user_id, ticker, current_step, furthest_step)
     VALUES (${userId}, ${ticker.toUpperCase()}, 'quality', 'quality')
-    RETURNING id, user_id, ticker, current_step, furthest_step, started_at, last_active_at,
-              completed_at, outcome, business_understanding_version, understood_flag
+    RETURNING id, user_id, ticker, current_step, furthest_step, started_at,
+              last_active_at, business_understanding_version, understood_flag
   `) as unknown as AnalysisSession[];
   return rows[0];
 }
@@ -139,33 +139,18 @@ export async function advanceSession({
           ${businessUnderstandingVersion ?? null}, business_understanding_version
         )
     WHERE id = ${sessionId}
-    RETURNING id, user_id, ticker, current_step, furthest_step, started_at, last_active_at,
-              completed_at, outcome, business_understanding_version, understood_flag
+    RETURNING id, user_id, ticker, current_step, furthest_step, started_at,
+              last_active_at, business_understanding_version, understood_flag
   `) as unknown as AnalysisSession[];
   return rows[0];
 }
 
-export async function completeSession({
-  sessionId,
-  outcome,
-}: {
-  sessionId: number;
-  outcome: AnalysisOutcome;
-}): Promise<AnalysisSession> {
-  const rows = (await sql`
-    UPDATE analysis_sessions
-    SET current_step = 'completed',
-        completed_at = NOW(),
-        last_active_at = NOW(),
-        outcome = ${outcome}
-    WHERE id = ${sessionId}
-    RETURNING id, user_id, ticker, current_step, furthest_step, started_at, last_active_at,
-              completed_at, outcome, business_understanding_version, understood_flag
-  `) as unknown as AnalysisSession[];
-  return rows[0];
-}
-
-export async function abandonActiveSession({
+// Wipe the session for (user, ticker). Used by restartAnalysisAction
+// when the user wants to walk the wizard from scratch. Cached pieces
+// (moatboard_analyses, qualitative_red_flags, business_understanding)
+// survive — they're per-ticker, not per-session — so the next run
+// hits cache. Only the cursor (current_step / furthest_step) resets.
+export async function deleteSession({
   userId,
   ticker,
 }: {
@@ -173,12 +158,10 @@ export async function abandonActiveSession({
   ticker: string;
 }): Promise<void> {
   await sql`
-    UPDATE analysis_sessions
-    SET completed_at = NOW(),
-        outcome = 'abandoned',
-        current_step = 'completed'
+    DELETE FROM analysis_sessions
     WHERE user_id = ${userId}
       AND ticker = ${ticker.toUpperCase()}
-      AND completed_at IS NULL
   `;
 }
+
+void SESSION_COLUMNS;

@@ -1,4 +1,4 @@
-import { advanceStepAction } from "@/app/dashboard/analyze/[ticker]/actions";
+import { advanceStepAction, exitAnalysisAction } from "@/app/dashboard/analyze/[ticker]/actions";
 import { ensureAnalysis } from "@/lib/positionFlow";
 import { fetchQuoteAndFundamentals } from "@/lib/financial";
 import type { Quote } from "@/lib/financial";
@@ -50,12 +50,12 @@ export default async function StepQuality({
           show a tier the framework can&apos;t back, Moatboard stops here.
         </p>
         <div className="mt-4 flex gap-3">
-          <form action={advanceStepAction.bind(null, ticker, "decision", null)}>
+          <form action={exitAnalysisAction.bind(null, ticker)}>
             <button
               type="submit"
               className="rounded-lg bg-navy-900 px-5 py-2.5 text-sm font-medium text-white hover:bg-navy-800"
             >
-              Decide (watchlist or discard) →
+              Cerrar análisis →
             </button>
           </form>
         </div>
@@ -74,19 +74,17 @@ export default async function StepQuality({
       )}
 
       <MoatboardAnalysis
-        positionId={draftPositionId}
         ticker={ticker}
         analysis={analysis}
         fundamentals={fundamentals}
         loadError={loadError}
-        hideRegenerate
       />
 
       <section className="mb-6 rounded-2xl border border-navy-100 bg-white p-6 shadow-sm">
         <p className="mb-4 text-sm text-navy-700">
           Si la calidad cumple tu listón, continúa a entender el negocio.
-          Si no, salta a la decisión y ponla en watchlist o descártala —
-          así no gastas análisis en una empresa que ya has filtrado.
+          Si no, cierra el análisis y vuelve a Discovery — la caché se
+          conserva por si retomas el ticker más adelante.
         </p>
         <div className="flex flex-wrap gap-3">
           <form
@@ -100,12 +98,12 @@ export default async function StepQuality({
               Continuar a entender el negocio →
             </SubmitButton>
           </form>
-          <form action={advanceStepAction.bind(null, ticker, "decision", null)}>
+          <form action={exitAnalysisAction.bind(null, ticker)}>
             <button
               type="submit"
               className="rounded-lg border border-navy-300 bg-white px-5 py-2.5 text-sm font-medium text-navy-700 hover:border-navy-900"
             >
-              Saltar a la decisión
+              Cerrar análisis
             </button>
           </form>
         </div>

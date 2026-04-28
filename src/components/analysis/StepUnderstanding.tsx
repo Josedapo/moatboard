@@ -1,18 +1,11 @@
-import {
-  advanceStepAction,
-  markOutsideCircleAction,
-  regenerateUnderstandingAction,
-} from "@/app/dashboard/analyze/[ticker]/actions";
+import { advanceStepAction, exitAnalysisAction } from "@/app/dashboard/analyze/[ticker]/actions";
 import {
   getCurrentUnderstanding,
   saveNewUnderstanding,
-  isBusinessUnderstandingStale,
 } from "@/lib/businessUnderstanding";
 import { generateBusinessUnderstanding } from "@/lib/businessUnderstandingAi";
 import { fetchQuoteAndFundamentals } from "@/lib/financial";
-import { fetchLatestAnnualFiling } from "@/lib/secFilings";
 import { prepareUnderstandingFiling } from "@/lib/filingForPrompt";
-import FollowupChat from "@/components/analysis/FollowupChat";
 import BusinessUnderstandingView from "@/components/shared/BusinessUnderstandingView";
 import { SubmitButton, PendingOverlay } from "@/components/analysis/WizardPending";
 
@@ -64,93 +57,41 @@ export default async function StepUnderstanding({ ticker }: { ticker: string }) 
   }
 
   const generatedOn = formatDate(understanding.generated_at);
-
-  // Stale check: if SEC has a newer 10-K than the one this row was
-  // grounded in, surface a banner. We intentionally do NOT auto-
-  // regenerate — Joseda decides when to refresh.
-  const latestFiling = await fetchLatestAnnualFiling(ticker).catch(() => null);
-  const isStale =
-    latestFiling != null &&
-    isBusinessUnderstandingStale(understanding, latestFiling.accession);
-
   const sourceFiling = understanding.sources.find((s) => s.type === "10k");
 
   return (
     <div className="space-y-6">
-      {isStale && latestFiling && (
-        <section className="rounded-2xl border border-amber-300 bg-amber-50 p-4">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <p className="text-sm font-semibold text-amber-900">
-                Nuevo {latestFiling.form} disponible
-              </p>
-              <p className="mt-1 text-xs text-amber-800">
-                Publicado el {formatDate(latestFiling.filingDate)}
-                {latestFiling.reportDate
-                  ? ` (FY ${latestFiling.reportDate})`
-                  : ""}
-                . Esta explicación se generó a partir del filing anterior.
-              </p>
-            </div>
-            <form action={regenerateUnderstandingAction.bind(null, ticker)}>
-              <PendingOverlay
-                message="Moatboard está leyendo el nuevo 10-K…"
-              />
-              <SubmitButton
-                pendingLabel="Regenerando…"
-                className="rounded-lg bg-amber-600 px-3 py-2 text-xs font-medium text-white hover:bg-amber-700 disabled:opacity-60"
-              >
-                Regenerar con nuevo {latestFiling.form}
-              </SubmitButton>
-            </form>
-          </div>
-        </section>
-      )}
-
       <section className="rounded-2xl border border-navy-100 bg-white p-6 shadow-sm">
-        <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h2 className="text-xl font-bold text-navy-950">
-              Entender el negocio
-            </h2>
+        <div className="mb-4">
+          <h2 className="text-xl font-bold text-navy-950">
+            Entender el negocio
+          </h2>
+          <p className="mt-1 text-xs text-navy-500">
+            Versión {understanding.version} · generada el {generatedOn}
+          </p>
+          {sourceFiling && (
             <p className="mt-1 text-xs text-navy-500">
-              Versión {understanding.version} · generada el {generatedOn}
+              Basado en{" "}
+              <a
+                href={sourceFiling.url}
+                target="_blank"
+                rel="noreferrer"
+                className="underline hover:text-navy-700"
+              >
+                {sourceFiling.label}
+              </a>
             </p>
-            {sourceFiling && (
-              <p className="mt-1 text-xs text-navy-500">
-                Basado en{" "}
-                <a
-                  href={sourceFiling.url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="underline hover:text-navy-700"
-                >
-                  {sourceFiling.label}
-                </a>
-              </p>
-            )}
-          </div>
-          <form action={regenerateUnderstandingAction.bind(null, ticker)}>
-            <PendingOverlay message="Moatboard está regenerando el resumen…" />
-            <SubmitButton
-              pendingLabel="Regenerando…"
-              className="text-sm font-medium text-navy-600 hover:text-navy-900 disabled:opacity-60"
-            >
-              Regenerar
-            </SubmitButton>
-          </form>
+          )}
         </div>
 
         <BusinessUnderstandingView understanding={understanding} />
       </section>
 
-      <FollowupChat ticker={ticker} />
-
       <section className="rounded-2xl border border-navy-100 bg-white p-6 shadow-sm">
         <p className="mb-4 text-sm text-navy-700">
           Sin comprensión clara, los números no importan. Si entiendes el
-          negocio, continúa a las red flags. Si no, márcalo fuera del círculo
-          de competencia para no volver a perder tiempo analizándolo.
+          negocio, continúa a las red flags. Si no, cierra el análisis y
+          vuelve a Discovery — la caché se conserva para futuras revisiones.
         </p>
         <div className="flex flex-wrap gap-3">
           <form
@@ -185,17 +126,12 @@ export default async function StepUnderstanding({ ticker }: { ticker: string }) 
               Con dudas, pero continúo
             </SubmitButton>
           </form>
-          <form action={markOutsideCircleAction.bind(null, ticker)}>
-            <input
-              type="hidden"
-              name="reason"
-              value={`${ticker} fuera del círculo de competencia`}
-            />
+          <form action={exitAnalysisAction.bind(null, ticker)}>
             <button
               type="submit"
-              className="rounded-lg border border-red-200 bg-white px-5 py-2.5 text-sm font-medium text-red-700 hover:border-red-500"
+              className="rounded-lg border border-navy-200 bg-white px-5 py-2.5 text-sm font-medium text-navy-600 hover:border-navy-400"
             >
-              No lo entiendo
+              Cerrar análisis
             </button>
           </form>
         </div>

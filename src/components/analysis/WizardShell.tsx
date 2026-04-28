@@ -5,16 +5,19 @@ import {
   restartAnalysisAction,
   navigateToStepAction,
 } from "@/app/dashboard/analyze/[ticker]/actions";
+import WatchlistStarToggle from "@/components/WatchlistStarToggle";
 
 // Ordered step labels for the indicator. "completed" is terminal and not
 // rendered — the page redirects elsewhere when the session is completed.
 // Quality runs first so the scorecard can short-circuit further AI spend.
+// Post-2026-04-28: 4 linear steps; the wizard is now pure analysis with
+// no terminal Decision step. Buy lives in /dashboard/comprar/[ticker];
+// watchlist is the star toggle in the header.
 const STEP_ORDER: { key: AnalysisStep; label: string }[] = [
   { key: "quality", label: "Quality" },
   { key: "understanding", label: "Understand" },
   { key: "red_flags", label: "Red flags" },
   { key: "valuation", label: "Valuation" },
-  { key: "decision", label: "Decision" },
 ];
 
 export default function WizardShell({
@@ -22,12 +25,14 @@ export default function WizardShell({
   currentStep,
   furthestStep,
   companyName,
+  isOnWatchlist,
   children,
 }: {
   ticker: string;
   currentStep: AnalysisStep;
   furthestStep: AnalysisStep;
   companyName?: string | null;
+  isOnWatchlist: boolean;
   children: React.ReactNode;
 }) {
   const currentIndex = STEP_ORDER.findIndex((s) => s.key === currentStep);
@@ -55,9 +60,14 @@ export default function WizardShell({
                   {companyName}
                 </h1>
               )}
+              <WatchlistStarToggle
+                ticker={ticker}
+                isOnWatchlist={isOnWatchlist}
+              />
             </div>
             <p className="mt-2 text-xs text-navy-500">
-              Guided analysis — walk through each step and decide at the end.
+              Análisis guiado — quality, business, red flags y valoración.
+              Al final podrás comprar o cerrar.
             </p>
           </div>
           <div className="flex items-center gap-3">

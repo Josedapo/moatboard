@@ -3,13 +3,13 @@ import { auth } from "@/auth";
 import { getActiveSession } from "@/lib/analysisSessions";
 import { getDraftPositionByTicker } from "@/lib/positions";
 import { fetchQuoteAndFundamentals } from "@/lib/financial";
+import { isOnWatchlist as queryIsOnWatchlist } from "@/lib/watchlistEntries";
 import DashboardNav from "@/components/DashboardNav";
 import WizardShell from "@/components/analysis/WizardShell";
 import StepUnderstanding from "@/components/analysis/StepUnderstanding";
 import StepRedFlags from "@/components/analysis/StepRedFlags";
 import StepQuality from "@/components/analysis/StepQuality";
 import StepValuation from "@/components/analysis/StepValuation";
-import StepDecision from "@/components/analysis/StepDecision";
 
 export const metadata = {
   title: "Analyze",
@@ -54,7 +54,10 @@ export default async function AnalyzePage({
   // Fetch the quote once — the header and the downstream ensure* helpers all
   // read it. fetchQuoteAndFundamentals is a single yfinance call so there's no
   // benefit to deferring.
-  const { quote } = await fetchQuoteAndFundamentals(ticker);
+  const [{ quote }, isWatchlisted] = await Promise.all([
+    fetchQuoteAndFundamentals(ticker),
+    queryIsOnWatchlist({ userId: session.user.id, ticker }),
+  ]);
 
   let body: React.ReactNode;
   switch (active.current_step) {
@@ -76,9 +79,6 @@ export default async function AnalyzePage({
     case "valuation":
       body = <StepValuation ticker={ticker} draftPositionId={draft.id} />;
       break;
-    case "decision":
-      body = <StepDecision ticker={ticker} />;
-      break;
     default:
       body = null;
   }
@@ -91,6 +91,7 @@ export default async function AnalyzePage({
         currentStep={active.current_step}
         furthestStep={active.furthest_step}
         companyName={quote?.longName ?? null}
+        isOnWatchlist={isWatchlisted}
       >
         {aliasNotice && (
           <p className="mb-6 border-l-2 border-navy-300 bg-navy-50/40 px-4 py-3 text-sm italic text-navy-700">

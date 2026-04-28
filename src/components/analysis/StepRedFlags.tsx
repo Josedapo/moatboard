@@ -1,7 +1,4 @@
-import {
-  advanceStepAction,
-  regenerateRedFlagsAction,
-} from "@/app/dashboard/analyze/[ticker]/actions";
+import { advanceStepAction, exitAnalysisAction } from "@/app/dashboard/analyze/[ticker]/actions";
 import { getRedFlags, saveRedFlags } from "@/lib/redFlags";
 import { generateRedFlags } from "@/lib/redFlagsAi";
 import { fetchQuoteAndFundamentals } from "@/lib/financial";
@@ -65,46 +62,35 @@ export default async function StepRedFlags({ ticker }: { ticker: string }) {
   return (
     <div className="space-y-6">
       <section className="rounded-2xl border border-navy-100 bg-white p-6 shadow-sm">
-        <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h2 className="text-xl font-bold text-navy-950">
-              Red flags cualitativas
-            </h2>
+        <div className="mb-4">
+          <h2 className="text-xl font-bold text-navy-950">
+            Red flags cualitativas
+          </h2>
+          <p className="mt-1 text-xs text-navy-500">
+            Generadas el {generatedOn}
+          </p>
+          {filingPeriodLabel && (
             <p className="mt-1 text-xs text-navy-500">
-              Generadas el {generatedOn}
+              Basado en{" "}
+              {filingUrl ? (
+                <a
+                  href={filingUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="underline hover:text-navy-700"
+                >
+                  10-K {filingPeriodLabel}
+                </a>
+              ) : (
+                <>10-K {filingPeriodLabel}</>
+              )}
             </p>
-            {filingPeriodLabel && (
-              <p className="mt-1 text-xs text-navy-500">
-                Basado en{" "}
-                {filingUrl ? (
-                  <a
-                    href={filingUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="underline hover:text-navy-700"
-                  >
-                    10-K {filingPeriodLabel}
-                  </a>
-                ) : (
-                  <>10-K {filingPeriodLabel}</>
-                )}
-              </p>
-            )}
-            {!cached.last_10k_accession && (
-              <p className="mt-1 text-xs text-amber-700">
-                Sin 10-K reciente disponible — fallback a conocimiento general.
-              </p>
-            )}
-          </div>
-          <form action={regenerateRedFlagsAction.bind(null, ticker)}>
-            <PendingOverlay message="Moatboard está re-escaneando el 10-K…" />
-            <SubmitButton
-              pendingLabel="Regenerando…"
-              className="text-sm font-medium text-navy-600 hover:text-navy-900 disabled:opacity-60"
-            >
-              Regenerar
-            </SubmitButton>
-          </form>
+          )}
+          {!cached.last_10k_accession && (
+            <p className="mt-1 text-xs text-amber-700">
+              Sin 10-K reciente disponible — fallback a conocimiento general.
+            </p>
+          )}
         </div>
 
         <RedFlagsList flags={cached.flags} />
@@ -113,8 +99,8 @@ export default async function StepRedFlags({ ticker }: { ticker: string }) {
       <section className="rounded-2xl border border-navy-100 bg-white p-6 shadow-sm">
         <p className="mb-4 text-sm text-navy-700">
           Si las red flags no bloquean tu interés, continúa a la valoración.
-          Si alguna es grave, salta directamente a la decisión para
-          descartar la empresa o moverla a la watchlist.
+          Si alguna es grave, cierra el análisis y vuelve a Discovery —
+          la caché se mantiene por si retomas la empresa más adelante.
         </p>
         <div className="flex flex-wrap gap-3">
           <form action={advanceStepAction.bind(null, ticker, "valuation", null)}>
@@ -126,12 +112,12 @@ export default async function StepRedFlags({ ticker }: { ticker: string }) {
               Continuar a la valoración →
             </SubmitButton>
           </form>
-          <form action={advanceStepAction.bind(null, ticker, "decision", null)}>
+          <form action={exitAnalysisAction.bind(null, ticker)}>
             <button
               type="submit"
               className="rounded-lg border border-navy-300 bg-white px-5 py-2.5 text-sm font-medium text-navy-700 hover:border-navy-900"
             >
-              Saltar a la decisión
+              Cerrar análisis
             </button>
           </form>
         </div>

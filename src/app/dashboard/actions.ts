@@ -9,25 +9,13 @@ import {
 } from "@/lib/positions";
 import { startSession } from "@/lib/analysisSessions";
 import { validateTicker } from "@/lib/financial";
-import {
-  getTickerState,
-  type TickerStatus,
-} from "@/lib/tickerStates";
 import { getCanonicalTicker } from "@/lib/tickerAliases";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
-export type PriorTickerState = {
-  ticker: string;
-  status: Exclude<TickerStatus, "in_portfolio">;
-  reasonMd: string | null;
-  lastTouchedAt: string;
-};
-
 export type ActionState = {
   error?: string;
   success?: boolean;
-  priorState?: PriorTickerState;
 };
 
 // Single entry point to the analysis wizard. Validates the ticker, ensures
@@ -62,35 +50,15 @@ export async function startAnalysisAction(
   // the input when no alias is configured.
   const upper = await getCanonicalTicker(typed);
   const aliasNotice = upper !== typed ? typed : null;
-  const confirmReanalysis = formData.get("confirmReanalysis") === "true";
 
   // If the user already owns this (has transactions), redirect to the live
   // position instead of starting a new analysis. Extensions on existing
-  // positions use a shorter "add" flow handled from the position page (Phase 5).
+  // positions use a shorter "add" flow handled from the position page.
   const live = await getPositionByTicker(session.user.id, upper);
   if (live) {
-    // Distinguish live vs draft: only redirect to live page when there are
-    // transactions. getPositionByTicker returns both — explicit check below.
     const draft = await getDraftPositionByTicker(session.user.id, upper);
     if (!draft) {
-      // It's a live (transactional) position — send the user to its page.
       redirect(`/dashboard/position/${live.id}`);
-    }
-  }
-
-  // Surface a reminder when the user already analyzed this ticker and reached
-  // a non-portfolio terminal state. They can override with confirmReanalysis.
-  if (!confirmReanalysis) {
-    const prior = await getTickerState({ userId: session.user.id, ticker: upper });
-    if (prior && prior.status !== "in_portfolio") {
-      return {
-        priorState: {
-          ticker: prior.ticker,
-          status: prior.status,
-          reasonMd: prior.reason_md,
-          lastTouchedAt: prior.last_touched_at,
-        },
-      };
     }
   }
 
@@ -117,12 +85,10 @@ export async function startAnalysisAction(
   redirect(url);
 }
 
-// Re-enter the wizard for a ticker that already has a non-portfolio state
-// (watchlist/discarded). Skips the reminder shown by the entry form because
-// the caller (watchlist/history page) is already showing the prior decision
-// in context.
+// Re-enter the wizard for a ticker — preserved as a thin alias of
+// startAnalysisAction for callers (watchlist page, history page) that
+// previously needed the confirmReanalysis bypass. Now equivalent.
 export async function reanalyzeTickerAction(formData: FormData) {
-  formData.append("confirmReanalysis", "true");
   await startAnalysisAction({}, formData);
 }
 

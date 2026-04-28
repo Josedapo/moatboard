@@ -246,6 +246,46 @@ CREATE TABLE IF NOT EXISTS cron_runs (
 
 CREATE INDEX IF NOT EXISTS cron_runs_job_idx ON cron_runs(job, started_at DESC);
 
+-- Iris's narrative action log. Distinct from cron_runs (heartbeat for
+-- diagnostics): this is the user-facing log Moatboard exposes on
+-- /dashboard/agent so users see what the system has been doing in plain
+-- Spanish ("Detecté un 10-K nuevo en MSFT — refresqué la calidad").
+--
+-- Granularity is per-action atomic: one row per ticker affected, plus
+-- per-cron summary rows for jobs that didn't surface a per-ticker
+-- effect (clean daily scan, etc.). Filterable to a user's tickers via
+-- the optional `ticker` column joined against positions / watchlist_entries.
+CREATE TABLE IF NOT EXISTS iris_actions (
+  id SERIAL PRIMARY KEY,
+  -- Action vocabulary kept narrow on purpose. UI buckets actions by type.
+  action_type VARCHAR(50) NOT NULL CHECK (action_type IN (
+    'daily_sec_scan',         -- summary of the daily SEC EDGAR run
+    'weekly_13f_scan',        -- summary of the weekly 13F discovery run
+    'tenk_refresh',           -- per-ticker, after a new 10-K
+    'tenq_recompute',         -- per-ticker, after a new 10-Q
+    'understanding_regen',    -- per-ticker, business_understanding archived + regenerated
+    'tier_propagated',        -- per-ticker, per-user analyses caught up to shared cache
+    'snapshot_created',       -- per-ticker, fundamentals_snapshots row written
+    'filing_detected'         -- per-ticker, new filing landed in the inbox
+  )),
+  -- Nullable for system-wide rows (daily / weekly scan summaries).
+  -- For per-ticker rows, stored as the canonical share class (BRK-A,
+  -- GOOGL) so filters by user-position canonicalize symmetrically.
+  ticker VARCHAR(20),
+  -- Editorial narration in Spanish. Short paragraph, plain language.
+  narration_md TEXT NOT NULL,
+  -- Free-form metadata for the action: filing accession, before/after
+  -- tier, propagated count, etc. UI doesn't need it for the v1 log but
+  -- it's there for richer drill-downs and audit later.
+  metadata JSONB,
+  occurred_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS iris_actions_occurred_at_idx
+  ON iris_actions(occurred_at DESC);
+CREATE INDEX IF NOT EXISTS iris_actions_ticker_idx
+  ON iris_actions(ticker, occurred_at DESC);
+
 -- Moatboard's verdict on the business (one row per position, overwritten on regeneration)
 CREATE TABLE IF NOT EXISTS moatboard_analyses (
   id SERIAL PRIMARY KEY,
@@ -372,24 +412,31 @@ ALTER TABLE sec_fundamentals_cache ADD COLUMN IF NOT EXISTS latest_quarter_form 
 ALTER TABLE sec_fundamentals_cache ADD COLUMN IF NOT EXISTS latest_quarter_filed DATE;
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- Analysis flow redesign (Phase 1, 2026-04-19)
+-- Analysis flow (post-2026-04-28 watchlist refactor)
 --
--- The original UI was "add ticker → auto-analyze everything → render three
--- sections on one page". The redesign turns the analysis into a stepped flow:
---   quality → understanding → red_flags → valuation → decision
+-- The wizard is a 4-step linear analysis tool:
+--   quality → understanding → red_flags → valuation
 -- Quality runs first so the scorecard tier can short-circuit further AI
--- spend — if the business fails the tier bar, the user discards at step 1
--- without spending Claude tokens on Understanding + Red flags (both of
--- which read the full 10-K). Three final outcomes (invest / watchlist /
--- discarded) plus an exit ramp at the understanding step (outside_circle).
--- Every step persists state so the user can resume a session and never
--- re-analyzes a ticker blindly.
+-- spend — if the business fails the tier bar, the user closes the wizard
+-- at step 1 without spending Claude tokens on Understanding + Red flags
+-- (both of which read the full 10-K). The wizard has no terminal Decision
+-- step: closing it is purely a UI gesture (return to Discovery), the
+-- analysis_session row stays resumable forever so cached pieces (Quality,
+-- Understanding, Red flags, Valuation) survive across sessions.
 --
--- At the moment of deciding "invest" (or adding to an existing position) the
--- system stores an immutable snapshot of the quality scorecard + valuation +
--- thesis. Automatic quarterly snapshots fire when a new 10-Q/10-K is detected.
--- Together these form the trajectory that makes monthly review possible and
--- that anchors decisions to the state of the business, not to price moves.
+-- "Buy" lives on its own page (/dashboard/comprar/[ticker]) — separating
+-- analysis from transaction. The Buy form captures price + shares + date
+-- + pre_commitment_md (required only on first buy of a ticker). At buy
+-- time the system stores an immutable snapshot of the quality scorecard
+-- + valuation. Automatic quarterly snapshots fire when a new 10-Q/10-K
+-- is detected. Together these form the trajectory that makes monthly
+-- review possible and that anchors decisions to the state of the
+-- business, not to price moves.
+--
+-- "Watchlist" is a pure tag — a star toggle on the ticker. Independent of
+-- whether the user holds the position. No reason field; the user knows
+-- why they're watching. Cartera (positions with net>0) is derived; there
+-- is no separate "in_portfolio" state.
 -- ─────────────────────────────────────────────────────────────────────────────
 
 -- Business understanding: plain-language explanation of what the company does,
@@ -440,86 +487,60 @@ CREATE TABLE IF NOT EXISTS qualitative_red_flags (
   generated_with_model VARCHAR(50) NOT NULL DEFAULT 'claude-sonnet-4-6'
 );
 
--- Ticker state, per-user: where does this ticker sit in the user's workflow?
--- Status values:
---   · 'in_portfolio'    — user owns at least one share (has a positions row + buy transaction)
---   · 'watchlist'       — user wants to revisit later; `reason_md` captures the trigger
---                         (price level, tier upgrade, awaited event, etc.)
---   · 'discarded'       — user looked at it and decided against investing; `reason_md` explains why.
---                         This includes "outside circle of competence" (the wizard's "no entiendo el
---                         negocio" exit pre-fills `reason_md` accordingly).
+-- Watchlist entries, per-user: which tickers is this user actively watching
+-- for signals + monthly review? Pure tag with no fields — the user knows
+-- why they're watching. Independent of cartera (a held position can also
+-- be on the watchlist, e.g. to monitor for trim/add).
 --
--- When a ticker is re-introduced to the analysis flow, an existing row here
--- surfaces context ("you analyzed this on 2026-03-10 and discarded because X")
--- so the user doesn't re-analyze blindly.
-CREATE TABLE IF NOT EXISTS ticker_states (
+-- Migrated from the old `ticker_states` table on 2026-04-28 via
+-- scripts/migrate-watchlist-tags.mjs. The previous concepts in_portfolio
+-- (now derived from positions with net>0) and discarded (eliminated as a
+-- concept — closing the wizard without buying is the new "discard")
+-- collapsed away.
+CREATE TABLE IF NOT EXISTS watchlist_entries (
   id SERIAL PRIMARY KEY,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   ticker VARCHAR(10) NOT NULL,
-  status VARCHAR(20) NOT NULL CHECK (status IN (
-    'in_portfolio', 'watchlist', 'discarded'
-  )),
-  reason_md TEXT,
-  review_when TEXT,
-  -- When a ticker that was previously discarded / on watchlist / outside
-  -- circle gets bought, the prior reason_md is preserved here so the position
-  -- page can surface "you had discarded this on YYYY-MM-DD because X before
-  -- changing your mind". Otherwise NULL.
-  prior_reason_on_invest_md TEXT,
   last_touched_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE (user_id, ticker)
 );
 
-CREATE INDEX IF NOT EXISTS idx_ticker_states_user_id ON ticker_states(user_id);
-CREATE INDEX IF NOT EXISTS idx_ticker_states_user_status ON ticker_states(user_id, status);
+CREATE INDEX IF NOT EXISTS idx_watchlist_entries_user_id ON watchlist_entries(user_id);
 
--- Backfill on existing DBs (additive — no migration risk).
-ALTER TABLE ticker_states ADD COLUMN IF NOT EXISTS prior_reason_on_invest_md TEXT;
-
--- Analysis session: persisted state of a walk through the stepped flow so the
--- user can resume. At most one active session per (user, ticker) — enforced
--- by the partial unique index below. When the session completes, `completed_at`
--- and `outcome` are populated; the row stays for history.
--- `current_step` is where the user is viewing now. `furthest_step` is the
--- deepest step they've reached — needed because the step indicator lets the
--- user click back to review prior steps without losing access to the ones
--- they'd already completed further down the line.
+-- Analysis session: persisted state of a walk through the wizard so the
+-- user can resume. One eternal session per (user, ticker) — sessions
+-- are never explicitly terminated post-2026-04-28 (closing the wizard
+-- is purely a UI gesture). `current_step` is where the user is viewing
+-- now. `furthest_step` is the deepest step they've reached — needed
+-- because the step indicator lets the user click back to review prior
+-- steps without losing access to those that have already been completed.
+-- The 'completed' value in the CHECK is preserved for legacy rows
+-- written under the pre-refactor model; new rows never reach it.
 CREATE TABLE IF NOT EXISTS analysis_sessions (
   id SERIAL PRIMARY KEY,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   ticker VARCHAR(10) NOT NULL,
   current_step VARCHAR(20) NOT NULL CHECK (current_step IN (
-    'understanding', 'red_flags', 'quality', 'valuation',
-    'decision', 'completed'
+    'understanding', 'red_flags', 'quality', 'valuation', 'completed'
   )),
   furthest_step VARCHAR(20) NOT NULL DEFAULT 'quality' CHECK (furthest_step IN (
-    'understanding', 'red_flags', 'quality', 'valuation',
-    'decision', 'completed'
+    'understanding', 'red_flags', 'quality', 'valuation', 'completed'
   )),
   started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   last_active_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  completed_at TIMESTAMPTZ,
-  outcome VARCHAR(20) CHECK (outcome IS NULL OR outcome IN (
-    'invested', 'watchlist', 'discarded', 'abandoned'
-  )),
   business_understanding_version INTEGER,
   understood_flag VARCHAR(15) CHECK (understood_flag IS NULL OR understood_flag IN (
     'understood', 'doubts_resolved', 'not_understood'
   ))
 );
 
--- Backfill on existing DBs.
-ALTER TABLE analysis_sessions ADD COLUMN IF NOT EXISTS furthest_step VARCHAR(20)
-  NOT NULL DEFAULT 'understanding';
-
 CREATE INDEX IF NOT EXISTS idx_analysis_sessions_user_ticker
   ON analysis_sessions(user_id, ticker);
 
--- Only one active session per (user, ticker) — completed sessions are free to coexist.
-CREATE UNIQUE INDEX IF NOT EXISTS uniq_active_analysis_session
-  ON analysis_sessions(user_id, ticker)
-  WHERE completed_at IS NULL;
+-- Exactly one row per (user, ticker) — eternal-resumable session.
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_analysis_session_user_ticker
+  ON analysis_sessions(user_id, ticker);
 
 -- Position transactions: log of every buy / add / trim / sell on a position.
 -- Replaces the single purchase_price + purchase_date that used to live on the
@@ -678,16 +699,19 @@ CREATE INDEX IF NOT EXISTS idx_discovery_holdings_ticker
 CREATE INDEX IF NOT EXISTS idx_discovery_holdings_cusip
   ON discovery_holdings(cusip);
 
--- Discovery pre-analysis: agentic Quality + Moat + Red flags pre-tiering
--- across the Discovery roster. Populated by runDiscoveryPreAnalysisJob;
--- consumed by the Discovery leaderboard (tier chip + serious-flags badge)
--- and by the future "what changed materially this week?" inbox.
+-- Shared per-ticker analysis cache: Quality + Moat + Red flags
+-- consolidated across all users. Populated when any user completes
+-- the wizard (upsertPreAnalysisFromExisting) so the analysis becomes
+-- the cache for future users / Discovery leaderboard. Refreshed on
+-- new 10-K (full IA re-run) and 10-Q (scorecard recompute, no IA)
+-- via the daily SEC signals cron.
 --
--- One row per ticker (ticker as PK because pre-analysis is global, not
--- per-user — same pattern as moat_assessments / valuation_guides).
--- Tickers that don't pass coverage gates (SEC <5y, fewer than 2 funds,
--- <5 applicable scorecard dimensions) get a row with status='not_covered'
--- so we don't re-attempt them on every cron run.
+-- One row per ticker (ticker as PK because the analysis describes the
+-- business itself, not a user's relationship to it — same pattern as
+-- moat_assessments / valuation_guides). Tickers that don't pass the
+-- coverage gate (<5 applicable scorecard dimensions) get a row with
+-- status='not_covered' so the leaderboard renders an explained
+-- "no soportado" instead of a silent empty cell.
 CREATE TABLE IF NOT EXISTS discovery_pre_analyses (
   ticker VARCHAR(10) PRIMARY KEY,
   status VARCHAR(20) NOT NULL CHECK (
@@ -822,24 +846,3 @@ CREATE TABLE IF NOT EXISTS ticker_aliases (
 
 CREATE INDEX IF NOT EXISTS idx_ticker_aliases_canonical
   ON ticker_aliases(canonical_ticker);
-
--- Per-ticker valuation chat history. Stores Joseda's questions to the
--- AI about a ticker's valuation and the AI's answers. Durable per
--- (user_id, ticker): survives regeneration of the underlying valuations
--- row. Each turn carries a JSONB snapshot of the valuation context at
--- the moment of asking, so the UI can render "version dividers" when
--- the math has been regenerated since (preserves coherence between the
--- turn's text and the data it referenced).
-CREATE TABLE IF NOT EXISTS valuation_chats (
-  id SERIAL PRIMARY KEY,
-  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  ticker VARCHAR(10) NOT NULL,
-  question TEXT NOT NULL,
-  answer TEXT NOT NULL,
-  asked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  answered_with_model VARCHAR(50) NOT NULL,
-  snapshot JSONB NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_valuation_chats_user_ticker
-  ON valuation_chats(user_id, ticker, asked_at);

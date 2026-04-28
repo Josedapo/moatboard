@@ -154,13 +154,13 @@ export async function getFundDetail({
     -- Per-user state attaches via canonical so a watchlist entry under
     -- either share class shows on both rows (BRK-A and BRK-B).
     LEFT JOIN (
-      SELECT DISTINCT ON (COALESCE(ta2.canonical_ticker, ts2.ticker))
-        COALESCE(ta2.canonical_ticker, ts2.ticker) AS canonical_ticker,
-        ts2.status
-      FROM ticker_states ts2
-      LEFT JOIN ticker_aliases ta2 ON ta2.ticker = ts2.ticker
-      WHERE ts2.user_id = ${userId}
-      ORDER BY COALESCE(ta2.canonical_ticker, ts2.ticker), ts2.last_touched_at DESC
+      SELECT DISTINCT ON (COALESCE(ta2.canonical_ticker, we2.ticker))
+        COALESCE(ta2.canonical_ticker, we2.ticker) AS canonical_ticker,
+        'watchlist'::text AS status
+      FROM watchlist_entries we2
+      LEFT JOIN ticker_aliases ta2 ON ta2.ticker = we2.ticker
+      WHERE we2.user_id = ${userId}
+      ORDER BY COALESCE(ta2.canonical_ticker, we2.ticker), we2.last_touched_at DESC
     ) ts ON ts.canonical_ticker = COALESCE(ta.canonical_ticker, l.ticker)
     ORDER BY l.weight_in_fund DESC
   `) as unknown as FundHolding[];
@@ -250,12 +250,12 @@ export async function computeFundMovements({
       COALESCE(p.shares::text, '0') AS prior_shares,
       COALESCE(l.weight_in_fund::float, 0) AS latest_weight,
       COALESCE(p.weight_in_fund::float, 0) AS prior_weight,
-      ts.status AS ticker_state
+      CASE WHEN we.ticker IS NOT NULL THEN 'watchlist' ELSE NULL END AS ticker_state
     FROM latest l
     FULL OUTER JOIN prior p ON p.cusip = l.cusip
-    LEFT JOIN ticker_states ts
-      ON ts.ticker = COALESCE(l.ticker, p.ticker)
-      AND ts.user_id = ${userId}
+    LEFT JOIN watchlist_entries we
+      ON we.ticker = COALESCE(l.ticker, p.ticker)
+      AND we.user_id = ${userId}
   `) as unknown as Array<{
     cusip: string;
     ticker: string | null;

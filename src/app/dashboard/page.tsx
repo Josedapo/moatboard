@@ -3,11 +3,12 @@ import { auth } from "@/auth";
 import { getPositionsByUserId } from "@/lib/positions";
 import { getCostBasis } from "@/lib/positionTransactions";
 import { fetchQuoteAndFundamentals } from "@/lib/financial";
-import { listTickerStates } from "@/lib/tickerStates";
+import { listWatchlist } from "@/lib/watchlistEntries";
 import { countNewSignalsByTicker } from "@/lib/reviewSignals";
 import { getLatestCronRun } from "@/lib/cronRuns";
 import DashboardNav from "@/components/DashboardNav";
 import AnalyzeEntryForm from "@/components/AnalyzeEntryForm";
+import AddPositionForm from "@/components/AddPositionForm";
 import UpcomingEarnings, {
   type UpcomingEarning,
 } from "@/components/UpcomingEarnings";
@@ -30,7 +31,7 @@ export default async function Dashboard() {
     lastDiscoveryRun,
   ] = await Promise.all([
     getPositionsByUserId(session.user.id),
-    listTickerStates({ userId: session.user.id, status: "watchlist" }),
+    listWatchlist({ userId: session.user.id }),
     countNewSignalsByTicker(session.user.id),
     getLatestCronRun("signals_daily"),
     getLatestCronRun("discovery_weekly"),
@@ -139,8 +140,9 @@ export default async function Dashboard() {
               <>
                 <h2 className="flex items-baseline justify-between border-b border-rule-soft pb-2 mb-5 font-sans text-[11px] font-semibold uppercase tracking-[0.18em] text-ink-70">
                   <span>Empresas en cartera</span>
-                  <span className="font-display text-[13px] italic font-normal text-ink-50 normal-case tracking-normal">
-                    Ordenadas por incorporación
+                  <span className="flex items-center gap-4 font-display text-[13px] italic font-normal text-ink-50 normal-case tracking-normal">
+                    <span>Ordenadas por incorporación</span>
+                    <AddPositionForm />
                   </span>
                 </h2>
 
@@ -169,7 +171,7 @@ export default async function Dashboard() {
                     return (
                       <Link
                         key={p.id}
-                        href={`/dashboard/position/${p.id}`}
+                        href={`/dashboard/ticker/${p.ticker}`}
                         className="no-underline text-ink"
                       >
                         <div className="grid grid-cols-[110px_1fr_160px_130px] gap-6 items-center py-5 border-b border-rule-soft last:border-b-0">

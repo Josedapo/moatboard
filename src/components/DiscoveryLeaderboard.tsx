@@ -12,6 +12,7 @@ import {
   BusinessTierChip,
   FlagsBadge,
 } from "@/components/shared/BusinessSignalChips";
+import WatchlistStarToggle from "@/components/WatchlistStarToggle";
 
 const TIER_LABEL: Record<string, string> = {
   A: "Quality Compounders",
@@ -29,29 +30,30 @@ const TIER_CHIP: Record<string, string> = {
   E: "bg-navy-50 text-navy-500",
 };
 
-type FilterKey = "unseen" | "all" | "in_portfolio" | "watchlist" | "discarded";
+// Post-2026-04-28 watchlist refactor: dropped in_portfolio/discarded
+// filters (no longer states). Watchlist remains since it's a tag.
+// "Sin analizar" now means business_tier_source !== 'user' — the user
+// hasn't personally walked the wizard for this ticker (even if a shared
+// cache row exists from another user).
+type FilterKey = "unseen" | "all" | "watchlist";
 
 const FILTERS: { key: FilterKey; label: string }[] = [
   { key: "all", label: "Todas" },
   { key: "unseen", label: "Sin analizar" },
-  { key: "in_portfolio", label: "En cartera" },
   { key: "watchlist", label: "Watchlist" },
-  { key: "discarded", label: "Descartadas" },
 ];
 
 type TierFilterKey =
   | "all"
   | "exceptional_only"
   | "good_plus"
-  | "mediocre_plus"
-  | "no_tier";
+  | "mediocre_plus";
 
 const TIER_FILTERS: { key: TierFilterKey; label: string }[] = [
   { key: "all", label: "Todas" },
   { key: "exceptional_only", label: "Solo Exceptional" },
   { key: "good_plus", label: "Good+" },
   { key: "mediocre_plus", label: "Mediocre+" },
-  { key: "no_tier", label: "Sin tier aún" },
 ];
 
 type FlagsFilterKey = "all" | "no_serious" | "with_serious";
@@ -65,23 +67,6 @@ const FLAGS_FILTERS: { key: FlagsFilterKey; label: string }[] = [
 // Order: best to worst. Used by tier filters to gate "X+".
 const TIER_ORDER: BusinessTier[] = ["exceptional", "good", "mediocre", "poor"];
 
-const STATE_STYLE: Record<
-  string,
-  { label: string; chip: string }
-> = {
-  in_portfolio: {
-    label: "En cartera",
-    chip: "bg-emerald-100 text-emerald-800",
-  },
-  watchlist: {
-    label: "Watchlist",
-    chip: "bg-amber-100 text-amber-800",
-  },
-  discarded: {
-    label: "Descartada",
-    chip: "bg-navy-100 text-navy-600",
-  },
-};
 
 type SortKey =
   | "ticker"
@@ -89,17 +74,14 @@ type SortKey =
   | "tier"
   | "conviction"
   | "n_funds"
-  | "state";
+  | "analysis";
 type SortDir = "asc" | "desc";
 
-// Higher value = earlier in the "natural" state sort order: unseen
-// first (actionable), then owned/watchlist, then discards. Sort desc
-// surfaces unseen at the top.
-const STATE_RANK: Record<string, number> = {
-  "": 4, // unseen
-  in_portfolio: 3,
-  watchlist: 2,
-  discarded: 1,
+// Higher value = earlier in the sort order. "No analizada" first
+// (actionable), then "Analizada". Sort desc surfaces unseen at the top.
+const ANALYSIS_RANK: Record<string, number> = {
+  unseen: 2,
+  analyzed: 1,
 };
 
 // Higher = better. Sort desc surfaces exceptional first; un-analyzed rows
@@ -133,10 +115,9 @@ export default function DiscoveryLeaderboard({
     } else {
       setSortKey(key);
       // Sensible defaults: numeric columns desc, text columns asc.
+      // Analysis sort defaults to desc so unanalyzed (actionable) surface first.
       setSortDir(
-        key === "ticker" || key === "issuer" || key === "state"
-          ? "asc"
-          : "desc",
+        key === "ticker" || key === "issuer" ? "asc" : "desc",
       );
     }
   };
@@ -153,22 +134,20 @@ export default function DiscoveryLeaderboard({
   const filtered = useMemo(() => {
     const q = query.trim().toUpperCase();
     const passed = rows.filter((r) => {
-      if (filter === "unseen" && r.ticker_state) return false;
-      if (filter === "in_portfolio" && r.ticker_state !== "in_portfolio")
+      // "Sin analizar" = the current user hasn't walked the wizard
+      // (shared-cache analyses from other users don't count).
+      if (filter === "unseen" && r.business_tier_source === "user")
         return false;
       if (filter === "watchlist" && r.ticker_state !== "watchlist")
-        return false;
-      if (filter === "discarded" && r.ticker_state !== "discarded")
         return false;
       if (q && !r.ticker.includes(q) && !r.issuer_name.toUpperCase().includes(q))
         return false;
 
-      // Tier filter (agent or user verdict, doesn't matter — both are
-      // tier on the same scale).
+      // Tier filter — applied uniformly regardless of whether the
+      // tier came from the user's own analysis or from another user
+      // who already analyzed the ticker (shared cache).
       if (tierFilter !== "all") {
-        if (tierFilter === "no_tier") {
-          if (r.business_tier !== null) return false;
-        } else if (tierFilter === "exceptional_only") {
+        if (tierFilter === "exceptional_only") {
           if (r.business_tier !== "exceptional") return false;
         } else {
           // good_plus / mediocre_plus: rank-based "at-or-better" gate.
@@ -216,12 +195,14 @@ export default function DiscoveryLeaderboard({
           // strongest-conviction name surfaces first.
           return b.conviction_score - a.conviction_score;
         }
-        case "state": {
-          const ra = STATE_RANK[a.ticker_state ?? ""] ?? 0;
-          const rb = STATE_RANK[b.ticker_state ?? ""] ?? 0;
+        case "analysis": {
+          const aKey = a.business_tier_source === "user" ? "analyzed" : "unseen";
+          const bKey = b.business_tier_source === "user" ? "analyzed" : "unseen";
+          const ra = ANALYSIS_RANK[aKey];
+          const rb = ANALYSIS_RANK[bKey];
           if (ra !== rb) return (ra - rb) * mult;
-          // Secondary: conviction desc so within a state group the
-          // strongest signals surface first.
+          // Secondary: conviction desc so within a group the strongest
+          // signals surface first.
           return b.conviction_score - a.conviction_score;
         }
       }
@@ -232,15 +213,11 @@ export default function DiscoveryLeaderboard({
     const c: Record<FilterKey, number> = {
       all: rows.length,
       unseen: 0,
-      in_portfolio: 0,
       watchlist: 0,
-      discarded: 0,
     };
     for (const r of rows) {
-      if (!r.ticker_state) c.unseen += 1;
-      else if (r.ticker_state === "in_portfolio") c.in_portfolio += 1;
-      else if (r.ticker_state === "watchlist") c.watchlist += 1;
-      else if (r.ticker_state === "discarded") c.discarded += 1;
+      if (r.business_tier_source !== "user") c.unseen += 1;
+      if (r.ticker_state === "watchlist") c.watchlist += 1;
     }
     return c;
   }, [rows]);
@@ -374,10 +351,10 @@ export default function DiscoveryLeaderboard({
                 </span>
               </th>
               <SortableHeader
-                label="Estado"
-                active={sortKey === "state"}
+                label="Análisis"
+                active={sortKey === "analysis"}
                 dir={sortDir}
-                onClick={() => handleSort("state")}
+                onClick={() => handleSort("analysis")}
                 align="left"
               />
               <th className="px-3 py-3 text-right font-semibold"></th>
@@ -421,10 +398,11 @@ function LeaderboardTableRow({
   isExpanded: boolean;
   onToggle: () => void;
 }) {
-  const stateStyle = row.ticker_state
-    ? STATE_STYLE[row.ticker_state]
-    : null;
-  const rowClass = row.ticker_state
+  const isAnalyzedByUser = row.business_tier_source === "user";
+  // Soft de-emphasis on rows the user has already analyzed — surfaces
+  // unseen tickers visually. Watchlist alone doesn't dim the row
+  // (orthogonal axis).
+  const rowClass = isAnalyzedByUser
     ? "border-b border-navy-50 opacity-70 hover:bg-navy-50/40 cursor-pointer"
     : "border-b border-navy-50 hover:bg-navy-50/40 cursor-pointer";
 
@@ -447,6 +425,13 @@ function LeaderboardTableRow({
             <span className="font-mono text-sm font-semibold text-navy-900">
               {row.ticker}
             </span>
+            <span onClick={(e) => e.stopPropagation()}>
+              <WatchlistStarToggle
+                ticker={row.ticker}
+                isOnWatchlist={row.ticker_state === "watchlist"}
+                size="sm"
+              />
+            </span>
           </span>
         </td>
         <td className="px-3 py-3 text-sm text-navy-700">
@@ -455,12 +440,7 @@ function LeaderboardTableRow({
         <td className="px-3 py-3">
           <BusinessTierChip
             tier={row.business_tier}
-            source={row.business_tier_source}
-            notCoveredReason={
-              row.pre_analysis_status === "not_covered"
-                ? row.pre_analysis_reason
-                : null
-            }
+            notCoveredReason={row.not_covered_reason}
           />
         </td>
         <td className="px-3 py-3">
@@ -480,15 +460,13 @@ function LeaderboardTableRow({
           <TierBreakdown row={row} />
         </td>
         <td className="px-3 py-3">
-          {stateStyle ? (
-            <span
-              className={`inline-flex rounded-md px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${stateStyle.chip}`}
-            >
-              {stateStyle.label}
+          {isAnalyzedByUser ? (
+            <span className="inline-flex rounded-md bg-navy-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-navy-700">
+              Analizada
             </span>
           ) : (
-            <span className="text-[10px] uppercase tracking-wider text-navy-400">
-              Sin analizar
+            <span className="text-[10px] italic text-navy-400">
+              No analizada
             </span>
           )}
         </td>
@@ -496,7 +474,7 @@ function LeaderboardTableRow({
           className="px-3 py-3 text-right"
           onClick={(e) => e.stopPropagation()}
         >
-          {row.business_tier !== null ? (
+          {row.business_tier_source === "user" ? (
             <ViewFichaLink ticker={row.ticker} />
           ) : (
             <AnalyzeButton ticker={row.ticker} />

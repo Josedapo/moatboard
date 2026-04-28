@@ -13,12 +13,21 @@ import {
   ensureInsiderSignalsForTicker,
   type EnsureInsiderSignalsResult,
 } from "@/lib/form4Flow";
+import { getPreAnalysis } from "@/lib/discoveryPreAnalysis";
+import { processPreAnalysisForTicker } from "@/lib/preAnalysisFlow";
+import { recordIrisAction } from "@/lib/irisActions";
 
 export type EnsureSignalsResult = {
   ticker: string;
   scanned: number; // filings fetched + matched form filter
   inserted: number; // new rows created (dedup hits don't count)
   skipped: number; // classified as "not material" (returned null)
+  // Accessions of newly-inserted 10-K (annual) signals. The daily job
+  // uses this to trigger a shared-cache refresh exactly once per ticker
+  // that just published a fresh annual report — the only path that
+  // re-runs the IA pipeline (Quality + Moat + Red flags) outside the
+  // wizard.
+  newTenKAccessions: string[];
   errored: boolean;
   errorMessage?: string;
 };
@@ -40,6 +49,7 @@ export async function ensureSignalsForTicker({
     scanned: 0,
     inserted: 0,
     skipped: 0,
+    newTenKAccessions: [],
     errored: false,
   };
 
@@ -80,7 +90,15 @@ export async function ensureSignalsForTicker({
         deduplicationKey: filing.accession,
       });
 
-      if (inserted) result.inserted++;
+      if (inserted) {
+        result.inserted++;
+        // Track only fresh annual filings — amendments (10-K/A) don't
+        // trigger the IA pipeline since they touch the same fiscal year
+        // already processed.
+        if (filing.form === "10-K") {
+          result.newTenKAccessions.push(filing.accession);
+        }
+      }
     }
   } catch (err) {
     result.errored = true;
@@ -112,9 +130,9 @@ export async function listActiveTickersForUser(
           WHERE t.position_id = p.id
         ), 0) > 0
       UNION ALL
-      SELECT ts.ticker
-      FROM ticker_states ts
-      WHERE ts.user_id = ${userId} AND ts.status = 'watchlist'
+      SELECT we.ticker
+      FROM watchlist_entries we
+      WHERE we.user_id = ${userId}
     ) AS all_active
     ORDER BY ticker
   `) as unknown as { ticker: string }[];
@@ -157,6 +175,10 @@ export async function runDailySignalsJob(): Promise<{
     `) as unknown as { id: number }[];
 
     const processedTickers = new Set<string>();
+    // Tickers that had a brand-new 10-K appear today (across any user).
+    // Used after the user loop to refresh the shared per-ticker analysis
+    // exactly once per ticker — IA cost amortized across users.
+    const tickersWithNewTenK = new Set<string>();
 
     for (const u of users) {
       const tickers = await listActiveTickersForUser(u.id);
@@ -165,6 +187,9 @@ export async function runDailySignalsJob(): Promise<{
         const r = await ensureSignalsForTicker({ userId: u.id, ticker });
         summary.push(r);
         totalInserted += r.inserted;
+        if (r.newTenKAccessions.length > 0) {
+          tickersWithNewTenK.add(ticker);
+        }
         if (r.errored) {
           errorCount++;
           errorLines.push(`${ticker}: ${r.errorMessage ?? "unknown"}`);
@@ -187,6 +212,52 @@ export async function runDailySignalsJob(): Promise<{
         }
       }
     }
+
+    // After the per-user loop, refresh the shared per-ticker analysis
+    // for any ticker that has a row in discovery_pre_analyses AND
+    // reported a new 10-K today. Skips tickers no user has analyzed
+    // yet (no row in the shared cache to refresh — first analysis will
+    // happen when a user walks them through the wizard manually).
+    // Per-ticker error isolated; IA cost is contained to "tickers with
+    // a new 10-K AND existing shared row" ≈ 1 per ticker per year.
+    for (const ticker of tickersWithNewTenK) {
+      try {
+        const existing = await getPreAnalysis(ticker);
+        if (!existing) continue;
+        const refreshed = await processPreAnalysisForTicker(ticker);
+        if (refreshed.outcome === "error") {
+          errorCount++;
+          errorLines.push(
+            `${ticker} (10-K refresh): ${refreshed.errorMessage ?? "unknown"}`,
+          );
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "unknown error";
+        errorCount++;
+        errorLines.push(`${ticker} (10-K refresh): ${msg}`);
+      }
+    }
+
+    // Iris log entry for the full daily scan. Single row that
+    // summarises the whole run; per-ticker filing rows go in via
+    // ensureSignalsForTicker below in a future hook (kept light for v1).
+    const newFilingsTotal = totalInserted + insiderSignalsInserted;
+    const filingsPart =
+      newFilingsTotal === 0
+        ? "Sin novedades."
+        : `Detectados ${newFilingsTotal} ${newFilingsTotal === 1 ? "filing nuevo" : "filings nuevos"}.`;
+    await recordIrisAction({
+      actionType: "daily_sec_scan",
+      ticker: null,
+      narrationMd: `Escaneo diario de SEC EDGAR. ${processedTickers.size} ${processedTickers.size === 1 ? "ticker" : "tickers"} revisados. ${filingsPart}`,
+      metadata: {
+        processed_tickers: processedTickers.size,
+        new_signals: totalInserted,
+        new_insider_signals: insiderSignalsInserted,
+        tickers_with_new_10k: tickersWithNewTenK.size,
+        errors: errorCount,
+      },
+    });
 
     await sql`
       UPDATE cron_runs

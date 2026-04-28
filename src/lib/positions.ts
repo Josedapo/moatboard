@@ -23,9 +23,8 @@ const POSITION_COLUMNS = `
 
 // Returns "live" positions only — net shares > 0 (buys + adds − trims −
 // sells). Drafts (no transactions) are excluded automatically because their
-// net is 0. Closed positions (sold to zero) are also excluded — they live
-// in /dashboard/history via ticker_states='discarded'. The position page is
-// still reachable by direct URL so the trail isn't lost.
+// net is 0. Closed positions (sold to zero) are also excluded; the position
+// page is still reachable by direct URL so the trail isn't lost.
 export async function getPositionsByUserId(
   userId: string | number,
 ): Promise<Position[]> {

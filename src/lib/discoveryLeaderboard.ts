@@ -17,8 +17,6 @@ export type FundInPosition = {
 
 export type BusinessTier = "exceptional" | "good" | "mediocre" | "poor";
 
-export type PreAnalysisStatus = "covered" | "not_covered" | "pending" | "error";
-
 export type LeaderboardRow = {
   ticker: string;
   issuer_name: string;
@@ -31,25 +29,29 @@ export type LeaderboardRow = {
   conviction_score: number;
   total_value_usd: number;
   fund_breakdown: FundInPosition[];
-  ticker_state: string | null; // in_portfolio / watchlist / discarded / null
-  // Quality verdict: prefers the user's own analysis (deeper) when it
-  // exists, falls back to the agent's pre-analysis (covers the ~230
-  // tickers that pass the gate without requiring the user to have
-  // touched them). Null when neither exists.
+  ticker_state: string | null; // 'watchlist' | null (post-2026-04-28 watchlist refactor — was in_portfolio/watchlist/discarded; in_portfolio derives from positions now, discarded killed)
+  // Quality verdict — same scale regardless of provenance. Prefers the
+  // user's own analysis (deeper history with their valuation overrides);
+  // falls back to the shared cache populated when any user has already
+  // analyzed this ticker. Null when nobody has looked at it yet.
   business_tier: BusinessTier | null;
-  // Where the verdict came from: 'user' (their own moatboard_analyses
-  // row), 'agent' (discovery_pre_analyses), null (no verdict yet).
-  business_tier_source: "user" | "agent" | null;
+  // Provenance — drives the row-level CTA:
+  //   'user'   → /dashboard/ticker/[symbol] resolves to a real ficha
+  //              (the user has a position + analysis_session for this ticker)
+  //   'shared' → another user analyzed it; the current user must run
+  //              the wizard before there's a ficha to show
+  //   null     → nobody has analyzed it; same wizard path as 'shared'
+  // Deliberately NOT surfaced in the tier chip itself — the tier is the
+  // tier regardless of who computed it. The distinction matters only
+  // when picking which destination the row's button should target.
+  business_tier_source: "user" | "shared" | null;
   serious_flag_count: number;
   watch_flag_count: number;
-  // The agent's coverage status. Lets the UI distinguish:
-  //   'covered'      → agent analyzed; tier is reliable
-  //   'not_covered'  → agent ran the gate and said no (SEC <5y, <2 funds, <5 dims)
-  //   'pending'      → agent has it queued
-  //   'error'        → last attempt failed (next cron retries)
-  //   null           → not yet seen by the agent (cron hasn't reached it)
-  pre_analysis_status: PreAnalysisStatus | null;
-  pre_analysis_reason: string | null; // not_covered_reason or error_message
+  // When the framework decided the ticker is unsupported (SEC <5y, <2
+  // funds, <5 applicable scorecard dimensions), the row in the shared
+  // cache stores the reason — surfaced in the chip tooltip so the user
+  // knows why no tier appears.
+  not_covered_reason: string | null;
 };
 
 export type LeaderboardMeta = {
@@ -69,7 +71,7 @@ type LeaderboardRowRaw = Omit<
   "business_tier" | "business_tier_source"
 > & {
   user_business_tier: BusinessTier | null;
-  agent_business_tier: BusinessTier | null;
+  shared_business_tier: BusinessTier | null;
 };
 
 export async function computeLeaderboard(
@@ -147,10 +149,10 @@ export async function computeLeaderboard(
         ) ORDER BY fh.tier, fh.display_name
       ) AS fund_breakdown,
       ts.status AS ticker_state,
-      -- Verdict lookup: user's own analysis wins (deeper; they've
-      -- already done Understanding + Red flags + Valuation). Agent's
-      -- pre-analysis is the fallback that covers tickers the user
-      -- hasn't touched. Null when neither exists.
+      -- Verdict lookup: user's own analysis wins (their position carries
+      -- valuation overrides + thesis); shared cache is the fallback that
+      -- covers tickers the user hasn't analyzed but another user has.
+      -- Null when nobody has analyzed it yet.
       (SELECT ma.tier
          FROM moatboard_analyses ma
          JOIN positions p ON p.id = ma.position_id
@@ -161,10 +163,10 @@ export async function computeLeaderboard(
          LIMIT 1) AS user_business_tier,
       (SELECT dpa.tier FROM discovery_pre_analyses dpa
          WHERE dpa.ticker = fh.ticker AND dpa.status = 'covered'
-         LIMIT 1) AS agent_business_tier,
-      -- Red flags: prefer the agent's pre-computed counts (one source
-      -- of truth, atomic with its tier). Fallback to direct count over
-      -- qualitative_red_flags for legacy / user-only data.
+         LIMIT 1) AS shared_business_tier,
+      -- Red flags: prefer the shared row's atomic counts (single source of
+      -- truth, atomic with its tier). Fallback to direct count over
+      -- qualitative_red_flags for legacy data missing a shared row.
       COALESCE(
         (SELECT dpa.serious_red_flags_count FROM discovery_pre_analyses dpa
            WHERE dpa.ticker = fh.ticker AND dpa.status = 'covered' LIMIT 1),
@@ -185,42 +187,41 @@ export async function computeLeaderboard(
              AND f->>'severity' = 'watch'),
         0
       ) AS watch_flag_count,
-      -- Agent coverage status (and reason when not_covered or errored).
-      (SELECT dpa.status FROM discovery_pre_analyses dpa
-         WHERE dpa.ticker = fh.ticker LIMIT 1) AS pre_analysis_status,
-      (SELECT COALESCE(dpa.not_covered_reason, dpa.error_message)
+      -- not_covered reason from the shared cache. Lets the chip render
+      -- "no soportado" with a tooltip explaining why instead of a silent —.
+      (SELECT dpa.not_covered_reason
          FROM discovery_pre_analyses dpa
-         WHERE dpa.ticker = fh.ticker LIMIT 1) AS pre_analysis_reason
+         WHERE dpa.ticker = fh.ticker AND dpa.status = 'not_covered'
+         LIMIT 1) AS not_covered_reason
     FROM fund_holdings fh
-    -- Per-user state: canonicalize the user's ticker_states row before
-    -- joining so a watchlist/discarded entry under either share class
-    -- attaches to the canonical leaderboard row. DISTINCT ON keeps the
-    -- most-recent state per canonical in the rare case the user has
-    -- entries under both share classes (pre-migration only).
+    -- Per-user watchlist overlay: canonicalize the user's watchlist_entries
+    -- row before joining so a star under either share class attaches to
+    -- the canonical leaderboard row. DISTINCT ON dedupes when the user
+    -- has entries under both share classes (pre-migration only).
     LEFT JOIN (
-      SELECT DISTINCT ON (COALESCE(ta.canonical_ticker, ts2.ticker))
-        COALESCE(ta.canonical_ticker, ts2.ticker) AS canonical_ticker,
-        ts2.status
-      FROM ticker_states ts2
-      LEFT JOIN ticker_aliases ta ON ta.ticker = ts2.ticker
-      WHERE ts2.user_id = ${userId}
-      ORDER BY COALESCE(ta.canonical_ticker, ts2.ticker), ts2.last_touched_at DESC
+      SELECT DISTINCT ON (COALESCE(ta.canonical_ticker, we2.ticker))
+        COALESCE(ta.canonical_ticker, we2.ticker) AS canonical_ticker,
+        'watchlist'::text AS status
+      FROM watchlist_entries we2
+      LEFT JOIN ticker_aliases ta ON ta.ticker = we2.ticker
+      WHERE we2.user_id = ${userId}
+      ORDER BY COALESCE(ta.canonical_ticker, we2.ticker), we2.last_touched_at DESC
     ) ts ON ts.canonical_ticker = fh.ticker
     GROUP BY fh.ticker, ts.status
     ORDER BY conviction_score DESC
   `) as unknown as LeaderboardRowRaw[];
 
   const rows: LeaderboardRow[] = raw.map((r) => {
-    const business_tier = r.user_business_tier ?? r.agent_business_tier;
+    const business_tier = r.user_business_tier ?? r.shared_business_tier;
     const business_tier_source: LeaderboardRow["business_tier_source"] =
       r.user_business_tier !== null
         ? "user"
-        : r.agent_business_tier !== null
-          ? "agent"
+        : r.shared_business_tier !== null
+          ? "shared"
           : null;
     const {
       user_business_tier: _u,
-      agent_business_tier: _a,
+      shared_business_tier: _s,
       ...rest
     } = r;
     return { ...rest, business_tier, business_tier_source };

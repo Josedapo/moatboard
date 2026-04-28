@@ -4,7 +4,7 @@
 // What this DELETES:
 //   Personal data:
 //     positions, position_transactions, fundamentals_snapshots,
-//     ticker_states, analysis_sessions, moatboard_analyses, valuations,
+//     watchlist_entries, analysis_sessions, moatboard_analyses, valuations,
 //     theses, moat_validations, review_signals
 //   Per-ticker AI caches (regenerate on first analysis):
 //     business_understanding, qualitative_red_flags,
@@ -55,7 +55,7 @@ const tables = [
   "valuations",
   "moatboard_analyses",
   "analysis_sessions",
-  "ticker_states",
+  "watchlist_entries",
   "position_transactions",
   "positions",
   // Per-ticker AI caches

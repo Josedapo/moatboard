@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { auth } from "@/auth";
-import { listTickerStatesEnriched } from "@/lib/tickerStates";
+import { listWatchlistEnriched } from "@/lib/watchlistEntries";
 import { fetchQuoteAndFundamentals } from "@/lib/financial";
 import { deriveLiveImpliedReturn } from "@/lib/impliedReturn";
 import type { ImpliedReturnStoredAssumptions } from "@/lib/valuations";
@@ -11,7 +11,6 @@ import {
   FlagsBadge,
   ValuationVerdictChip,
 } from "@/components/shared/BusinessSignalChips";
-import { reanalyzeTickerAction } from "../actions";
 
 export const metadata = {
   title: "Watchlist",
@@ -23,9 +22,8 @@ export default async function WatchlistPage() {
     return null;
   }
 
-  const items = await listTickerStatesEnriched({
+  const items = await listWatchlistEnriched({
     userId: session.user.id,
-    status: "watchlist",
   });
 
   // Fetch Yahoo quotes in parallel: friendly company name + today's
@@ -91,7 +89,7 @@ export default async function WatchlistPage() {
               >
                 <div className="flex items-start justify-between gap-4 p-5">
                   <Link
-                    href={`/dashboard/watchlist/${item.ticker}`}
+                    href={`/dashboard/ticker/${item.ticker}`}
                     className="flex-1"
                   >
                     <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
@@ -121,21 +119,7 @@ export default async function WatchlistPage() {
                         withLabels
                       />
                     </div>
-                    {item.reason_md && (
-                      <p className="mt-3 whitespace-pre-wrap text-sm text-navy-600">
-                        {item.reason_md}
-                      </p>
-                    )}
                   </Link>
-                  <form action={reanalyzeTickerAction}>
-                    <input type="hidden" name="ticker" value={item.ticker} />
-                    <button
-                      type="submit"
-                      className="rounded-lg border border-navy-300 px-3 py-1.5 text-sm text-navy-700 hover:border-navy-900 hover:text-navy-900"
-                    >
-                      Re-analyze
-                    </button>
-                  </form>
                 </div>
               </div>
             ))}

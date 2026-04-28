@@ -125,16 +125,16 @@ export async function computeDeltaWindow(
       ts.status AS ticker_state
     FROM latest_agg la
     FULL OUTER JOIN prior_agg pa ON pa.ticker = la.ticker
-    -- Per-user state, canonicalized so a watchlist/discarded entry
-    -- under either share class attaches to the canonical delta row.
+    -- Per-user watchlist overlay, canonicalized so a star under either
+    -- share class attaches to the canonical delta row.
     LEFT JOIN (
-      SELECT DISTINCT ON (COALESCE(ta.canonical_ticker, ts2.ticker))
-        COALESCE(ta.canonical_ticker, ts2.ticker) AS canonical_ticker,
-        ts2.status
-      FROM ticker_states ts2
-      LEFT JOIN ticker_aliases ta ON ta.ticker = ts2.ticker
-      WHERE ts2.user_id = ${userId}
-      ORDER BY COALESCE(ta.canonical_ticker, ts2.ticker), ts2.last_touched_at DESC
+      SELECT DISTINCT ON (COALESCE(ta.canonical_ticker, we2.ticker))
+        COALESCE(ta.canonical_ticker, we2.ticker) AS canonical_ticker,
+        'watchlist'::text AS status
+      FROM watchlist_entries we2
+      LEFT JOIN ticker_aliases ta ON ta.ticker = we2.ticker
+      WHERE we2.user_id = ${userId}
+      ORDER BY COALESCE(ta.canonical_ticker, we2.ticker), we2.last_touched_at DESC
     ) ts ON ts.canonical_ticker = COALESCE(la.ticker, pa.ticker)
     WHERE COALESCE(la.conviction, 0) > 0 OR COALESCE(pa.conviction, 0) > 0
     ORDER BY delta DESC
@@ -216,13 +216,13 @@ export async function computeDeltaWindow(
       ts.status AS ticker_state
     FROM holdings_canonical hc
     LEFT JOIN (
-      SELECT DISTINCT ON (COALESCE(ta.canonical_ticker, ts2.ticker))
-        COALESCE(ta.canonical_ticker, ts2.ticker) AS canonical_ticker,
-        ts2.status
-      FROM ticker_states ts2
-      LEFT JOIN ticker_aliases ta ON ta.ticker = ts2.ticker
-      WHERE ts2.user_id = ${userId}
-      ORDER BY COALESCE(ta.canonical_ticker, ts2.ticker), ts2.last_touched_at DESC
+      SELECT DISTINCT ON (COALESCE(ta.canonical_ticker, we2.ticker))
+        COALESCE(ta.canonical_ticker, we2.ticker) AS canonical_ticker,
+        'watchlist'::text AS status
+      FROM watchlist_entries we2
+      LEFT JOIN ticker_aliases ta ON ta.ticker = we2.ticker
+      WHERE we2.user_id = ${userId}
+      ORDER BY COALESCE(ta.canonical_ticker, we2.ticker), we2.last_touched_at DESC
     ) ts ON ts.canonical_ticker = hc.canonical
     WHERE hc.canonical IN (SELECT ticker FROM entrants)
     GROUP BY hc.canonical, ts.status
