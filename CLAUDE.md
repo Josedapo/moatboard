@@ -30,7 +30,7 @@ src/
 │       ├── comprar/[ticker]/page.tsx  # Buy form (price + shares + date + pre_commitment_md required on first buy / optional operation_note on adds + opt-in star). recordBuyTransactionAction promotes draft, snapshots, redirects to /position/[id]
 │       ├── learn/valuation/page.tsx   # Pedagogical page (Spanish, 7 sections) explaining the implied-return frame: question, 3 components, growth anchors, decision rule, tier thresholds, why not DCF, edge cases. Linked from ImpliedReturnCalculator.
 │       ├── discovery/
-│       │   ├── page.tsx               # Discovery leaderboard — consensus conviction across 31 curated funds, sortable columns, filters all/unseen/watchlist, ★ inline with ticker, "Análisis" column (Analizada / No analizada by business_tier_source), entrantes-nuevos panel, ticker search
+│       │   ├── page.tsx               # Discovery leaderboard — consensus conviction across 42 curated funds, sortable columns, filters all/unseen/watchlist, ★ inline with ticker, "Análisis" column (Analizada / No analizada by business_tier_source), entrantes-nuevos panel, ticker search
 │       │   ├── funds/page.tsx         # Fund roster index grouped by tier, sortable (portfolio value, holdings, top-5 concentration, movements Q, último 13F)
 │       │   └── fund/[cik]/page.tsx    # Per-fund detail — header + movements summary (new/add/trim/exit) + holdings table with per-row movement badge + "Solo analizables" toggle
 │       ├── api/cron/signals/route.ts  # Vercel Cron endpoint (0 7 * * * UTC, CRON_SECRET-protected) — invokes runDailySignalsJob + expireOldSignals
@@ -135,7 +135,7 @@ src/
 │   ├── discoveryFlow.ts               # Discovery: ingestRecentFilings(fundId, n) — fetches + parses + persists the N most recent 13F per fund. Idempotent by (fund_id, accession)
 │   ├── discoveryLeaderboard.ts        # Discovery: computeLeaderboard — per-ticker aggregate across latest filing per fund, conviction = Σ tier_weight × weight_in_fund
 │   ├── discoveryDelta.ts              # Discovery: QoQ deltas + new entrants (≥5 funds, not in prior quarter)
-│   ├── discoveryFund.ts               # Discovery: per-fund detail (meta + latest filing + holdings rolled up by CUSIP) + computeFundMovements (new/add/trim/exit ±5% share threshold)
+│   ├── discoveryFund.ts               # Discovery: per-fund detail (meta + latest filing + holdings rolled up by CUSIP) + computeFundMovements (new/add/trim/exit, weight-delta classifier with 2pp absolute threshold + share/weight sign guards)
 │   └── discoveryFundList.ts           # Discovery: listFundsWithStats — roster index with portfolio value, top-5 concentration, movements count
 ├── proxy.ts                           # Auth gating (Next.js 16 — was middleware.ts)
 ├── auth.ts                            # NextAuth config (Neon adapter)
@@ -178,7 +178,7 @@ Tables:
 - `moat_validations` — **per-user, per-snapshot** comparative moat validations (output of the trajectory "Validar con IA" button). Immutable rows; revalidation history.
 - `cron_runs` — heartbeat log for every cron run (started_at, finished_at, ok, processed_tickers, inserted_signals, error_count, error_summary). Consumed by SignalsInbox for "última verificación hace Xh".
 - `monthly_reviews` — placeholder, kept for possible future ceremonial anual review (Phase 6 pending).
-- `discovery_funds` — **roster of 31 curated world-class funds** seeded via `scripts/seed-discovery-funds.mjs`. Columns: cik, manager_name, display_name, tier ('A'|'B'|'C'|'D'|'E'), tier_weight (3.0/2.0/1.0/1.0/0.5), philosophy, active. Pabrai's CIK 0001173334 marked `active=false` (last 13F-HR 2012 — stale filer entity).
+- `discovery_funds` — **roster of 42 active curated world-class funds** (43 total — Pabrai inactive since 2012) seeded via `scripts/seed-discovery-funds.mjs`. Columns: cik, manager_name, display_name, tier ('A'|'B'|'C'|'D'|'E'), tier_weight (3.0/2.0/1.5/1.0/0.5 — 1.5 used to penalize Druckenmiller's higher quarterly turnover), philosophy, active. Pabrai's CIK 0001173334 marked `active=false` (last 13F-HR 2012 — stale filer entity).
 - `discovery_filings` — one row per parsed 13F-HR per fund, UNIQUE(fund_id, accession). Tracks period_of_report, filing_date, total_value_usd, holdings_count, source_url.
 - `discovery_holdings` — per-position rows from a 13F info table. Roll-up by CUSIP when filer reports shared vs sole voting authority separately. `ticker` nullable (ADRs without US listing, OTC, delisted). `weight_in_fund` precomputed so reads don't re-derive.
 - `discovery_cusip_ticker` — CUSIP→ticker cache populated via OpenFIGI. HTTP errors do NOT cache null; only legitimate "no match" responses get persisted as ticker=null. Script `scripts/reresolve-cusips.ts` exists to wipe null rows and re-query after rate-limit incidents.
