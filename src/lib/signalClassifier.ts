@@ -14,11 +14,12 @@ export type SignalSource =
   // comparison flagged by the quality framework. Emitted from
   // snapshotFlow when a newly-minted snapshot crosses a threshold.
   | "snapshot_diff"
-  // 13F-HR filing of a curated Discovery fund that MOVED a ticker the
-  // user owns or watchlists. Emitted from discoveryCrossSignals after
-  // the weekly cron ingests a new filing. One row per (user, ticker,
-  // fund, filing) where the movement was material enough (±5% share
-  // count threshold) to surface.
+  // 13F-HR filing of a curated Discovery fund that produced a genuine
+  // CONVICTION shift on a ticker the user owns or watchlists. Emitted
+  // from discoveryCrossSignals after the weekly cron ingests a new
+  // filing. Pure rebalances (share trades that keep the position at
+  // its target weight) and passive drift are filtered out — see
+  // `classifyConvictionMovement` in lib/discoveryFund for the rules.
   | "discovery_13f"
   // Form 4 filing where an insider (officer, director, 10% owner)
   // executed an open-market PURCHASE (transaction code 'P') in a
@@ -61,6 +62,13 @@ export type SignalEventType =
   | "fund_increased_position"
   | "fund_reduced_position"
   | "fund_exited_position"
+  // 13F filing acceptance announcement — emitted once per (user, fund,
+  // filing) when a curated Discovery fund reports its quarterly 13F,
+  // INDEPENDENT of whether any conviction shifts fired. Lets the user
+  // know "Fundsmith reported; review the holdings table" even when
+  // every holding is below the conviction threshold. Anchored to the
+  // user's largest holding in the fund as the ticker reference.
+  | "fund_filed"
   // Cross-signal from Form 4: an insider of the user's ticker executed
   // an open-market purchase. Aggregated per filing, not per
   // transaction.

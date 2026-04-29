@@ -22,8 +22,8 @@ src/
 │   ├── auth/signin/page.tsx           # Google sign-in
 │   ├── api/auth/[...nextauth]/route.ts # NextAuth handlers (runtime: nodejs)
 │   └── dashboard/
-│       ├── page.tsx                   # Portfolio list (filters by net shares > 0; "Próximas presentaciones" block; per-ticker new-signal badge; "Añadir acción" inline ticker input → /comprar)
-│       ├── actions.ts                 # startAnalysisAction, reanalyzeTickerAction, deletePositionAction, markSignalReviewedAction, reopenSignalAction, summarizeSignalAction
+│       ├── page.tsx                   # Portfolio list (filters by net shares > 0; "Próximas presentaciones" block; per-ticker new-signal badge; "Añadir acción" inline ticker input → /comprar). Post-2026-04-29: search/open business surface removed from here — unified into Discovery as the single entry surface for any ticker.
+│       ├── actions.ts                 # openTickerAction (search/open → /ticker/[upper], used by Discovery's entry box), startAnalysisAction (creates draft + session, redirects to /analyze/[ticker], used from the ficha's "Empezar análisis" / "Re-analizar" CTA), reanalyzeTickerAction (thin alias of startAnalysisAction for callers that submit plain FormData), deletePositionAction, markSignalReviewedAction, reopenSignalAction, summarizeSignalAction
 │       ├── inbox/page.tsx             # Pending signals (status=new only), grouped by ticker, heartbeat line, nav badge count
 │       ├── watchlist/page.tsx         # Tickers tagged with the star. Each row links to /dashboard/ticker/[ticker]
 │       ├── watchlist/[ticker]/page.tsx # Legacy alias — 308 redirect to /dashboard/ticker/[symbol] (the unified ficha)
@@ -44,7 +44,7 @@ src/
 │               ├── page.tsx           # Full Evolución view — builds synthetic "hoy" pseudo-snapshot (id=-1), loads preloaded moat validations, renders TrajectoryExplorer
 │               └── actions.ts         # revalidateMoatAction — writes to moat_validations table, does NOT touch moat_assessments cache
 ├── components/                        # All UI components (mix of Server + Client)
-│   ├── AnalyzeEntryForm.tsx           # Dashboard entry: ticker input → startAnalysisAction → wizard. Renders prior-state reminder + Re-analyze anyway button when re-introducing a parked ticker.
+│   ├── AnalyzeEntryForm.tsx           # Search/open business entry (lives in Discovery aside, post-2026-04-29 cleanup). Validates the ticker via openTickerAction and redirects to /dashboard/ticker/[upper] — the unified ficha is the single canonical surface, the wizard is reachable only from there.
 │   ├── DashboardNav.tsx               # Server nav frame; reads `new` signal count via sql query and passes to DashboardNavLinks for the Inbox badge.
 │   ├── DashboardNavLinks.tsx          # Client links (Portfolio · Watchlist · History · Inbox) with active state + amber count badge on Inbox
 │   ├── SignalsInbox.tsx               # Server. Inbox list component shared by /dashboard/inbox; groups signals by ticker + heartbeat line consuming `cron_runs`.

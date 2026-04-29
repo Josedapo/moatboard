@@ -84,19 +84,18 @@ export default function SignalsInboxClient({
   return (
     <>
       <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-navy-100 bg-navy-50/50 px-3 py-2 text-xs text-navy-700">
-        <select
-          value={tickerFilter}
-          onChange={(e) => onFilterChange(e.target.value)}
-          className="rounded-md border border-navy-200 bg-white px-2 py-0.5 text-[11px] font-medium text-navy-700 hover:border-navy-400 focus:border-navy-400 focus:outline-none"
-          aria-label="Filtrar por empresa"
+        <button
+          type="button"
+          onClick={markBatch}
+          disabled={selected.size === 0 || isPending}
+          className="rounded-md bg-navy-900 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-navy-800 disabled:cursor-not-allowed disabled:opacity-40"
         >
-          <option value="">Todas las empresas ({signals.length})</option>
-          {tickerCounts.map(([ticker, count]) => (
-            <option key={ticker} value={ticker}>
-              {ticker} ({count})
-            </option>
-          ))}
-        </select>
+          {isPending
+            ? "Marcando…"
+            : selected.size > 0
+              ? `Marcar ${selected.size} revisada${selected.size === 1 ? "" : "s"}`
+              : "Marcar revisadas"}
+        </button>
         <span className="text-navy-600">
           <span className="font-semibold text-navy-900 tabular-nums">
             {selected.size}
@@ -111,18 +110,19 @@ export default function SignalsInboxClient({
         >
           {allVisibleSelected ? "Deseleccionar todo" : "Seleccionar todo"}
         </button>
-        <button
-          type="button"
-          onClick={markBatch}
-          disabled={selected.size === 0 || isPending}
-          className="ml-auto rounded-md bg-navy-900 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-navy-800 disabled:cursor-not-allowed disabled:opacity-40"
+        <select
+          value={tickerFilter}
+          onChange={(e) => onFilterChange(e.target.value)}
+          className="ml-auto rounded-md border border-navy-200 bg-white px-2 py-0.5 text-[11px] font-medium text-navy-700 hover:border-navy-400 focus:border-navy-400 focus:outline-none"
+          aria-label="Filtrar por empresa"
         >
-          {isPending
-            ? "Marcando…"
-            : selected.size > 0
-              ? `Marcar ${selected.size} revisada${selected.size === 1 ? "" : "s"}`
-              : "Marcar revisadas"}
-        </button>
+          <option value="">Todas las empresas ({signals.length})</option>
+          {tickerCounts.map(([ticker, count]) => (
+            <option key={ticker} value={ticker}>
+              {ticker} ({count})
+            </option>
+          ))}
+        </select>
       </div>
 
       {filtered.length === 0 ? (

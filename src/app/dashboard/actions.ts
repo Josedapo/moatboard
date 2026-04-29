@@ -1,13 +1,7 @@
 "use server";
 
 import { auth } from "@/auth";
-import {
-  createPosition,
-  deletePosition,
-  getDraftPositionByTicker,
-  getPositionByTicker,
-} from "@/lib/positions";
-import { startSession } from "@/lib/analysisSessions";
+import { deletePosition } from "@/lib/positions";
 import { validateTicker } from "@/lib/financial";
 import { getCanonicalTicker } from "@/lib/tickerAliases";
 import { revalidatePath } from "next/cache";
@@ -18,12 +12,11 @@ export type ActionState = {
   success?: boolean;
 };
 
-// Single entry point to the analysis wizard. Validates the ticker, ensures
-// a draft position exists (creates one if not), ensures an active analysis
-// session exists, and redirects into the wizard. Idempotent — calling it
-// twice with the same ticker resumes the in-progress analysis rather than
-// starting over.
-export async function startAnalysisAction(
+// Discovery / search entry point — validates the ticker and redirects
+// to the unified ficha. The ficha is the canonical surface for any
+// company; from there the user explicitly opts in to the wizard via
+// "Empezar análisis" / "Re-analizar" on the Decisión tab.
+export async function openTickerAction(
   _prev: ActionState,
   formData: FormData,
 ): Promise<ActionState> {
@@ -33,63 +26,26 @@ export async function startAnalysisAction(
   }
 
   const raw = String(formData.get("ticker") ?? "").trim();
-  // Yahoo Finance uses hyphens for share-class separators (BRK-A, BRK-B).
-  // Other providers use dots (BRK.A, typed by users out of habit) or
-  // slashes (BRK/A, returned by OpenFIGI / Bloomberg). Normalize all three
-  // to the Yahoo form before validating.
   const ticker = raw.replace(/[./]/g, "-");
   if (!ticker || !/^[A-Za-z-]{1,10}$/.test(ticker)) {
     return { error: "Invalid ticker format" };
   }
 
-  const typed = ticker.toUpperCase();
-  // Dual-class share consolidation: GOOG and GOOGL are the same business
-  // (Alphabet), as are BRK-A and BRK-B (Berkshire). Resolve canonical
-  // before doing anything else so the analysis cache, ticker_state and
-  // wizard URL all share one identity per business. The canonical equals
-  // the input when no alias is configured.
-  const upper = await getCanonicalTicker(typed);
-  const aliasNotice = upper !== typed ? typed : null;
-
-  // If the user already owns this (has transactions), redirect to the live
-  // position instead of starting a new analysis. Extensions on existing
-  // positions use a shorter "add" flow handled from the position page.
-  const live = await getPositionByTicker(session.user.id, upper);
-  if (live) {
-    const draft = await getDraftPositionByTicker(session.user.id, upper);
-    if (!draft) {
-      redirect(`/dashboard/position/${live.id}`);
-    }
-  }
+  const upper = await getCanonicalTicker(ticker.toUpperCase());
 
   const isValid = await validateTicker(upper);
   if (!isValid) {
     return { error: `Ticker "${upper}" not found on Yahoo Finance` };
   }
 
-  // Get or create the draft position.
-  let draft = await getDraftPositionByTicker(session.user.id, upper);
-  if (!draft) {
-    draft = await createPosition({ userId: session.user.id, ticker: upper });
-  }
-
-  // Get or create the analysis session.
-  await startSession({ userId: session.user.id, ticker: upper });
-
-  // Carry the alias notice as a query param so the wizard can render a
-  // one-line italic Spanish notice on first load. Omitted when typed
-  // ticker already equals canonical.
-  const url = aliasNotice
-    ? `/dashboard/analyze/${upper}?aliasNotice=${aliasNotice}`
-    : `/dashboard/analyze/${upper}`;
-  redirect(url);
+  redirect(`/dashboard/ticker/${upper}`);
 }
 
-// Re-enter the wizard for a ticker — preserved as a thin alias of
-// startAnalysisAction for callers (watchlist page, history page) that
-// previously needed the confirmReanalysis bypass. Now equivalent.
-export async function reanalyzeTickerAction(formData: FormData) {
-  await startAnalysisAction({}, formData);
+// Plain-FormData wrapper of openTickerAction — used by callers that
+// don't want to thread useActionState (e.g. the Discovery leaderboard's
+// empty-state CTA, which is a one-shot submit, not a stateful form).
+export async function openTickerSubmitAction(formData: FormData) {
+  await openTickerAction({}, formData);
 }
 
 export async function deletePositionAction(formData: FormData) {

@@ -14,12 +14,10 @@ import {
   getCostBasis,
 } from "@/lib/positionTransactions";
 import { createTransactionalSnapshot } from "@/lib/snapshotFlow";
-import { addToWatchlist } from "@/lib/watchlistEntries";
 
-// Records a buy transaction. Reachable from:
-//   · The wizard's StepValuation "Comprar acciones" CTA
-//   · The Decisión tab on /dashboard/ticker/[symbol]
-//   · The "Añadir acción" button on the Cartera dashboard
+// Records a buy transaction. Reachable from the "Añadir acción"
+// inline form on the Cartera dashboard (which redirects here via
+// /dashboard/comprar/[ticker]).
 //
 // pre_commitment_md is required ONLY on the first buy of a ticker
 // (transition draft → live). On subsequent adds the field is just an
@@ -40,7 +38,6 @@ export async function recordBuyTransactionAction(
   const shares = Number(formData.get("shares"));
   const preCommitment = String(formData.get("pre_commitment_md") ?? "").trim();
   const operationNote = String(formData.get("operation_note") ?? "").trim();
-  const addToWatchlistAfter = formData.get("add_to_watchlist") === "on";
 
   if (!Number.isFinite(purchasePrice) || purchasePrice <= 0) {
     throw new Error("Precio de compra inválido");
@@ -101,10 +98,6 @@ export async function recordBuyTransactionAction(
     positionId,
     transactionId: txn.id,
   });
-
-  if (addToWatchlistAfter) {
-    await addToWatchlist({ userId, ticker: canonical });
-  }
 
   revalidatePath("/dashboard");
   revalidatePath(`/dashboard/ticker/${canonical}`);

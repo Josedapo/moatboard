@@ -511,21 +511,18 @@ CREATE INDEX IF NOT EXISTS idx_watchlist_entries_user_id ON watchlist_entries(us
 -- Analysis session: persisted state of a walk through the wizard so the
 -- user can resume. One eternal session per (user, ticker) — sessions
 -- are never explicitly terminated post-2026-04-28 (closing the wizard
--- is purely a UI gesture). `current_step` is where the user is viewing
--- now. `furthest_step` is the deepest step they've reached — needed
--- because the step indicator lets the user click back to review prior
--- steps without losing access to those that have already been completed.
--- The 'completed' value in the CHECK is preserved for legacy rows
--- written under the pre-refactor model; new rows never reach it.
+-- is purely a UI gesture). `current_step` is where the user was last
+-- viewing; the indicator now lets the user navigate freely to any of
+-- the four steps and `furthest_step` is preserved only for traceability.
 CREATE TABLE IF NOT EXISTS analysis_sessions (
   id SERIAL PRIMARY KEY,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   ticker VARCHAR(10) NOT NULL,
   current_step VARCHAR(20) NOT NULL CHECK (current_step IN (
-    'understanding', 'red_flags', 'quality', 'valuation', 'completed'
+    'understanding', 'red_flags', 'quality', 'valuation'
   )),
   furthest_step VARCHAR(20) NOT NULL DEFAULT 'quality' CHECK (furthest_step IN (
-    'understanding', 'red_flags', 'quality', 'valuation', 'completed'
+    'understanding', 'red_flags', 'quality', 'valuation'
   )),
   started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   last_active_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),

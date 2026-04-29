@@ -14,6 +14,10 @@
 // is a no-op.
 
 import { sql } from "@/lib/db";
+import {
+  classifyConvictionMovement,
+  type MovementCategory,
+} from "@/lib/discoveryFund";
 import { getFundById } from "@/lib/discoveryFlow";
 import { createSignalIfMissing } from "@/lib/reviewSignals";
 import { listActiveTickersForUser } from "@/lib/signalFlow";
@@ -21,10 +25,6 @@ import type {
   SignalEventType,
   SignalSeverity,
 } from "@/lib/signalClassifier";
-
-type MovementCategory = "new" | "exit" | "add" | "trim";
-
-const ACTIVE_CHANGE_THRESHOLD = 0.05; // ±5% share-count — parity with computeFundMovements
 
 function movementToEventType(cat: MovementCategory): SignalEventType {
   switch (cat) {
@@ -94,20 +94,6 @@ async function loadHoldingsByTicker(
   return map;
 }
 
-function classifyMovement(
-  priorShares: bigint,
-  latestShares: bigint,
-): MovementCategory | null {
-  if (priorShares === BigInt(0) && latestShares > BigInt(0)) return "new";
-  if (priorShares > BigInt(0) && latestShares === BigInt(0)) return "exit";
-  if (priorShares > BigInt(0) && latestShares > BigInt(0)) {
-    const rel = Number(latestShares - priorShares) / Number(priorShares);
-    if (rel > ACTIVE_CHANGE_THRESHOLD) return "add";
-    if (rel < -ACTIVE_CHANGE_THRESHOLD) return "trim";
-  }
-  return null;
-}
-
 function safeBigInt(s: string | null | undefined): bigint {
   if (!s) return BigInt(0);
   try {
@@ -173,8 +159,13 @@ export async function generateCrossSignalsForFiling({
 
       const latestShares = safeBigInt(latest?.shares);
       const priorShares = safeBigInt(priorH?.shares);
-      const movement = classifyMovement(priorShares, latestShares);
-      if (!movement) continue;
+      const movement = classifyConvictionMovement({
+        priorShares,
+        latestShares,
+        priorWeight: priorH?.weight_in_fund ?? 0,
+        latestWeight: latest?.weight_in_fund ?? 0,
+      });
+      if (movement === null || movement === "rebalance") continue;
 
       let sharesPctChange: number | null = null;
       if (priorShares > BigInt(0)) {
@@ -211,6 +202,99 @@ export async function generateCrossSignalsForFiling({
       });
       if (inserted) created += 1;
     }
+  }
+
+  return created;
+}
+
+// Emit a "fund filed" announcement signal — one per (user, fund,
+// filing) — for every user with at least one active ticker in the
+// fund. INDEPENDENT of whether any conviction shifts fired: even when
+// every holding is below the conviction threshold, the user still
+// gets a heads-up that the fund reported. Anchored to the user's
+// largest-weight holding in the fund as the ticker reference (the
+// schema requires a ticker; the message is fund-scoped and the
+// payload + sourceUrl point to the fund detail page where the
+// holdings table — with its prior-weight column — lets the user
+// review every move regardless of threshold).
+//
+// Skips users with zero active tickers in this fund (matches the
+// scoping of the conviction signals — no portfolio overlap means
+// no notification).
+export async function generateFundFiledSignal({
+  fundId,
+  filingId,
+  accession,
+  periodOfReport,
+  filingDate,
+}: {
+  fundId: number;
+  filingId: number;
+  accession: string;
+  periodOfReport: string;
+  filingDate: string;
+}): Promise<number> {
+  const fund = await getFundById(fundId);
+  if (!fund) return 0;
+
+  const users = (await sql`SELECT id FROM users ORDER BY id`) as unknown as {
+    id: number;
+  }[];
+
+  const severity: SignalSeverity = "informational";
+  const sourceUrl = `/dashboard/discovery/fund/${fund.cik}`;
+
+  let created = 0;
+
+  for (const u of users) {
+    const tickers = await listActiveTickersForUser(u.id);
+    if (tickers.length === 0) continue;
+
+    const latestMap = await loadHoldingsByTicker(filingId, tickers);
+    if (latestMap.size === 0) continue;
+
+    // Pick the user's largest-weight holding in this fund as the
+    // anchor ticker. Schema requires NOT NULL ticker; the signal is
+    // fund-scoped semantically but we hang it off the most-relevant
+    // ticker so the inbox grouping still works coherently.
+    let anchorTicker: string | null = null;
+    let anchorWeight = -1;
+    for (const [ticker, h] of latestMap.entries()) {
+      if (h.weight_in_fund > anchorWeight) {
+        anchorWeight = h.weight_in_fund;
+        anchorTicker = ticker;
+      }
+    }
+    if (!anchorTicker) continue;
+
+    const rawPayload = {
+      fund_id: fund.id,
+      fund_cik: fund.cik,
+      fund_display_name: fund.display_name,
+      fund_tier: fund.tier,
+      period_of_report: periodOfReport,
+      anchor_ticker: anchorTicker,
+      anchor_weight: anchorWeight,
+      // List every active ticker the user has in this fund so the UI
+      // can render "your other holdings in this fund: …" if it wants.
+      user_holdings_in_fund: Array.from(latestMap.entries()).map(
+        ([t, h]) => ({ ticker: t, weight: h.weight_in_fund }),
+      ),
+    };
+
+    const inserted = await createSignalIfMissing({
+      userId: u.id,
+      ticker: anchorTicker,
+      source: "discovery_13f",
+      eventType: "fund_filed",
+      eventDate: filingDate,
+      sourceRef: accession,
+      sourceUrl,
+      severity,
+      rawPayload,
+      deduplicationKey: `fund-filed-${fund.id}-${accession}`,
+    });
+    if (inserted) created += 1;
   }
 
   return created;

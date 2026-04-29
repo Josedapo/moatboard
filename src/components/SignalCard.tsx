@@ -529,11 +529,18 @@ function formatQuarter(ymd?: string): string {
 function FundMovementBlock({ payload }: { payload: unknown }) {
   if (!payload || typeof payload !== "object") return null;
   const p = payload as FundMovementPayload;
-  if (!p.fund_display_name || !p.fund_tier || !p.movement) return null;
+  if (!p.fund_display_name || !p.fund_tier) return null;
 
-  const badge = MOVEMENT_BADGE[p.movement];
-  const weightText =
-    p.latest_weight != null && p.latest_weight > 0
+  // Two render modes:
+  //   - Conviction shift (movement field present): show NEW/ADD/TRIM/EXIT
+  //     badge with the share-pct change and weight transition.
+  //   - Fund-filed announcement (movement absent): show just fund + tier
+  //     + period, no per-ticker badge — the message is fund-level.
+  const isFundFiled = !p.movement;
+
+  const weightText = isFundFiled
+    ? null
+    : p.latest_weight != null && p.latest_weight > 0
       ? `${p.latest_weight.toFixed(2)}% del fondo`
       : p.prior_weight != null && p.prior_weight > 0
         ? `era ${p.prior_weight.toFixed(2)}% del fondo`
@@ -550,11 +557,13 @@ function FundMovementBlock({ payload }: { payload: unknown }) {
         <span className="font-semibold text-navy-900">
           {p.fund_display_name}
         </span>
-        <span
-          className={`inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ${badge.className}`}
-        >
-          {badge.label(p.shares_pct_change)}
-        </span>
+        {p.movement && (
+          <span
+            className={`inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ${MOVEMENT_BADGE[p.movement].className}`}
+          >
+            {MOVEMENT_BADGE[p.movement].label(p.shares_pct_change)}
+          </span>
+        )}
       </div>
       <div className="text-[11px] text-navy-600">
         13F de {formatQuarter(p.period_of_report)}

@@ -21,6 +21,45 @@
 //
 // "The lesser anchor wins" enforces Smith's discipline: never extrapolate
 // growth beyond what either the track record or the math supports.
+//
+// ---------------------------------------------------------------------------
+// Why STRESS_FACTOR is a single multiplicative haircut, not a 4th additive
+// component for FCF margin / ROE / capital-efficiency reversion (debated and
+// rejected 2026-04-29):
+//
+// The temptation: stress today only haircuts revenue/BV growth (× 0.7) and
+// compresses the multiple to Q1. FCF margin / ROE / capex intensity stay
+// frozen. The "rigor" camp (Damodaran, Mauboussin, Polen, Greenwald) would
+// add an explicit "Δ Quality Metric (annualized)" component dispatched by
+// business type — FCF margin reversion for product/REIT, ROE reversion for
+// balance-sheet — to capture quality compression separately.
+//
+// Why we don't:
+//   1. Math is approximately duplicative. KNSL: ROE 28% × 100% retention =
+//      28% growth. × 0.7 = 19.6% — already below 10y median ROE (22%).
+//      Adding explicit ROE-reversion-to-median stacks ~6pp/yr on top of a
+//      haircut that already approximates the same reversion. META FCF margin
+//      reversion 30% → 22% over 10y = -3.1%/yr; the × 0.7 on a 12% growth
+//      gives -3.6%/yr. Numerically equivalent.
+//   2. Philosophical fit. Smith / Akre / Sleep deliberately don't stress
+//      quality metrics — the moat is supposed to defend them; if it can't,
+//      the business shouldn't have passed Quality. Their framework targets
+//      a hand-picked compounder universe (the Moatboard user). Damodaran's
+//      mean-reversion-to-industry assumption fits a 5000-stock universe
+//      where most names aren't moats — category error to import.
+//   3. Cognitive cost. Adds a 4th line to the implied-return calculator
+//      that the user must interpret monthly across 20 holdings = 240 extra
+//      micro-decisions/year for marginal information.
+//
+// When to revisit:
+//   - If the Quality scorecard ever stops gating moat durability robustly
+//     (e.g., framework expanded to non-moat names where mean-reversion is
+//     the right base case).
+//   - If a specific holding's verdict feels obviously wrong because of
+//     elevated current margins/ROE — first try calibrating STRESS_FACTOR
+//     per business type (banks 0.6 / compounders 0.7 / REITs 0.75) before
+//     adding a 4th additive component. Refactor the existing knob, don't
+//     pile new ones on.
 
 import {
   capMultiYearForScoring,

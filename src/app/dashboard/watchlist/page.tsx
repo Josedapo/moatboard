@@ -6,6 +6,7 @@ import { deriveLiveImpliedReturn } from "@/lib/impliedReturn";
 import type { ImpliedReturnStoredAssumptions } from "@/lib/valuations";
 import type { ValuationVerdict } from "@/components/shared/BusinessSignalChips";
 import DashboardNav from "@/components/DashboardNav";
+import WatchlistStarToggle from "@/components/WatchlistStarToggle";
 import {
   BusinessTierChip,
   FlagsBadge,
@@ -120,6 +121,10 @@ export default async function WatchlistPage() {
                       />
                     </div>
                   </Link>
+                  <WatchlistStarToggle
+                    ticker={item.ticker}
+                    isOnWatchlist={true}
+                  />
                 </div>
               </div>
             ))}

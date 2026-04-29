@@ -7,6 +7,7 @@ import { fetchLatestAnnualFiling } from "@/lib/secFilings";
 import {
   fetchFilingText,
   extractItem1A,
+  MAX_DOCUMENT_CHARS_START,
   MAX_DOCUMENT_CHARS_END,
 } from "@/lib/secDocument";
 import type { UnderstandingFilingInput } from "@/lib/businessUnderstandingAi";
@@ -79,6 +80,78 @@ export async function prepareMoatFiling(
   } catch (err) {
     console.error(
       `prepareMoatFiling: ${ticker} filing fetch failed: ${(err as Error).message}`,
+    );
+    return null;
+  }
+}
+
+// Combined preparation for the ficha's "Negocio" tab — one SEC fetch,
+// both truncations derived from the same in-memory buffer. Saves a
+// duplicate ~2MB download when the user clicks "Analizar negocio"
+// (which produces both the Understanding summary and the Red flags
+// extraction). Each individual prepare* function above stays for
+// callers that only need one (e.g. the wizard's per-step actions),
+// but anywhere both are wanted at once should call this instead.
+export async function prepareBusinessFiling(
+  ticker: string,
+): Promise<{
+  understanding: UnderstandingFilingInput | null;
+  redFlags: RedFlagsFilingInput | null;
+} | null> {
+  const filing = await fetchLatestAnnualFiling(ticker);
+  if (!filing) return null;
+
+  try {
+    // Wide read covers everything needed for both views. Same 2M cap
+    // prepareRedFlagsFiling uses today; Understanding's start-truncated
+    // view is built from the same buffer via slice(0, MAX_START).
+    const wideRead = await fetchFilingText(filing.url, {
+      preserve: "start",
+      maxChars: 2_000_000,
+    });
+    if (!wideRead.text || wideRead.text.length < MIN_USABLE_CHARS) {
+      return { understanding: null, redFlags: null };
+    }
+
+    const meta = {
+      accession: filing.accession,
+      form: filing.form,
+      filingDate: filing.filingDate,
+      reportDate: filing.reportDate,
+      url: filing.url,
+    };
+
+    // Understanding view: start-truncated.
+    const startTruncated = wideRead.text.length > MAX_DOCUMENT_CHARS_START;
+    const understandingText = startTruncated
+      ? wideRead.text.slice(0, MAX_DOCUMENT_CHARS_START)
+      : wideRead.text;
+    const understanding: UnderstandingFilingInput = {
+      text: understandingText,
+      truncated: startTruncated,
+      ...meta,
+    };
+
+    // Red flags view: surgical Item 1A extraction with end-truncated
+    // fallback. Same logic as prepareRedFlagsFiling, but reusing the
+    // already-fetched text instead of fetching again.
+    const item1A = extractItem1A(wideRead.text);
+    const redFlags: RedFlagsFilingInput = item1A
+      ? { text: item1A, truncated: false, source: "item_1a", ...meta }
+      : {
+          text:
+            wideRead.text.length > MAX_DOCUMENT_CHARS_END
+              ? wideRead.text.slice(-MAX_DOCUMENT_CHARS_END)
+              : wideRead.text,
+          truncated: wideRead.text.length > MAX_DOCUMENT_CHARS_END,
+          source: "full_truncated_end",
+          ...meta,
+        };
+
+    return { understanding, redFlags };
+  } catch (err) {
+    console.error(
+      `prepareBusinessFiling: ${ticker} filing fetch failed: ${(err as Error).message}`,
     );
     return null;
   }

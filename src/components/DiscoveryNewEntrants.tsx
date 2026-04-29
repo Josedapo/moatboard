@@ -1,7 +1,6 @@
 "use client";
 
-import { useTransition } from "react";
-import { reanalyzeTickerAction } from "@/app/dashboard/actions";
+import Link from "next/link";
 import type { NewEntrant } from "@/lib/discoveryDelta";
 
 const STATE_LABEL: Record<string, string> = {
@@ -86,29 +85,20 @@ function EntrantRow({ entrant }: { entrant: NewEntrant }) {
           <span className="truncate">{entrant.fund_names.join(", ")}</span>
         </div>
       </div>
-      <AnalyzeButton ticker={entrant.ticker} />
+      <ViewFichaLink ticker={entrant.ticker} />
     </li>
   );
 }
 
-function AnalyzeButton({ ticker }: { ticker: string }) {
-  const [isPending, startTransition] = useTransition();
-  const onClick = () => {
-    startTransition(async () => {
-      const fd = new FormData();
-      fd.append("ticker", ticker);
-      await reanalyzeTickerAction(fd);
-    });
-  };
+function ViewFichaLink({ ticker }: { ticker: string }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={isPending}
-      className="whitespace-nowrap rounded-lg border border-emerald-300 bg-white px-2.5 py-1 text-xs font-medium text-emerald-800 hover:border-emerald-500 disabled:opacity-50"
+    <Link
+      href={`/dashboard/ticker/${ticker}`}
+      prefetch={false}
+      className="whitespace-nowrap rounded-lg border border-emerald-300 bg-white px-2.5 py-1 text-xs font-medium text-emerald-800 hover:border-emerald-500"
     >
-      {isPending ? "…" : "Analizar →"}
-    </button>
+      Ver →
+    </Link>
   );
 }
 

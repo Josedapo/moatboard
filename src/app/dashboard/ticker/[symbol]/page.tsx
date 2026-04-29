@@ -69,8 +69,12 @@ import PositionTabs, {
   type PositionTabId,
 } from "@/components/position/PositionTabs";
 import PositionSummary from "@/components/position/PositionSummary";
-import DecisionPanel from "@/components/position/DecisionPanel";
-import { reanalyzeTickerAction } from "../../actions";
+import {
+  analyzeBusinessAction,
+  analyzeQualityAction,
+  analyzeValuationAction,
+} from "@/app/dashboard/analyzeActions";
+import { SubmitButton, PendingOverlay } from "@/components/AsyncPending";
 
 export const metadata = { title: "Ficha" };
 
@@ -326,9 +330,11 @@ export default async function TickerFichaPage({ params }: Props) {
     </>
   ) : (
     <NotAnalyzedBlock
-      ticker={ticker}
       title="Calidad sin analizar"
-      body="Nadie ha analizado todavía la calidad de este negocio. Pulsa Analizar para ejecutar el wizard (scorecard + moat + tier)."
+      body="Nadie ha analizado todavía la calidad de este negocio. Pulsa Analizar calidad para correr el scorecard + el moat sobre el último 10-K. Suele tardar 15-30 segundos. Se cachea para todos los usuarios."
+      formAction={analyzeQualityAction.bind(null, ticker)}
+      actionLabel="Analizar calidad"
+      pendingMessage="Moatboard está puntuando las dimensiones y leyendo el moat…"
     />
   );
 
@@ -353,9 +359,11 @@ export default async function TickerFichaPage({ params }: Props) {
     />
   ) : (
     <NotAnalyzedBlock
-      ticker={ticker}
-      title="Valoración no computable"
-      body="No se puede calcular el retorno implícito (precio de mercado o fundamentals SEC no disponibles para este ticker)."
+      title="Valoración aún no computada"
+      body="Pulsa Analizar valoración para calcular el retorno implícito (FCF Yield + crecimiento sostenible + Δ múltiplo) y verificarlo contra los dos checks (atractivo + no-desastre). Suele tardar 15-30 segundos."
+      formAction={analyzeValuationAction.bind(null, ticker)}
+      actionLabel="Analizar valoración"
+      pendingMessage="Moatboard está computando el implied return…"
     />
   );
 
@@ -369,23 +377,11 @@ export default async function TickerFichaPage({ params }: Props) {
     />
   );
 
-  const decision = (
-    <DecisionPanel
-      ticker={ticker}
-      isOwned={mode === "in_portfolio"}
-      netShares={costBasis?.shares ?? 0}
-      firstBuyDate={firstBuyDate}
-      isOnWatchlist={isWatchlisted}
-      hasAnalysis={analysis !== null || ephemeralValuation !== null}
-    />
-  );
-
   const panels: Record<PositionTabId, React.ReactNode> = {
     razonamiento: overview,
     negocio,
     calidad,
     valoracion,
-    decision,
     presentaciones,
   };
 
@@ -792,9 +788,25 @@ function renderNegocioTab(args: {
     | null;
 }): React.ReactNode {
   const { ticker, understanding, redFlags, understandingSourceFiling } = args;
+  // Single combined stub when EITHER piece is missing. analyzeBusinessAction
+  // does one SEC fetch + parallel Claude calls for the missing pieces, vs
+  // separate buttons that would download the 10-K twice.
+  const needsAnalysis = !understanding || !redFlags;
+  const stubCopy = stubCopyFor(understanding, redFlags);
+
   return (
     <div className="space-y-6">
-      {understanding ? (
+      {needsAnalysis && (
+        <NotAnalyzedBlock
+          title={stubCopy.title}
+          body={stubCopy.body}
+          formAction={analyzeBusinessAction.bind(null, ticker)}
+          actionLabel={stubCopy.actionLabel}
+          pendingMessage="Moatboard está leyendo el 10-K…"
+        />
+      )}
+
+      {understanding && (
         <section className="rounded-2xl border border-navy-100 bg-white p-6 shadow-sm">
           <div className="mb-4">
             <h2 className="text-xl font-bold text-navy-950">
@@ -820,30 +832,47 @@ function renderNegocioTab(args: {
           </div>
           <BusinessUnderstandingView understanding={understanding} />
         </section>
-      ) : (
-        <NotAnalyzedBlock
-          ticker={ticker}
-          title="Negocio sin analizar"
-          body="Nadie ha analizado todavía qué hace este negocio. Pulsa Analizar para ejecutar el wizard (lee el último 10-K y resume el negocio en castellano)."
-        />
       )}
 
-      {redFlags ? (
+      {redFlags && (
         <RedFlagsAccordion
           flags={redFlags.flags}
           generatedAt={redFlags.generated_at}
           last10kAccession={redFlags.last_10k_accession}
           last10kPeriodEnd={redFlags.last_10k_period_end}
         />
-      ) : (
-        <NotAnalyzedBlock
-          ticker={ticker}
-          title="Red flags sin extraer"
-          body="Nadie ha extraído todavía red flags cualitativas (Item 1A del 10-K) para este ticker. Pulsa Analizar para ejecutar el wizard."
-        />
       )}
     </div>
   );
+}
+
+// Smart copy for the combined Negocio stub. The button always runs the
+// same idempotent action (analyzeBusinessAction); the framing changes
+// to match what's actually missing.
+function stubCopyFor(
+  understanding: Awaited<ReturnType<typeof getCurrentUnderstanding>>,
+  redFlags: Awaited<ReturnType<typeof getRedFlags>>,
+): { title: string; body: string; actionLabel: string } {
+  if (!understanding && !redFlags) {
+    return {
+      title: "Negocio sin analizar",
+      body: "Nadie ha analizado todavía qué hace este negocio ni ha extraído sus red flags. Pulsa Analizar negocio para descargar el último 10-K una sola vez y producir en paralelo el resumen en castellano (5 secciones + 5-7 preguntas) y las red flags cualitativas agrupadas por severidad. Suele tardar 15-40 segundos. Se cachea para todos los usuarios.",
+      actionLabel: "Analizar negocio",
+    };
+  }
+  if (!understanding) {
+    return {
+      title: "Falta el resumen del negocio",
+      body: "Las red flags ya están extraídas, pero falta el resumen en castellano. Pulsa Completar análisis para descargar el 10-K y generar el resumen.",
+      actionLabel: "Completar análisis",
+    };
+  }
+  // !redFlags
+  return {
+    title: "Faltan red flags",
+    body: "El resumen del negocio ya está, pero faltan las red flags cualitativas (Item 1A del 10-K). Pulsa Completar análisis para extraerlas.",
+    actionLabel: "Completar análisis",
+  };
 }
 
 function RedFlagsAccordion({
@@ -920,26 +949,32 @@ function RedFlagsAccordion({
 }
 
 function NotAnalyzedBlock({
-  ticker,
   title,
   body,
+  formAction,
+  actionLabel = "Analizar",
+  pendingMessage,
 }: {
-  ticker: string;
   title: string;
   body: string;
+  formAction: (formData: FormData) => void | Promise<void>;
+  actionLabel?: string;
+  pendingMessage?: string;
 }) {
   return (
     <section className="rounded-2xl border border-dashed border-navy-200 bg-navy-50/30 p-6">
       <h2 className="mb-2 text-base font-semibold text-navy-900">{title}</h2>
       <p className="mb-4 text-sm leading-relaxed text-navy-700">{body}</p>
-      <form action={reanalyzeTickerAction}>
-        <input type="hidden" name="ticker" value={ticker} />
-        <button
-          type="submit"
-          className="inline-flex items-center gap-1.5 rounded-lg border border-navy-200 bg-white px-3 py-1.5 text-sm font-medium text-navy-700 shadow-sm hover:border-navy-300 hover:bg-navy-50 hover:text-navy-900"
+      <form action={formAction}>
+        <PendingOverlay
+          message={pendingMessage ?? "Moatboard está pensando."}
+        />
+        <SubmitButton
+          pendingLabel="Analizando…"
+          className="inline-flex items-center gap-1.5 rounded-lg border border-navy-200 bg-white px-3 py-1.5 text-sm font-medium text-navy-700 shadow-sm hover:border-navy-300 hover:bg-navy-50 hover:text-navy-900 disabled:opacity-60"
         >
-          Analizar &rarr;
-        </button>
+          {actionLabel} &rarr;
+        </SubmitButton>
       </form>
     </section>
   );

@@ -31,9 +31,10 @@ export const EVENT_TYPE_LABEL: Record<SignalEventType, string> = {
   other_material: "Otros eventos materiales",
   material_fundamentals_change: "Cambio material en fundamentales",
   fund_initiated_position: "Fondo inicia posición",
-  fund_increased_position: "Fondo aumenta posición",
-  fund_reduced_position: "Fondo reduce posición",
+  fund_increased_position: "Fondo sube convicción",
+  fund_reduced_position: "Fondo reduce convicción",
   fund_exited_position: "Fondo sale de la posición",
+  fund_filed: "Fondo presenta resultados",
   insider_purchase: "Compra de insider",
 };
 

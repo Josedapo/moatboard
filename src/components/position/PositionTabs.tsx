@@ -7,21 +7,23 @@ export type PositionTabId =
   | "negocio"
   | "calidad"
   | "valoracion"
-  | "decision"
   | "presentaciones";
 
 // The "razonamiento" id stays as-is internally to avoid rippling the
 // rename through callers; only the user-facing label changes. Tab
 // order after Overview mirrors the analysis wizard sequence
-// (Calidad → Negocio → Valoración → Decisión) so the ficha reads in
-// the same flow the user just walked through. Señales es operacional,
-// vive al final.
+// (Calidad → Negocio → Valoración) so the ficha reads in the same
+// flow the user just walked through. Señales es operacional, vive
+// al final. The Decisión tab was retired 2026-04-29: comprar lives
+// in the Cartera form (→ /comprar/[ticker]) and watchlist toggle is
+// the star always-visible in the ficha header — both ya cubrían lo
+// que la pestaña duplicaba. La entrada al wizard ("Empezar análisis"
+// / "Re-analizar") se movió al action area de la cabecera.
 const TABS: Array<{ id: PositionTabId; label: string }> = [
   { id: "razonamiento", label: "Overview" },
   { id: "calidad", label: "Calidad" },
   { id: "negocio", label: "Negocio" },
   { id: "valoracion", label: "Valoración" },
-  { id: "decision", label: "Decisión" },
   { id: "presentaciones", label: "Señales" },
 ];
 

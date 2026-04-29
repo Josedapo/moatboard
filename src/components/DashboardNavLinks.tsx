@@ -6,25 +6,18 @@ import { usePathname } from "next/navigation";
 // UI chrome stays consistent with the editorial mocks Joseda validated
 // on 2026-04-22/23. Spanish labels on purpose (see design-system.md §7
 // for the rationale).
-//
-// align='right' items render flush to the right edge of the nav links
-// area, separated from the main left-aligned items. Used today only
-// for "Agente" — the operational surface where Iris (la operadora del
-// observatorio) deja su rastro. No comparte patrones de escaneo con
-// las pestañas analíticas (Cartera / Watchlist / Discovery / Inbox).
 type NavItem = {
   href: string;
   label: string;
   exact: boolean;
-  align?: "left" | "right";
 };
 
 const NAV: NavItem[] = [
   { href: "/dashboard", label: "Cartera", exact: true },
   { href: "/dashboard/watchlist", label: "Watchlist", exact: false },
   { href: "/dashboard/discovery", label: "Discovery", exact: false },
+  { href: "/dashboard/agent", label: "Agente", exact: false },
   { href: "/dashboard/inbox", label: "Inbox", exact: false },
-  { href: "/dashboard/agent", label: "Agente", exact: false, align: "right" },
 ];
 
 export default function DashboardNavLinks({
@@ -33,9 +26,6 @@ export default function DashboardNavLinks({
   inboxCount: number;
 }) {
   const pathname = usePathname();
-
-  const leftItems = NAV.filter((i) => i.align !== "right");
-  const rightItems = NAV.filter((i) => i.align === "right");
 
   const renderLink = (item: NavItem) => {
     const active = item.exact
@@ -65,16 +55,10 @@ export default function DashboardNavLinks({
 
   // flex-1 lets the container take all the space the parent <nav>
   // gives between the brand mark on the left and the email/signout
-  // on the right. ml-auto on the right group pushes Agentes flush
-  // to the right edge of that area.
+  // on the right.
   return (
     <div className="flex flex-1 items-center gap-8">
-      {leftItems.map(renderLink)}
-      {rightItems.length > 0 && (
-        <div className="ml-auto flex items-center gap-8">
-          {rightItems.map(renderLink)}
-        </div>
-      )}
+      {NAV.map(renderLink)}
     </div>
   );
 }

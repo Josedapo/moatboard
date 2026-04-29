@@ -7,7 +7,6 @@ import { listWatchlist } from "@/lib/watchlistEntries";
 import { countNewSignalsByTicker } from "@/lib/reviewSignals";
 import { getLatestCronRun } from "@/lib/cronRuns";
 import DashboardNav from "@/components/DashboardNav";
-import AnalyzeEntryForm from "@/components/AnalyzeEntryForm";
 import AddPositionForm from "@/components/AddPositionForm";
 import UpcomingEarnings, {
   type UpcomingEarning,
@@ -136,15 +135,16 @@ export default async function Dashboard() {
               />
             </div>
 
+            <h2 className="flex items-baseline justify-between border-b border-rule-soft pb-2 mb-5 font-sans text-[11px] font-semibold uppercase tracking-[0.18em] text-ink-70">
+              <span>Empresas en cartera</span>
+              <span className="flex items-center gap-4 font-display text-[13px] italic font-normal text-ink-50 normal-case tracking-normal">
+                {enriched.length > 0 && <span>Ordenadas por incorporación</span>}
+                <AddPositionForm />
+              </span>
+            </h2>
+
             {enriched.length > 0 ? (
               <>
-                <h2 className="flex items-baseline justify-between border-b border-rule-soft pb-2 mb-5 font-sans text-[11px] font-semibold uppercase tracking-[0.18em] text-ink-70">
-                  <span>Empresas en cartera</span>
-                  <span className="flex items-center gap-4 font-display text-[13px] italic font-normal text-ink-50 normal-case tracking-normal">
-                    <span>Ordenadas por incorporación</span>
-                    <AddPositionForm />
-                  </span>
-                </h2>
 
                 <div>
                   {enriched.map(({ position: p, quote, costBasis }) => {
@@ -254,13 +254,6 @@ export default async function Dashboard() {
 
           {/* ─── Aside ─── */}
           <aside className="border-l border-rule-soft pl-9">
-            <section className="mb-10">
-              <h3 className="mb-3.5 font-sans text-[10px] font-semibold uppercase tracking-[0.18em] text-ink-70">
-                Analizar un negocio
-              </h3>
-              <AnalyzeEntryForm />
-            </section>
-
             <section className="mb-10">
               <h3 className="mb-3.5 font-sans text-[10px] font-semibold uppercase tracking-[0.18em] text-ink-70">
                 Próximas presentaciones

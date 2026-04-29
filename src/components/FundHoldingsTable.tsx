@@ -1,7 +1,7 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
-import { reanalyzeTickerAction } from "@/app/dashboard/actions";
+import Link from "next/link";
+import { useMemo, useState } from "react";
 import type { FundHolding, HoldingMovement } from "@/lib/discoveryFund";
 
 const STATE_STYLE: Record<string, { label: string; chip: string }> = {
@@ -88,8 +88,9 @@ export default function FundHoldingsTable({
               <th className="px-4 py-3 text-left font-semibold">#</th>
               <th className="px-4 py-3 text-left font-semibold">Ticker</th>
               <th className="px-4 py-3 text-left font-semibold">Empresa</th>
-              <th className="px-4 py-3 text-center font-semibold">Mov.</th>
+              <th className="px-4 py-3 text-right font-semibold">Peso ant.</th>
               <th className="px-4 py-3 text-right font-semibold">Peso</th>
+              <th className="px-4 py-3 text-center font-semibold">Mov.</th>
               <th className="px-4 py-3 text-right font-semibold">Valor</th>
               <th className="px-4 py-3 text-left font-semibold">Estado</th>
               <th className="px-4 py-3 text-right font-semibold"></th>
@@ -99,7 +100,7 @@ export default function FundHoldingsTable({
             {filtered.length === 0 && (
               <tr>
                 <td
-                  colSpan={8}
+                  colSpan={9}
                   className="px-4 py-8 text-center text-sm text-navy-500"
                 >
                   Sin resultados.
@@ -148,14 +149,19 @@ function HoldingRow({
       <td className="px-4 py-3 text-sm text-navy-700">
         {holding.issuer_name}
       </td>
+      <td className="px-4 py-3 text-right font-mono text-sm tabular-nums text-navy-500">
+        {holding.prior_weight_in_fund != null
+          ? `${holding.prior_weight_in_fund.toFixed(2)}%`
+          : "—"}
+      </td>
+      <td className="px-4 py-3 text-right font-mono text-sm tabular-nums text-navy-900">
+        {holding.weight_in_fund.toFixed(2)}%
+      </td>
       <td className="px-4 py-3 text-center">
         <MovementBadge
           movement={holding.movement}
           pctChange={holding.shares_pct_change}
         />
-      </td>
-      <td className="px-4 py-3 text-right font-mono text-sm tabular-nums text-navy-900">
-        {holding.weight_in_fund.toFixed(2)}%
       </td>
       <td className="px-4 py-3 text-right font-mono text-sm tabular-nums text-navy-700">
         ${formatBillions(holding.value_usd)}
@@ -175,7 +181,7 @@ function HoldingRow({
       </td>
       <td className="px-4 py-3 text-right">
         {holding.ticker ? (
-          <AnalyzeButton
+          <ViewFichaLink
             ticker={holding.canonical_ticker ?? holding.ticker}
           />
         ) : null}
@@ -245,24 +251,15 @@ function MovementBadge({
   );
 }
 
-function AnalyzeButton({ ticker }: { ticker: string }) {
-  const [isPending, startTransition] = useTransition();
-  const onClick = () => {
-    startTransition(async () => {
-      const fd = new FormData();
-      fd.append("ticker", ticker);
-      await reanalyzeTickerAction(fd);
-    });
-  };
+function ViewFichaLink({ ticker }: { ticker: string }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={isPending}
-      className="whitespace-nowrap rounded-lg border border-navy-200 bg-white px-2.5 py-1 text-xs font-medium text-navy-700 hover:border-navy-400 hover:text-navy-900 disabled:opacity-50"
+    <Link
+      href={`/dashboard/ticker/${ticker}`}
+      prefetch={false}
+      className="whitespace-nowrap rounded-lg border border-navy-200 bg-white px-2.5 py-1 text-xs font-medium text-navy-700 hover:border-navy-400 hover:text-navy-900"
     >
-      {isPending ? "…" : "Analizar →"}
-    </button>
+      Ver →
+    </Link>
   );
 }
 

@@ -8,7 +8,6 @@ import DashboardNav from "@/components/DashboardNav";
 import DiscoveryLeaderboard from "@/components/DiscoveryLeaderboard";
 import DiscoveryNewEntrants from "@/components/DiscoveryNewEntrants";
 import DiscoveryRecentFilingsPanel from "@/components/DiscoveryRecentFilingsPanel";
-import AnalyzeEntryForm from "@/components/AnalyzeEntryForm";
 
 export const metadata = {
   title: "Discovery · Moatboard",
@@ -45,12 +44,27 @@ export default async function DiscoveryPage() {
             <h1 className="text-2xl font-bold text-navy-950">Discovery</h1>
             <Link
               href="/dashboard/discovery/funds"
-              className="rounded-lg border border-navy-200 bg-white px-3 py-1.5 text-xs font-medium text-navy-700 hover:border-navy-400 hover:text-navy-900"
+              className="inline-flex items-center gap-2 rounded-lg bg-navy-900 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-navy-800"
             >
-              Ver fondos →
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                className="h-4 w-4"
+                aria-hidden="true"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z"
+                />
+              </svg>
+              Ver los {meta.fundsCovered} fondos curados
+              <span aria-hidden="true">→</span>
             </Link>
           </div>
-          <p className="mt-2 text-sm text-navy-600">
+          <p className="mt-2 max-w-3xl text-sm text-navy-600">
             Empresas que aparecen en la cartera de los {meta.fundsCovered} fondos
             curados, ordenadas por conviction score (suma ponderada por tier
             del peso que cada fondo le da a la posición). Punto de partida
@@ -77,10 +91,6 @@ export default async function DiscoveryPage() {
             latestQuarter={delta.latestQuarter}
             priorQuarter={delta.priorQuarter}
           />
-        </section>
-
-        <section className="mb-6">
-          <AnalyzeEntryForm variant="inline" />
         </section>
 
         <DiscoveryLeaderboard rows={rows} />

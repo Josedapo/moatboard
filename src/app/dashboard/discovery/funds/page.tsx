@@ -34,7 +34,8 @@ export default async function DiscoveryFundsPage() {
             Roster completo agrupado por tipología. Click en cualquier fondo
             para ver su ficha con holdings + movimientos del trimestre. La
             columna Movs. Q cuenta nuevas + aumentos + recortes + salidas
-            (umbral ±5% en acciones) entre los dos últimos 13F.
+            entre los dos últimos 13F (solo cambios de convicción; los
+            reajustes que mantienen el peso objetivo se omiten).
           </p>
         </header>
 

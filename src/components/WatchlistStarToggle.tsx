@@ -1,8 +1,9 @@
 "use client";
 
 // Watchlist star toggle. Pure tag — no fields, no modal, no reason
-// captured. Click to add / remove. Visible from Discovery rows, ficha
-// header, position page header, and the wizard's WizardShell header.
+// captured. Click to add / remove. Visible from Discovery rows, the
+// ficha header, the position page header, and the watchlist list
+// page (where it lets the user remove items inline).
 //
 // Server action invoked through a hidden form so the component can run
 // in any context (Server Component or Client Component) and rely on the

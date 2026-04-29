@@ -12,7 +12,10 @@ import {
   type ThirteenFFilingRef,
 } from "@/lib/thirteenF";
 import { resolveCusips } from "@/lib/cusip";
-import { generateCrossSignalsForFiling } from "@/lib/discoveryCrossSignals";
+import {
+  generateCrossSignalsForFiling,
+  generateFundFiledSignal,
+} from "@/lib/discoveryCrossSignals";
 import { recordIrisAction } from "@/lib/irisActions";
 
 export type IngestResult =
@@ -153,6 +156,26 @@ export async function runWeeklyDiscoveryJob(): Promise<{
             errorCount += 1;
             errorLines.push(
               `${fund.display_name} cross-signals: ${msg}`,
+            );
+          }
+          // Fund-filed announcement — one per (user, fund, filing).
+          // Independent of conviction shifts: even when nothing
+          // material moved, users get a heads-up that this fund
+          // reported. Failure here also must not abort the run.
+          try {
+            const created = await generateFundFiledSignal({
+              fundId: fund.id,
+              filingId: result.filingId,
+              accession: result.accession,
+              periodOfReport: result.periodOfReport,
+              filingDate: result.filingDate,
+            });
+            crossSignalsCreated += created;
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : "unknown error";
+            errorCount += 1;
+            errorLines.push(
+              `${fund.display_name} fund-filed signal: ${msg}`,
             );
           }
         } else if (result.status === "error") {

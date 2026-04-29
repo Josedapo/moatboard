@@ -1,7 +1,6 @@
 "use client";
 
-import { useTransition } from "react";
-import { reanalyzeTickerAction } from "@/app/dashboard/actions";
+import Link from "next/link";
 import type { FundMovements, Movement } from "@/lib/discoveryFund";
 
 const STATE_LABEL: Record<string, string> = {
@@ -20,12 +19,12 @@ const CATEGORY_META: Record<
     tag: "bg-emerald-100 text-emerald-800",
   },
   add: {
-    title: "Aumentos",
+    title: "Aumentos de convicción",
     frame: "border-teal-200 bg-teal-50/40",
     tag: "bg-teal-100 text-teal-800",
   },
   trim: {
-    title: "Recortes",
+    title: "Reducciones de convicción",
     frame: "border-amber-200 bg-amber-50/40",
     tag: "bg-amber-100 text-amber-800",
   },
@@ -54,10 +53,10 @@ export default function FundMovementsSummary({
   if (totalChanges === 0) {
     return (
       <section className="rounded-2xl border border-navy-100 bg-white p-4 text-sm text-navy-600">
-        Sin cambios materiales de posición entre{" "}
+        Sin cambios de convicción entre{" "}
         {formatQuarter(movements.priorPeriod)} y{" "}
-        {formatQuarter(movements.latestPeriod)} (umbral ±5% en número de
-        acciones).
+        {formatQuarter(movements.latestPeriod)}. Los reajustes de acciones
+        que solo mantienen la posición en su peso objetivo se omiten.
       </section>
     );
   }
@@ -70,7 +69,7 @@ export default function FundMovementsSummary({
           {formatQuarter(movements.latestPeriod)}
         </h2>
         <p className="text-[11px] text-navy-500">
-          Umbral ±5% en número de acciones sobre el trimestre anterior
+          Solo cambios de convicción · se omiten reajustes a peso objetivo
         </p>
       </header>
 
@@ -192,7 +191,7 @@ function MovementRow({ movement }: { movement: Movement }) {
         <MovementDetail movement={movement} />
       </div>
       {movement.ticker && movement.category !== "exit" && (
-        <AnalyzeButton ticker={movement.ticker} />
+        <ViewFichaLink ticker={movement.ticker} />
       )}
     </li>
   );
@@ -226,24 +225,15 @@ function MovementDetail({ movement }: { movement: Movement }) {
   );
 }
 
-function AnalyzeButton({ ticker }: { ticker: string }) {
-  const [isPending, startTransition] = useTransition();
-  const onClick = () => {
-    startTransition(async () => {
-      const fd = new FormData();
-      fd.append("ticker", ticker);
-      await reanalyzeTickerAction(fd);
-    });
-  };
+function ViewFichaLink({ ticker }: { ticker: string }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={isPending}
-      className="whitespace-nowrap rounded-lg border border-navy-200 bg-white px-2.5 py-1 text-xs font-medium text-navy-700 hover:border-navy-400 hover:text-navy-900 disabled:opacity-50"
+    <Link
+      href={`/dashboard/ticker/${ticker}`}
+      prefetch={false}
+      className="whitespace-nowrap rounded-lg border border-navy-200 bg-white px-2.5 py-1 text-xs font-medium text-navy-700 hover:border-navy-400 hover:text-navy-900"
     >
-      {isPending ? "…" : "Analizar →"}
-    </button>
+      Ver →
+    </Link>
   );
 }
 

@@ -5,7 +5,6 @@ import { getCanonicalTicker } from "@/lib/tickerAliases";
 import { fetchQuoteAndFundamentals } from "@/lib/financial";
 import { getPositionByTicker } from "@/lib/positions";
 import { getCostBasis } from "@/lib/positionTransactions";
-import { isOnWatchlist as queryIsOnWatchlist } from "@/lib/watchlistEntries";
 import { sql } from "@/lib/db";
 import DashboardNav from "@/components/DashboardNav";
 import QualityBadge from "@/components/QualityBadge";
@@ -25,10 +24,9 @@ export default async function ComprarPage({ params }: Props) {
   const tickerInput = rawTicker.toUpperCase();
   const canonical = (await getCanonicalTicker(tickerInput)).toUpperCase();
 
-  const [{ quote }, existing, isWatchlisted] = await Promise.all([
+  const [{ quote }, existing] = await Promise.all([
     fetchQuoteAndFundamentals(canonical),
     getPositionByTicker(userId, canonical),
-    queryIsOnWatchlist({ userId, ticker: canonical }),
   ]);
 
   // Determine first-buy vs add. First-buy → pre_commitment required.
@@ -198,7 +196,7 @@ export default async function ComprarPage({ params }: Props) {
                 <p className="mb-2 text-xs text-navy-500">
                   ¿Qué tendría que pasar para que dejes de creer en esta
                   inversión? Anclará tu comportamiento cuando el precio se
-                  mueva. Obligatorio en la primera compra de un ticker.
+                  mueva.
                 </p>
                 <textarea
                   name="pre_commitment_md"
@@ -224,20 +222,6 @@ export default async function ComprarPage({ params }: Props) {
                   placeholder="Caída a percentil 30 de PE histórico tras guidance prudente."
                   className="w-full rounded-lg border border-navy-300 px-3 py-2 focus:border-navy-900 focus:outline-none"
                 />
-              </label>
-            )}
-
-            {!isWatchlisted && (
-              <label className="flex items-start gap-2 text-sm text-navy-700">
-                <input
-                  type="checkbox"
-                  name="add_to_watchlist"
-                  className="mt-1 h-4 w-4 rounded border-navy-300 text-navy-900 focus:ring-navy-500"
-                />
-                <span>
-                  Añadir a watchlist tras comprar — para ver señales del
-                  Inbox y revisarlo mensualmente.
-                </span>
               </label>
             )}
 

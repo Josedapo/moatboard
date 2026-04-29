@@ -3,6 +3,11 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import type { FundListRow } from "@/lib/discoveryFundList";
+import {
+  nextExpected13FDeadline,
+  quarterLabelFromIso,
+  shortDateEs,
+} from "@/lib/thirteenFCadence";
 
 type SortKey =
   | "display_name"
@@ -36,7 +41,11 @@ const SORT_DEFAULTS: Record<SortKey, SortDir> = {
   holdings_count: "desc",
   top5_pct: "desc",
   movements_count: "desc",
-  period_of_report: "desc",
+  // Sorting by period_of_report ascending = soonest next deadline first
+  // (older latest period → next deadline is closer in calendar time).
+  // The column label is "Próximo 13F" so the user-meaningful default is
+  // "imminent first".
+  period_of_report: "asc",
 };
 
 export default function DiscoveryFundsList({
@@ -136,7 +145,7 @@ export default function DiscoveryFundsList({
                     align="right"
                   />
                   <SortHeader
-                    label="Último 13F"
+                    label="Próximo 13F"
                     active={sortKey === "period_of_report"}
                     dir={sortDir}
                     onClick={() => handleSort("period_of_report")}
@@ -189,10 +198,47 @@ function FundRow({ fund }: { fund: FundListRow }) {
       <td className="px-4 py-3 text-right font-mono text-sm tabular-nums text-navy-700">
         {fund.movements_count ?? "—"}
       </td>
-      <td className="px-4 py-3 text-xs text-navy-600">
-        {fund.period_of_report ? formatQuarter(fund.period_of_report) : "—"}
+      <td className="px-4 py-3">
+        <NextFilingCell periodOfReport={fund.period_of_report} />
       </td>
     </tr>
+  );
+}
+
+function NextFilingCell({
+  periodOfReport,
+}: {
+  periodOfReport: string | null;
+}) {
+  if (!periodOfReport) {
+    return <span className="text-xs text-navy-400">—</span>;
+  }
+  const next = nextExpected13FDeadline(periodOfReport);
+  const tone =
+    next.status === "overdue"
+      ? "text-red-700"
+      : next.status === "imminent"
+        ? "text-amber-700"
+        : "text-navy-700";
+  const daysLabel =
+    next.status === "overdue"
+      ? `${Math.abs(next.daysUntilDeadline)}d retraso`
+      : next.daysUntilDeadline === 0
+        ? "hoy"
+        : `${next.daysUntilDeadline}d`;
+  const lastQuarter = quarterLabelFromIso(periodOfReport);
+  return (
+    <div
+      className="leading-tight"
+      title={`Último 13F entregado: ${lastQuarter} (period ${periodOfReport}). Próxima presentación esperada antes del ${shortDateEs(next.deadline)} (${quarterLabelFromIso(next.nextPeriod)}).`}
+    >
+      <div className={`text-xs font-semibold tabular-nums ${tone}`}>
+        {quarterLabelFromIso(next.nextPeriod)} · {daysLabel}
+      </div>
+      <div className="mt-0.5 text-[10px] text-navy-400">
+        antes del {shortDateEs(next.deadline)}
+      </div>
+    </div>
   );
 }
 
@@ -274,10 +320,3 @@ function formatBillions(v: number): string {
   return v.toLocaleString("en-US");
 }
 
-function formatQuarter(ymd: string): string {
-  const [yStr, mStr] = ymd.split("-");
-  const month = Number(mStr);
-  const q =
-    month <= 3 ? "Q1" : month <= 6 ? "Q2" : month <= 9 ? "Q3" : "Q4";
-  return `${q} ${yStr}`;
-}

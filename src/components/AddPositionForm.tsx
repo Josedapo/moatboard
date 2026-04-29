@@ -14,7 +14,7 @@ export default function AddPositionForm() {
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const raw = value.trim();
-    // Mirror startAnalysisAction's normalization: BRK.A / BRK/A → BRK-A.
+    // Yahoo Finance share-class hyphen form: BRK.A / BRK/A → BRK-A.
     const normalized = raw.replace(/[./]/g, "-").toUpperCase();
     if (!normalized || !/^[A-Z-]{1,10}$/.test(normalized)) return;
     router.push(`/dashboard/comprar/${normalized}`);

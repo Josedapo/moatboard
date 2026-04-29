@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState, useTransition } from "react";
-import { reanalyzeTickerAction } from "@/app/dashboard/actions";
+import { useMemo, useState } from "react";
+import { openTickerSubmitAction } from "@/app/dashboard/actions";
 import type {
   BusinessTier,
   LeaderboardRow,
@@ -30,42 +30,31 @@ const TIER_CHIP: Record<string, string> = {
   E: "bg-navy-50 text-navy-500",
 };
 
-// Post-2026-04-28 watchlist refactor: dropped in_portfolio/discarded
-// filters (no longer states). Watchlist remains since it's a tag.
-// "Sin analizar" now means business_tier_source !== 'user' — the user
-// hasn't personally walked the wizard for this ticker (even if a shared
-// cache row exists from another user).
-type FilterKey = "unseen" | "all" | "watchlist";
+// Discovery filter model (post-2026-04-29 redesign):
+//   - search: ticker or issuer_name (case-insensitive substring)
+//   - onlyWatchlist: boolean toggle
+//   - tierSet: multi-select over BusinessTier; empty = pass all
+//   - flagsFilter: tri-state (all / no_serious / with_serious)
+//   - convictionMin / nFundsMin: numeric "≥ N" filters; null = no filter
+//
+// AND between groups, OR within multi-select tier chips. Untiered rows
+// (business_tier === null) pass when no tier or flags filter is active
+// and fail when one is — we cannot evaluate the gate against missing data.
 
-const FILTERS: { key: FilterKey; label: string }[] = [
-  { key: "all", label: "Todas" },
-  { key: "unseen", label: "Sin analizar" },
-  { key: "watchlist", label: "Watchlist" },
-];
-
-type TierFilterKey =
-  | "all"
-  | "exceptional_only"
-  | "good_plus"
-  | "mediocre_plus";
-
-const TIER_FILTERS: { key: TierFilterKey; label: string }[] = [
-  { key: "all", label: "Todas" },
-  { key: "exceptional_only", label: "Solo Exceptional" },
-  { key: "good_plus", label: "Good+" },
-  { key: "mediocre_plus", label: "Mediocre+" },
+const TIER_OPTIONS: { key: BusinessTier; label: string }[] = [
+  { key: "exceptional", label: "Exceptional" },
+  { key: "good", label: "Good" },
+  { key: "mediocre", label: "Mediocre" },
+  { key: "poor", label: "Poor" },
 ];
 
 type FlagsFilterKey = "all" | "no_serious" | "with_serious";
 
 const FLAGS_FILTERS: { key: FlagsFilterKey; label: string }[] = [
   { key: "all", label: "Todas" },
-  { key: "no_serious", label: "Sin red flags graves" },
-  { key: "with_serious", label: "Con red flags graves" },
+  { key: "no_serious", label: "Sin graves" },
+  { key: "with_serious", label: "Con graves" },
 ];
-
-// Order: best to worst. Used by tier filters to gate "X+".
-const TIER_ORDER: BusinessTier[] = ["exceptional", "good", "mediocre", "poor"];
 
 
 type SortKey =
@@ -73,16 +62,8 @@ type SortKey =
   | "issuer"
   | "tier"
   | "conviction"
-  | "n_funds"
-  | "analysis";
+  | "n_funds";
 type SortDir = "asc" | "desc";
-
-// Higher value = earlier in the sort order. "No analizada" first
-// (actionable), then "Analizada". Sort desc surfaces unseen at the top.
-const ANALYSIS_RANK: Record<string, number> = {
-  unseen: 2,
-  analyzed: 1,
-};
 
 // Higher = better. Sort desc surfaces exceptional first; un-analyzed rows
 // (null tier) go to the end because 0 is below any tier.
@@ -101,13 +82,33 @@ export default function DiscoveryLeaderboard({
 }: {
   rows: LeaderboardRow[];
 }) {
-  const [filter, setFilter] = useState<FilterKey>("all");
-  const [tierFilter, setTierFilter] = useState<TierFilterKey>("all");
+  const [onlyWatchlist, setOnlyWatchlist] = useState(false);
+  const [tierSet, setTierSet] = useState<Set<BusinessTier>>(new Set());
   const [flagsFilter, setFlagsFilter] = useState<FlagsFilterKey>("all");
+  const [convictionMin, setConvictionMin] = useState<number | null>(null);
+  const [nFundsMin, setNFundsMin] = useState<number | null>(null);
   const [query, setQuery] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [sortKey, setSortKey] = useState<SortKey>("conviction");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
+
+  const toggleTier = (tier: BusinessTier) => {
+    setTierSet((prev) => {
+      const next = new Set(prev);
+      if (next.has(tier)) next.delete(tier);
+      else next.add(tier);
+      return next;
+    });
+  };
+
+  const clearAll = () => {
+    setOnlyWatchlist(false);
+    setTierSet(new Set());
+    setFlagsFilter("all");
+    setConvictionMin(null);
+    setNFundsMin(null);
+    setQuery("");
+  };
 
   const handleSort = (key: SortKey) => {
     if (sortKey === key) {
@@ -115,7 +116,6 @@ export default function DiscoveryLeaderboard({
     } else {
       setSortKey(key);
       // Sensible defaults: numeric columns desc, text columns asc.
-      // Analysis sort defaults to desc so unanalyzed (actionable) surface first.
       setSortDir(
         key === "ticker" || key === "issuer" ? "asc" : "desc",
       );
@@ -134,37 +134,22 @@ export default function DiscoveryLeaderboard({
   const filtered = useMemo(() => {
     const q = query.trim().toUpperCase();
     const passed = rows.filter((r) => {
-      // "Sin analizar" = the current user hasn't walked the wizard
-      // (shared-cache analyses from other users don't count).
-      if (filter === "unseen" && r.business_tier_source === "user")
-        return false;
-      if (filter === "watchlist" && r.ticker_state !== "watchlist")
-        return false;
+      // Search — ticker OR issuer name, case-insensitive substring.
       if (q && !r.ticker.includes(q) && !r.issuer_name.toUpperCase().includes(q))
         return false;
 
-      // Tier filter — applied uniformly regardless of whether the
-      // tier came from the user's own analysis or from another user
-      // who already analyzed the ticker (shared cache).
-      if (tierFilter !== "all") {
-        if (tierFilter === "exceptional_only") {
-          if (r.business_tier !== "exceptional") return false;
-        } else {
-          // good_plus / mediocre_plus: rank-based "at-or-better" gate.
-          // Untiered rows fail because we can't claim they meet the bar.
-          if (r.business_tier === null) return false;
-          const minRank =
-            tierFilter === "good_plus"
-              ? TIER_ORDER.indexOf("good")
-              : TIER_ORDER.indexOf("mediocre");
-          const tierRank = TIER_ORDER.indexOf(r.business_tier);
-          if (tierRank > minRank) return false;
-        }
+      // Watchlist toggle.
+      if (onlyWatchlist && r.ticker_state !== "watchlist") return false;
+
+      // Tier multi-select. Empty set = pass all (including untiered).
+      // Any tier picked = untiered rows fail (can't evaluate the gate).
+      if (tierSet.size > 0) {
+        if (r.business_tier === null) return false;
+        if (!tierSet.has(r.business_tier)) return false;
       }
 
-      // Flags filter — only meaningful for analyzed rows. Untiered rows
-      // pass when "all", fail otherwise (we can't evaluate flags we
-      // haven't computed).
+      // Flags tri-state. Untiered rows pass when "all", fail otherwise
+      // — we can't evaluate flags we haven't computed.
       if (flagsFilter !== "all") {
         if (r.business_tier === null) return false;
         if (flagsFilter === "no_serious" && r.serious_flag_count > 0)
@@ -172,6 +157,12 @@ export default function DiscoveryLeaderboard({
         if (flagsFilter === "with_serious" && r.serious_flag_count === 0)
           return false;
       }
+
+      // Numeric mins (≥). Conviction/n_funds are always non-null on
+      // every row, so no special-case for missing data.
+      if (convictionMin !== null && r.conviction_score < convictionMin)
+        return false;
+      if (nFundsMin !== null && r.n_funds < nFundsMin) return false;
 
       return true;
     });
@@ -195,93 +186,112 @@ export default function DiscoveryLeaderboard({
           // strongest-conviction name surfaces first.
           return b.conviction_score - a.conviction_score;
         }
-        case "analysis": {
-          const aKey = a.business_tier_source === "user" ? "analyzed" : "unseen";
-          const bKey = b.business_tier_source === "user" ? "analyzed" : "unseen";
-          const ra = ANALYSIS_RANK[aKey];
-          const rb = ANALYSIS_RANK[bKey];
-          if (ra !== rb) return (ra - rb) * mult;
-          // Secondary: conviction desc so within a group the strongest
-          // signals surface first.
-          return b.conviction_score - a.conviction_score;
-        }
       }
     });
-  }, [rows, filter, query, sortKey, sortDir, tierFilter, flagsFilter]);
+  }, [
+    rows,
+    query,
+    onlyWatchlist,
+    tierSet,
+    flagsFilter,
+    convictionMin,
+    nFundsMin,
+    sortKey,
+    sortDir,
+  ]);
 
-  const counts = useMemo(() => {
-    const c: Record<FilterKey, number> = {
-      all: rows.length,
-      unseen: 0,
-      watchlist: 0,
-    };
-    for (const r of rows) {
-      if (r.business_tier_source !== "user") c.unseen += 1;
-      if (r.ticker_state === "watchlist") c.watchlist += 1;
-    }
-    return c;
-  }, [rows]);
+  const watchlistCount = useMemo(
+    () => rows.filter((r) => r.ticker_state === "watchlist").length,
+    [rows],
+  );
+
+  const activeFilterCount =
+    (onlyWatchlist ? 1 : 0) +
+    (tierSet.size > 0 ? 1 : 0) +
+    (flagsFilter !== "all" ? 1 : 0) +
+    (convictionMin !== null ? 1 : 0) +
+    (nFundsMin !== null ? 1 : 0) +
+    (query.trim() !== "" ? 1 : 0);
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-2">
-        {FILTERS.map((f) => {
-          const active = filter === f.key;
-          return (
-            <button
-              key={f.key}
-              type="button"
-              onClick={() => setFilter(f.key)}
-              className={
-                active
-                  ? "rounded-full bg-navy-900 px-3 py-1.5 text-xs font-semibold text-white"
-                  : "rounded-full border border-navy-200 bg-white px-3 py-1.5 text-xs font-medium text-navy-700 hover:border-navy-400 hover:text-navy-900"
-              }
-            >
-              {f.label}
-              <span
-                className={
-                  active
-                    ? "ml-1.5 text-navy-200"
-                    : "ml-1.5 text-navy-400"
-                }
-              >
-                {counts[f.key]}
-              </span>
-            </button>
-          );
-        })}
+      {/* Row 1 — search + summary */}
+      <div className="flex flex-wrap items-center gap-3">
         <input
           type="text"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Filtrar por ticker o empresa…"
-          className="ml-auto w-64 rounded-lg border border-navy-200 bg-white px-3 py-1.5 text-xs text-navy-800 placeholder-navy-400 focus:border-navy-400 focus:outline-none"
+          placeholder="Buscar por ticker o nombre…"
+          className="w-72 rounded-lg border border-navy-200 bg-white px-3 py-2 text-sm text-navy-800 placeholder-navy-400 focus:border-navy-400 focus:outline-none"
         />
+        <div className="ml-auto flex items-center gap-3 text-xs text-navy-500">
+          <span className="tabular-nums">
+            Mostrando {filtered.length} de {rows.length}
+          </span>
+          {activeFilterCount > 0 && (
+            <>
+              <span className="text-navy-300">·</span>
+              <button
+                type="button"
+                onClick={clearAll}
+                className="font-medium text-navy-700 underline-offset-2 hover:underline"
+              >
+                Limpiar filtros ({activeFilterCount})
+              </button>
+            </>
+          )}
+        </div>
       </div>
 
-      <div className="flex flex-wrap items-center gap-2 text-xs">
-        <span className="font-semibold uppercase tracking-wider text-navy-500">
+      {/* Row 2 — criteria groups */}
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
+        <button
+          type="button"
+          onClick={() => setOnlyWatchlist((v) => !v)}
+          aria-pressed={onlyWatchlist}
+          className={
+            onlyWatchlist
+              ? "rounded-full bg-navy-900 px-3 py-1 font-semibold text-white"
+              : "rounded-full border border-navy-200 bg-white px-3 py-1 font-medium text-navy-700 hover:border-navy-400 hover:text-navy-900"
+          }
+        >
+          ★ Solo watchlist
+          <span
+            className={
+              onlyWatchlist ? "ml-1.5 text-navy-200" : "ml-1.5 text-navy-400"
+            }
+          >
+            {watchlistCount}
+          </span>
+        </button>
+
+        <span className="text-navy-300">·</span>
+
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-navy-500">
           Calidad
         </span>
-        {TIER_FILTERS.map((f) => {
-          const active = tierFilter === f.key;
+        {TIER_OPTIONS.map((t) => {
+          const active = tierSet.has(t.key);
           return (
             <button
-              key={f.key}
+              key={t.key}
               type="button"
-              onClick={() => setTierFilter(f.key)}
+              onClick={() => toggleTier(t.key)}
+              aria-pressed={active}
               className={
                 active
-                  ? "rounded-full bg-navy-900 px-2.5 py-1 text-xs font-semibold text-white"
-                  : "rounded-full border border-navy-200 bg-white px-2.5 py-1 text-xs font-medium text-navy-700 hover:border-navy-400 hover:text-navy-900"
+                  ? "rounded-full bg-navy-900 px-2.5 py-1 font-semibold text-white"
+                  : "rounded-full border border-navy-200 bg-white px-2.5 py-1 font-medium text-navy-700 hover:border-navy-400 hover:text-navy-900"
               }
             >
-              {f.label}
+              {t.label}
             </button>
           );
         })}
-        <span className="ml-4 font-semibold uppercase tracking-wider text-navy-500">
+
+        <span className="text-navy-300">·</span>
+
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-navy-500">
           Red flags
         </span>
         {FLAGS_FILTERS.map((f) => {
@@ -293,14 +303,53 @@ export default function DiscoveryLeaderboard({
               onClick={() => setFlagsFilter(f.key)}
               className={
                 active
-                  ? "rounded-full bg-navy-900 px-2.5 py-1 text-xs font-semibold text-white"
-                  : "rounded-full border border-navy-200 bg-white px-2.5 py-1 text-xs font-medium text-navy-700 hover:border-navy-400 hover:text-navy-900"
+                  ? "rounded-full bg-navy-900 px-2.5 py-1 font-semibold text-white"
+                  : "rounded-full border border-navy-200 bg-white px-2.5 py-1 font-medium text-navy-700 hover:border-navy-400 hover:text-navy-900"
               }
             >
               {f.label}
             </button>
           );
         })}
+      </div>
+
+      {/* Row 3 — numeric mins (separate line so categorical chips above stay on one line) */}
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-xs">
+        <label className="flex items-center gap-1.5 text-navy-600">
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-navy-500">
+            Conviction ≥
+          </span>
+          <input
+            type="number"
+            min={0}
+            step={0.5}
+            value={convictionMin ?? ""}
+            onChange={(e) => {
+              const v = e.target.value;
+              setConvictionMin(v === "" ? null : Number(v));
+            }}
+            className="w-16 rounded-lg border border-navy-200 bg-white px-2 py-1 text-xs tabular-nums text-navy-800 placeholder-navy-400 focus:border-navy-400 focus:outline-none"
+            placeholder="—"
+          />
+        </label>
+
+        <label className="flex items-center gap-1.5 text-navy-600">
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-navy-500">
+            Fondos ≥
+          </span>
+          <input
+            type="number"
+            min={0}
+            step={1}
+            value={nFundsMin ?? ""}
+            onChange={(e) => {
+              const v = e.target.value;
+              setNFundsMin(v === "" ? null : Number(v));
+            }}
+            className="w-14 rounded-lg border border-navy-200 bg-white px-2 py-1 text-xs tabular-nums text-navy-800 placeholder-navy-400 focus:border-navy-400 focus:outline-none"
+            placeholder="—"
+          />
+        </label>
       </div>
 
       <div className="overflow-x-auto rounded-2xl border border-navy-100 bg-white">
@@ -350,13 +399,6 @@ export default function DiscoveryLeaderboard({
                   <TiersInfoPopover />
                 </span>
               </th>
-              <SortableHeader
-                label="Análisis"
-                active={sortKey === "analysis"}
-                dir={sortDir}
-                onClick={() => handleSort("analysis")}
-                align="left"
-              />
               <th className="px-3 py-3 text-right font-semibold"></th>
             </tr>
           </thead>
@@ -364,10 +406,10 @@ export default function DiscoveryLeaderboard({
             {filtered.length === 0 && (
               <tr>
                 <td
-                  colSpan={10}
+                  colSpan={9}
                   className="px-4 py-8 text-center text-sm text-navy-500"
                 >
-                  Sin resultados.
+                  <EmptyState query={query} />
                 </td>
               </tr>
             )}
@@ -398,17 +440,12 @@ function LeaderboardTableRow({
   isExpanded: boolean;
   onToggle: () => void;
 }) {
-  const isAnalyzedByUser = row.business_tier_source === "user";
-  // Soft de-emphasis on rows the user has already analyzed — surfaces
-  // unseen tickers visually. Watchlist alone doesn't dim the row
-  // (orthogonal axis).
-  const rowClass = isAnalyzedByUser
-    ? "border-b border-navy-50 opacity-70 hover:bg-navy-50/40 cursor-pointer"
-    : "border-b border-navy-50 hover:bg-navy-50/40 cursor-pointer";
-
   return (
     <>
-      <tr className={rowClass} onClick={onToggle}>
+      <tr
+        className="border-b border-navy-50 hover:bg-navy-50/40 cursor-pointer"
+        onClick={onToggle}
+      >
         <td className="px-3 py-3 text-xs text-navy-400">{rank}</td>
         <td className="px-3 py-3">
           <span className="inline-flex items-center gap-2">
@@ -459,31 +496,16 @@ function LeaderboardTableRow({
         <td className="px-3 py-3">
           <TierBreakdown row={row} />
         </td>
-        <td className="px-3 py-3">
-          {isAnalyzedByUser ? (
-            <span className="inline-flex rounded-md bg-navy-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-navy-700">
-              Analizada
-            </span>
-          ) : (
-            <span className="text-[10px] italic text-navy-400">
-              No analizada
-            </span>
-          )}
-        </td>
         <td
           className="px-3 py-3 text-right"
           onClick={(e) => e.stopPropagation()}
         >
-          {row.business_tier_source === "user" ? (
-            <ViewFichaLink ticker={row.ticker} />
-          ) : (
-            <AnalyzeButton ticker={row.ticker} />
-          )}
+          <ViewFichaLink ticker={row.ticker} />
         </td>
       </tr>
       {isExpanded && (
         <tr className="border-b border-navy-100 bg-navy-50/40">
-          <td colSpan={10} className="px-6 py-4">
+          <td colSpan={9} className="px-6 py-4">
             <FundBreakdownGrouped funds={row.fund_breakdown} />
           </td>
         </tr>
@@ -691,11 +713,10 @@ function TiersInfoPopover() {
   );
 }
 
-// Sends the user to the right ficha for this ticker — position page,
-// watchlist page, or back to the wizard — via the universal dispatcher
-// at /dashboard/ticker/[symbol]. Used when the ticker has already
-// been analyzed (business_tier !== null); the alternative is the
-// AnalyzeButton below for first-time discovery.
+// Universal entry to a ticker's ficha — used regardless of whether the
+// company has been analyzed. The ficha is the canonical surface; from
+// there the user opts in to the wizard via "Empezar análisis" /
+// "Re-analizar" on the Decisión tab.
 function ViewFichaLink({ ticker }: { ticker: string }) {
   return (
     <Link
@@ -708,23 +729,35 @@ function ViewFichaLink({ ticker }: { ticker: string }) {
   );
 }
 
-function AnalyzeButton({ ticker }: { ticker: string }) {
-  const [isPending, startTransition] = useTransition();
-  const onClick = () => {
-    startTransition(async () => {
-      const fd = new FormData();
-      fd.append("ticker", ticker);
-      await reanalyzeTickerAction(fd);
-    });
-  };
+// Empty-state helper. When the search query looks like a ticker but
+// nothing in the leaderboard matches, offer to open the ticker directly
+// — same behaviour as the (now-retired) top-of-page entry form. The
+// validation regex mirrors openTickerAction's server-side guard so we
+// don't surface the CTA for queries that would only be rejected.
+const TICKER_FORMAT = /^[A-Za-z./-]{1,10}$/;
+
+function EmptyState({ query }: { query: string }) {
+  const trimmed = query.trim();
+  const looksLikeTicker = trimmed !== "" && TICKER_FORMAT.test(trimmed);
+  if (!looksLikeTicker) {
+    return <span className="italic">Sin resultados.</span>;
+  }
+  const upper = trimmed.replace(/[./]/g, "-").toUpperCase();
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={isPending}
-      className="whitespace-nowrap rounded-lg border border-navy-200 bg-white px-2.5 py-1 text-xs font-medium text-navy-700 hover:border-navy-400 hover:text-navy-900 disabled:opacity-50"
+    <form
+      action={openTickerSubmitAction}
+      className="flex flex-col items-center gap-3"
     >
-      {isPending ? "…" : "Analizar →"}
-    </button>
+      <input type="hidden" name="ticker" value={upper} />
+      <span className="italic">
+        Ningún negocio del leaderboard coincide con &ldquo;{trimmed}&rdquo;.
+      </span>
+      <button
+        type="submit"
+        className="rounded-lg bg-navy-900 px-4 py-2 text-xs font-semibold text-white hover:bg-navy-800"
+      >
+        Abrir ficha de {upper} →
+      </button>
+    </form>
   );
 }

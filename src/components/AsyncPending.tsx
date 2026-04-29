@@ -2,22 +2,23 @@
 
 import { useFormStatus } from "react-dom";
 
-// Client-side pending feedback for the wizard's server-action forms. Two
-// co-located primitives, both driven by the same `useFormStatus()` hook
-// — when any form that contains them submits, the `pending` state covers
-// (a) the action itself and (b) the subsequent RSC re-render triggered
-// by revalidatePath, which is where the real 15-40s Claude work lives.
+// Client-side pending feedback for server-action forms whose work
+// extends past the action call into the subsequent RSC re-render
+// (typical pattern: action runs an expensive Claude generation, then
+// revalidatePath triggers a server-rendered re-fetch). Both primitives
+// share the same useFormStatus() hook so they pulse together for the
+// full duration of the click → render cycle.
 //
-// `SubmitButton` swaps its label to "Procesando…" and disables while
-// pending. `PendingOverlay` renders a full-screen paper overlay with an
-// editorial italic message, so the user never sees a frozen page during
-// a long Claude call.
+// `SubmitButton` swaps its label to a pending one ("Procesando…" or
+// "Analizando…") and disables while pending. `PendingOverlay` renders
+// a full-screen paper overlay with an editorial italic message, so the
+// user never sees a frozen page during a long Claude call.
 //
 // Usage pattern (inside any <form action={serverAction}>):
 //
-//   <form action={advanceStepAction.bind(null, ticker, "red_flags", "understood")}>
+//   <form action={analyzeBusinessAction.bind(null, ticker)}>
 //     <PendingOverlay message="Moatboard está leyendo el 10-K…" />
-//     <SubmitButton className="…">Sí, lo entiendo</SubmitButton>
+//     <SubmitButton className="…">Analizar negocio</SubmitButton>
 //   </form>
 
 export function SubmitButton({
