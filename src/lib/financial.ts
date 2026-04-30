@@ -1,5 +1,6 @@
 import YahooFinance from "yahoo-finance2";
 import { fetchMultiYearFundamentalsSec } from "@/lib/sec";
+import { getFxToUsd, applyFx } from "@/lib/fx";
 
 const yf = new YahooFinance({ suppressNotices: ["yahooSurvey"] });
 
@@ -108,6 +109,26 @@ export async function fetchQuoteAndFundamentals(
         ? price.marketCap / price.regularMarketPrice
         : null;
 
+    // Foreign filers (TSM in TWD, ASML in EUR, TM in JPY...) expose `price`
+    // values in the trading currency (USD for ADRs) but `financialData`
+    // numbers in the company's reporting currency. Without FX conversion
+    // a TSM FCF of NT$721B divided by a $2T market cap would yield a 35%
+    // FCF-yield phantom. Detect the mismatch once and convert the absolute
+    // monetary fields below; ratios (margins, growth, PE, P/B) are
+    // dimensionless and already valid as-is.
+    const finCcy =
+      (fd as { financialCurrency?: string } | null | undefined)
+        ?.financialCurrency ?? null;
+    const priceCcy = price?.currency ?? null;
+    const fxToUsd =
+      finCcy && priceCcy && finCcy.toUpperCase() !== priceCcy.toUpperCase()
+        ? await getFxToUsd(finCcy)
+        : 1;
+    const freeCashflowUsd = applyFx(fd?.freeCashflow ?? null, fxToUsd);
+    const operatingCashflowUsd = applyFx(fd?.operatingCashflow ?? null, fxToUsd);
+    const totalDebtUsd = applyFx(fd?.totalDebt ?? null, fxToUsd);
+    const totalCashUsd = applyFx(fd?.totalCash ?? null, fxToUsd);
+
     const quote: Quote | null = price
       ? {
           symbol: price.symbol ?? ticker.toUpperCase(),
@@ -144,10 +165,13 @@ export async function fetchQuoteAndFundamentals(
           ? price.regularMarketPrice / sd.trailingPE
           : null;
 
-    // FCF per share = trailing FCF / shares outstanding. Both already computed.
+    // FCF per share = trailing FCF / shares outstanding. Both in USD now
+    // (FCF was converted above when the filer reports in a non-USD
+    // currency; sharesOutstanding is derived from USD market cap / USD
+    // price so it's USD-denominated by construction).
     const fcfPerShare =
-      fd?.freeCashflow != null && sharesOutstanding && sharesOutstanding > 0
-        ? fd.freeCashflow / sharesOutstanding
+      freeCashflowUsd != null && sharesOutstanding && sharesOutstanding > 0
+        ? freeCashflowUsd / sharesOutstanding
         : null;
 
     const fundamentals: Fundamentals = {
@@ -157,10 +181,10 @@ export async function fetchQuoteAndFundamentals(
       profitMargins: fd?.profitMargins ?? null,
       operatingMargins: fd?.operatingMargins ?? null,
       grossMargins: fd?.grossMargins ?? null,
-      freeCashflow: fd?.freeCashflow ?? null,
-      operatingCashflow: fd?.operatingCashflow ?? null,
-      totalDebt: fd?.totalDebt ?? null,
-      totalCash: fd?.totalCash ?? null,
+      freeCashflow: freeCashflowUsd,
+      operatingCashflow: operatingCashflowUsd,
+      totalDebt: totalDebtUsd,
+      totalCash: totalCashUsd,
       debtToEquity: fd?.debtToEquity ?? null,
       currentRatio: fd?.currentRatio ?? null,
       earningsGrowth: fd?.earningsGrowth ?? null,
@@ -267,11 +291,32 @@ export async function fetchMultiYearFundamentals(
     }
     return fromSec;
   }
-  return fetchMultiYearFundamentalsYfinance(ticker);
+  // SEC failed or thin (<3 usable years) — yfinance fallback. For foreign
+  // filers (TSM, ASML, TM, BABA, NVO, etc.) yfinance returns absolute
+  // monetary fields in the company's reporting currency, not USD. Detect
+  // the mismatch here and pass the FX multiplier down so revenue / FCF /
+  // assets / debt land in USD before they reach the implied-return math.
+  let fxToUsd: number | null = 1;
+  try {
+    const summary = await yf.quoteSummary(ticker, {
+      modules: ["price", "financialData"],
+    });
+    const finCcy =
+      (summary.financialData as { financialCurrency?: string } | undefined)
+        ?.financialCurrency ?? null;
+    const priceCcy = summary.price?.currency ?? null;
+    if (finCcy && priceCcy && finCcy.toUpperCase() !== priceCcy.toUpperCase()) {
+      fxToUsd = await getFxToUsd(finCcy);
+    }
+  } catch (err) {
+    console.warn(`Currency detection failed for ${ticker}:`, err);
+  }
+  return fetchMultiYearFundamentalsYfinance(ticker, fxToUsd);
 }
 
 export async function fetchMultiYearFundamentalsYfinance(
   ticker: string,
+  fxToUsd: number | null = 1,
 ): Promise<MultiYearFundamentals | null> {
   try {
     const today = new Date();
@@ -293,10 +338,17 @@ export async function fetchMultiYearFundamentalsYfinance(
       Record<string, unknown> & { date?: Date | string }
     >;
 
+    // Per-year FX is the same multiplier as the spot rate. CAGRs are
+    // currency-invariant when the multiplier is constant across years
+    // (CAGR(k·xs) = CAGR(xs)), so applying today's FX uniformly preserves
+    // the growth signal while putting absolute USD-denominated comparisons
+    // (FCF Yield, Net Debt / EBITDA, market-cap-relative metrics) on
+    // honest footing.
+    const fx = (v: number | null) => applyFx(v, fxToUsd);
     const mapped: AnnualFundamentalRow[] = rows.map((r) => {
-      const revenue = nullable(r["totalRevenue"]);
-      const cogs = nullable(r["costOfRevenue"]);
-      const directGrossProfit = nullable(r["grossProfit"]);
+      const revenue = fx(nullable(r["totalRevenue"]));
+      const cogs = fx(nullable(r["costOfRevenue"]));
+      const directGrossProfit = fx(nullable(r["grossProfit"]));
       const derivedGrossProfit =
         revenue !== null && cogs !== null ? revenue - cogs : null;
       return {
@@ -306,26 +358,26 @@ export async function fetchMultiYearFundamentalsYfinance(
           : String(r.date ?? ""),
       revenue,
       grossProfit: directGrossProfit ?? derivedGrossProfit,
-      operatingIncome: nullable(r["operatingIncome"] ?? r["EBIT"]),
-      ebit: nullable(r["EBIT"] ?? r["operatingIncome"]),
+      operatingIncome: fx(nullable(r["operatingIncome"] ?? r["EBIT"])),
+      ebit: fx(nullable(r["EBIT"] ?? r["operatingIncome"])),
       taxRate: nullable(r["taxRateForCalcs"]),
-      netIncome: nullable(r["netIncome"]),
-      depreciationAmortization: nullable(
-        r["depreciationAndAmortization"] ?? r["reconciledDepreciation"],
+      netIncome: fx(nullable(r["netIncome"])),
+      depreciationAmortization: fx(
+        nullable(r["depreciationAndAmortization"] ?? r["reconciledDepreciation"]),
       ),
-      capitalExpenditure: nullable(r["capitalExpenditure"]),
-      operatingCashFlow: nullable(r["operatingCashFlow"]),
-      freeCashFlow: nullable(r["freeCashFlow"]),
-      investedCapital: nullable(r["investedCapital"]),
-      totalAssets: nullable(r["totalAssets"]),
-      totalDebt: nullable(r["totalDebt"]),
-      cash: nullable(r["cashAndCashEquivalents"]),
-      stockholdersEquity: nullable(
-        r["stockholdersEquity"] ?? r["commonStockEquity"],
+      capitalExpenditure: fx(nullable(r["capitalExpenditure"])),
+      operatingCashFlow: fx(nullable(r["operatingCashFlow"])),
+      freeCashFlow: fx(nullable(r["freeCashFlow"])),
+      investedCapital: fx(nullable(r["investedCapital"])),
+      totalAssets: fx(nullable(r["totalAssets"])),
+      totalDebt: fx(nullable(r["totalDebt"])),
+      cash: fx(nullable(r["cashAndCashEquivalents"])),
+      stockholdersEquity: fx(
+        nullable(r["stockholdersEquity"] ?? r["commonStockEquity"]),
       ),
       sharesDiluted: nullable(r["dilutedAverageShares"]),
-      repurchaseOfCapitalStock: nullable(r["repurchaseOfCapitalStock"]),
-      cashDividendsPaid: nullable(r["cashDividendsPaid"]),
+      repurchaseOfCapitalStock: fx(nullable(r["repurchaseOfCapitalStock"])),
+      cashDividendsPaid: fx(nullable(r["cashDividendsPaid"])),
     };
     });
 
