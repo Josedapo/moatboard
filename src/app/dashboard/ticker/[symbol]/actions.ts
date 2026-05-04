@@ -10,6 +10,7 @@ import { auth } from "@/auth";
 import { revalidatePath } from "next/cache";
 import { getCanonicalTicker } from "@/lib/tickerAliases";
 import { addToWatchlist, removeFromWatchlist } from "@/lib/watchlistEntries";
+import { invalidateLeaderboardCache } from "@/lib/discoveryLeaderboard";
 
 async function requireUserId(): Promise<string | number | null> {
   const session = await auth();
@@ -36,6 +37,7 @@ export async function toggleWatchlistAction(
     await addToWatchlist({ userId, ticker: canonical });
   }
 
+  invalidateLeaderboardCache(userId);
   revalidatePath(`/dashboard/ticker/${canonical}`);
   revalidatePath("/dashboard");
   revalidatePath("/dashboard/watchlist");

@@ -300,6 +300,152 @@ export function computeQualityTier(
   return "mediocre";
 }
 
+// Same proportional tier logic as `computeQualityTier`, but re-derived from
+// the most recent year's value of each multi-year metric (the `latestValue`
+// fields populated by the multi-year scorers). Surfaces regime change that
+// the 10y median hides — a "poor" business that's been pivoting (Netflix
+// 2023-2024) reads as exceptional in the latest year; an "exceptional"
+// business that's deteriorating (KNSL-style growth normalisation) reads
+// down. Returns null when fewer than 4 latest-year dimensions could be
+// computed (rare; insufficient data to form a tier comparison).
+//
+// The thresholds intentionally match the 10y scorers' "strong/acceptable"
+// cuts (without the worst-year filter, which doesn't apply to a single
+// year). Single-year-snapshot dimensions (D/E, AFFO payout, Net Debt /
+// EBITDA) reuse their 10y quality verbatim — they're already point-in-
+// time, so 1y === 10y for them.
+export function computeLatestYearTier(
+  scorecard: ScorecardSummary,
+  moatStrength: MoatStrength,
+  moatArchetype: MoatArchetype,
+  fundamentals: Fundamentals,
+): Tier | null {
+  function score(
+    value: number | null | undefined,
+    strongMin: number,
+    acceptableMin: number,
+    higherIsBetter = true,
+  ): Quality | null {
+    if (value === null || value === undefined || !Number.isFinite(value)) {
+      return null;
+    }
+    if (higherIsBetter) {
+      if (value >= strongMin) return "strong";
+      if (value >= acceptableMin) return "acceptable";
+      return "weak";
+    }
+    if (value <= strongMin) return "strong";
+    if (value <= acceptableMin) return "acceptable";
+    return "weak";
+  }
+
+  const my = scorecard.multiYear;
+  const dims = scorecard.dimensions;
+  const collected: Quality[] = [];
+
+  if (dims.returnOnInvestedCapital !== "neutral") {
+    const q = score(my.returnOnInvestedCapital.latestValue, 0.15, 0.1);
+    if (q) collected.push(q);
+  }
+  if (dims.grossMargin !== "neutral") {
+    const q = score(my.grossMargin.latestValue, 0.5, 0.35);
+    if (q) collected.push(q);
+  }
+  if (dims.fcfMargin !== "neutral") {
+    const q = score(my.fcfMargin.latestValue, 0.15, 0.08);
+    if (q) collected.push(q);
+  }
+  if (dims.operatingMargins !== "neutral") {
+    const q = score(my.operatingMargin.latestValue, 0.2, 0.1);
+    if (q) collected.push(q);
+  }
+  if (dims.shareCountTrend !== "neutral") {
+    const q = score(my.shareCountTrend.latestValue, -0.01, 0.01, false);
+    if (q) collected.push(q);
+  }
+  if (dims.revenueGrowth !== "neutral") {
+    const q = score(my.revenueGrowth.latestValue, 0.1, 0.05);
+    if (q) collected.push(q);
+  }
+  if (dims.returnOnEquity !== "neutral") {
+    const q = score(my.returnOnEquity.latestValue, 0.15, 0.1);
+    if (q) collected.push(q);
+  }
+  if (dims.returnOnAssets !== "neutral") {
+    const q = score(my.returnOnAssets.latestValue, 0.012, 0.008);
+    if (q) collected.push(q);
+  }
+  if (dims.bookValuePerShareCagr !== "neutral") {
+    const q = score(my.bookValuePerShareCagr.latestValue, 0.07, 0.03);
+    if (q) collected.push(q);
+  }
+  if (dims.affoPerShareCagr !== "neutral") {
+    const q = score(my.affoPerShareCagr.latestValue, 0.05, 0.02);
+    if (q) collected.push(q);
+  }
+  // Latest-year-snapshot dimensions — point-in-time by construction, no
+  // 1y vs 10y distinction. Reuse the 10y quality so they still count
+  // toward the proportional tier denominator.
+  if (dims.debtToEquity !== "neutral") collected.push(dims.debtToEquity);
+  if (dims.affoPayoutRatio !== "neutral") collected.push(dims.affoPayoutRatio);
+  if (dims.netDebtToEbitda !== "neutral") collected.push(dims.netDebtToEbitda);
+
+  if (collected.length < 4) return null;
+
+  const strongCount = collected.filter((q) => q === "strong").length;
+  const weakCount = collected.filter((q) => q === "weak").length;
+  const applicable = collected.length;
+
+  const roicLatest = my.returnOnInvestedCapital.latestValue;
+  const hardRoicFail =
+    dims.returnOnInvestedCapital !== "neutral" &&
+    roicLatest !== null &&
+    roicLatest !== undefined &&
+    roicLatest < 0;
+  const hardFcfFail =
+    dims.fcfMargin !== "neutral" &&
+    fundamentals.freeCashflow !== null &&
+    fundamentals.freeCashflow <= 0;
+
+  if (
+    hardRoicFail ||
+    hardFcfFail ||
+    weakCount >= 3 ||
+    (moatStrength === "weak" && strongCount < 3)
+  ) {
+    return "poor";
+  }
+
+  if (moatArchetype === "none") {
+    return "mediocre";
+  }
+
+  if (
+    strongCount >= applicable - 1 &&
+    weakCount === 0 &&
+    moatStrength === "strong"
+  ) {
+    return "exceptional";
+  }
+
+  if (
+    strongCount >= applicable - 2 &&
+    weakCount <= 1 &&
+    (moatStrength === "strong" || moatStrength === "unclear")
+  ) {
+    return "good";
+  }
+
+  return "mediocre";
+}
+
+export const TIER_RANK: Record<Tier, number> = {
+  poor: 0,
+  mediocre: 1,
+  good: 2,
+  exceptional: 3,
+};
+
 export function renderVerdictReason({
   tier,
   scorecard,

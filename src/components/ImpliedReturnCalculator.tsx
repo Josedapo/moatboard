@@ -4,22 +4,18 @@
 // price?" instead of "is this below intrinsic?". The frame Buffett
 // post-1985, Smith and Akre use. See `lib/impliedReturn.ts` for the math.
 //
-// 2026-04-25 redesign — three visual zones, top to bottom:
+// **No verdict layer.** Moatboard surfaces the expected CAGR base/stress
+// and the Treasury+2% reference line. What level is "buyable" is a function
+// of the user's opportunity cost and conviction in the business — subjective
+// per investor, never a framework decree.
 //
-//   ZONE 1 · CONCLUSION  (verdict card, prominent, color-toned)
-//     The reader's headline: comprable or not, with the two-step checks.
+// Three visual zones:
 //
-//   ZONE 2 · CALCULATION (the math, dense and uniform)
-//     A single 3-column table — Componente · Base · Estrés — that contains
-//     every number that drives the verdict. Below it, threshold + floor in
-//     two compact lines.
-//
-//   ZONE 3 · DETAILS     (collapsed by default)
-//     Anchors, formulas, tier table, footnotes. Available when the reader
-//     wants to audit a number, not in the way when they don't.
+//   ZONE 1 · RESUMEN     The expected returns at this price, large and clean.
+//   ZONE 2 · CÁLCULO     The math, dense and uniform — 3-col table.
+//   ZONE 3 · DETALLES    Anchors, formulas, multiple detail. Collapsed.
 
 import type { ImpliedReturnStoredAssumptions } from "@/lib/valuations";
-import { VERDICT_LABELS } from "@/lib/impliedReturn";
 import MultipleRowEditable from "@/components/MultipleRowEditable";
 import GrowthRowEditable from "@/components/GrowthRowEditable";
 
@@ -36,18 +32,6 @@ const TIER_LABEL: Record<
   good: "Good",
   mediocre: "Mediocre",
   poor: "Poor",
-};
-
-const TIER_RATIONALE: Record<
-  ImpliedReturnStoredAssumptions["quality_tier"],
-  string
-> = {
-  exceptional:
-    "Moat ancho + ROIC alto + runway largo. Varianza baja alrededor del caso base, así que el escenario malo no es desastre — basta con 12% de retorno esperado.",
-  good: "Moat menos duradero o runway más corto. Mayor probabilidad de erosión, exigimos algo más de prima.",
-  mediocre:
-    "Calidad media: el escenario malo puede ser realmente malo. Exigimos retorno alto que compense la asimetría.",
-  poor: "Calidad insuficiente para invertir bajo el framework — debería estar bloqueado por la gate.",
 };
 
 export default function ImpliedReturnCalculator({
@@ -67,9 +51,6 @@ export default function ImpliedReturnCalculator({
   // lives at the ficha level, not inside the calculator.
   ephemeral?: boolean;
 }) {
-  const verdictTone =
-    assumptions.verdict === "comprable" ? "positive" : "negative";
-
   return (
     <div className="overflow-hidden rounded-lg border border-navy-200 bg-white">
       {/* Header (slim, neutral) */}
@@ -92,15 +73,13 @@ export default function ImpliedReturnCalculator({
         </div>
       </div>
 
-      {/* ─── ZONE 1 · CONCLUSIÓN ──────────────────────────────────── */}
-      <ConclusionZone
-        assumptions={assumptions}
-        verdictTone={verdictTone}
-      />
+      {/* ─── ZONE 1 · RESUMEN ─────────────────────────────────────── */}
+      <SummaryZone assumptions={assumptions} />
 
       {/* ─── ZONE 2 · CÁLCULO ─────────────────────────────────────── */}
       <CalculationZone
         positionId={positionId}
+        ticker={ticker}
         assumptions={assumptions}
         ephemeral={ephemeral}
       />
@@ -112,88 +91,76 @@ export default function ImpliedReturnCalculator({
 }
 
 // ────────────────────────────────────────────────────────────────────
-// ZONE 1 · Conclusion
+// ZONE 1 · Resumen
 // ────────────────────────────────────────────────────────────────────
 
-function ConclusionZone({
+function SummaryZone({
   assumptions,
-  verdictTone,
 }: {
   assumptions: ImpliedReturnStoredAssumptions;
-  verdictTone: "positive" | "negative";
 }) {
-  const bg =
-    verdictTone === "positive"
-      ? "bg-emerald-50 border-l-emerald-500"
-      : "bg-amber-50 border-l-amber-500";
-  const labelColor =
-    verdictTone === "positive" ? "text-emerald-900" : "text-amber-900";
-  const subColor =
-    verdictTone === "positive" ? "text-emerald-800" : "text-amber-800";
-
   return (
-    <div
-      className={`border-y border-navy-100 border-l-4 px-6 py-5 ${bg}`}
-    >
+    <div className="border-y border-navy-100 bg-navy-50/40 px-6 py-5">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <div className={`text-xs font-semibold uppercase tracking-wider ${subColor}`}>
-          Veredicto
+        <div className="text-[11px] font-semibold uppercase tracking-wider text-navy-500">
+          Retorno esperado a 10 años
         </div>
-        <div className={`text-[11px] tabular-nums ${subColor}`}>
+        <div className="text-[11px] tabular-nums text-navy-500">
           Calidad: {TIER_LABEL[assumptions.quality_tier]}
         </div>
       </div>
-      <div className={`mt-1 font-display text-2xl italic ${labelColor}`}>
-        {VERDICT_LABELS[assumptions.verdict]}
-      </div>
-      <div className="mt-3 grid gap-1.5 text-xs">
-        <CheckRow
-          ok={assumptions.passes_attractiveness}
-          tone={verdictTone}
-          text={
-            <>
-              <strong>Atractivo:</strong> caso base{" "}
-              <span className="tabular-nums font-semibold">
-                {pct(assumptions.base_cagr)}
-              </span>{" "}
-              {assumptions.passes_attractiveness ? "supera" : "no supera"} el
-              umbral{" "}
-              <span className="tabular-nums">
-                ≥{pct(assumptions.threshold)}
-              </span>{" "}
-              para {TIER_LABEL[assumptions.quality_tier]}.
-            </>
-          }
+
+      <div className="mt-3 grid gap-4 sm:grid-cols-2">
+        <CagrCell
+          label="Caso base"
+          value={assumptions.base_cagr}
+          hint="FCF Yield + crecimiento sostenible + Δ múltiplo"
         />
-        <CheckRow
-          ok={assumptions.passes_no_disaster}
-          tone={verdictTone}
-          text={
-            <>
-              <strong>No-desastre:</strong> escenario estresado{" "}
-              <span className="tabular-nums font-semibold">
-                {pct(assumptions.stress_cagr)}
-              </span>{" "}
-              {assumptions.passes_no_disaster ? "supera" : "cae por debajo de"}{" "}
-              el floor{" "}
-              <span className="tabular-nums">
-                ≥{pct(assumptions.floor)}
-              </span>{" "}
-              (Treasury 10y + 2%).
-            </>
-          }
+        <CagrCell
+          label="Escenario estresado"
+          value={assumptions.stress_cagr}
+          hint={`Growth × 0.7 · múltiplo a Q1 hist. · Treasury 10y + 2% = ${pct(assumptions.floor)} (referencia)`}
         />
       </div>
+
+      <p className="mt-4 text-[11px] italic leading-relaxed text-navy-500">
+        Qué retorno hace que un negocio sea comprable depende de tu coste
+        de oportunidad y de tu convicción en el negocio. Moatboard te
+        muestra la cifra; tú decides el listón.
+      </p>
 
       <PeerMedianDisclaimer assumptions={assumptions} />
     </div>
   );
 }
 
+function CagrCell({
+  label,
+  value,
+  hint,
+}: {
+  label: string;
+  value: number;
+  hint: string;
+}) {
+  return (
+    <div className="rounded-md border border-navy-100 bg-white px-4 py-3">
+      <div className="text-[10px] font-semibold uppercase tracking-wider text-navy-500">
+        {label}
+      </div>
+      <div className="mt-0.5 text-2xl font-bold tabular-nums text-navy-900">
+        {pct(value)}
+        <span className="ml-1 text-xs font-medium text-navy-500">/año</span>
+      </div>
+      <div className="mt-1 text-[11px] leading-snug text-navy-500">{hint}</div>
+    </div>
+  );
+}
+
 // Cross-sectional disclaimer: when the current multiple cotiza
 // ≥ 1.5× the peer median for this business type, the own-history
-// math may be unrepresentative. Informational only — does not change
-// the verdict. Drives Joseda toward considering the override.
+// math may be unrepresentative. Informational — drives Joseda toward
+// considering the multiple override.
 function PeerMedianDisclaimer({
   assumptions,
 }: {
@@ -205,6 +172,10 @@ function PeerMedianDisclaimer({
   if (current === null || peer === null || label === null || peer <= 0) {
     return null;
   }
+  // When peer IS the anchor (own-history failed), the disclaimer's premise
+  // ("own history may be unrepresentative") doesn't apply. The detail prose
+  // already explains the situation; another card on top would be noise.
+  if (assumptions.multiple_source === "peer_median_fallback") return null;
   const ratio = current / peer;
   if (ratio < PEER_MEDIAN_DISCLAIMER_RATIO) return null;
 
@@ -249,10 +220,12 @@ function PeerMedianDisclaimer({
 
 function CalculationZone({
   positionId,
+  ticker,
   assumptions,
   ephemeral,
 }: {
   positionId: number;
+  ticker: string;
   assumptions: ImpliedReturnStoredAssumptions;
   ephemeral: boolean;
 }) {
@@ -269,8 +242,8 @@ function CalculationZone({
 
       {ephemeral && (
         <p className="mb-3 rounded-md border border-dashed border-navy-200 bg-navy-50/40 px-3 py-2 text-[11px] italic text-navy-600">
-          Asunciones por defecto. Para personalizar el growth o el múltiplo
-          terminal, analiza el ticker desde el wizard.
+          Asunciones por defecto del modelo. Editar growth o múltiplo
+          guardará un análisis personalizado de este ticker.
         </p>
       )}
 
@@ -290,13 +263,13 @@ function CalculationZone({
           />
           <GrowthRowEditable
             positionId={positionId}
+            ticker={ticker}
             assumptions={assumptions}
-            ephemeral={ephemeral}
           />
           <MultipleRowEditable
             positionId={positionId}
+            ticker={ticker}
             assumptions={assumptions}
-            ephemeral={ephemeral}
           />
           <tr className="border-t-2 border-navy-300 text-base font-bold">
             <td className="py-3 text-navy-900">= CAGR esperado</td>
@@ -307,45 +280,25 @@ function CalculationZone({
               {pct(assumptions.stress_cagr)}
             </td>
           </tr>
-          {/* Benchmark rows — threshold under Base, floor under Estrés
-              (each compares against the column above it). */}
+          {/* Reference row — Treasury + 2% as a factual line under stress.
+              No checkmark, no pass/fail. Plain context. */}
           <tr className="text-[11px] uppercase tracking-wider text-navy-500">
             <td className="pt-3 pb-1" colSpan={3}>
-              Se compara con
+              Referencia
             </td>
           </tr>
           <tr className="text-xs">
             <td className="py-1.5 text-navy-600">
-              Umbral · {TIER_LABEL[assumptions.quality_tier]}
-            </td>
-            <td className="py-1.5 text-right tabular-nums text-navy-700">
-              ≥ {pct(assumptions.threshold)}{" "}
-              <CheckMark ok={assumptions.passes_attractiveness} />
+              Treasury 10y + 2%
             </td>
             <td className="py-1.5 text-right text-navy-300">—</td>
-          </tr>
-          <tr className="text-xs">
-            <td className="py-1.5 text-navy-600">Floor · Treasury + 2%</td>
-            <td className="py-1.5 text-right text-navy-300">—</td>
             <td className="py-1.5 text-right tabular-nums text-navy-700">
-              ≥ {pct(assumptions.floor)}{" "}
-              <CheckMark ok={assumptions.passes_no_disaster} />
+              {pct(assumptions.floor)}
             </td>
           </tr>
         </tbody>
       </table>
     </div>
-  );
-}
-
-function CheckMark({ ok }: { ok: boolean }) {
-  return (
-    <span
-      className={`ml-1 ${ok ? "text-emerald-700" : "text-amber-700"}`}
-      aria-label={ok ? "supera" : "no supera"}
-    >
-      {ok ? "✓" : "×"}
-    </span>
   );
 }
 
@@ -366,10 +319,6 @@ function CalcRow({
     </tr>
   );
 }
-
-// MultipleRowEditable owns the row rendering + the inline edit form.
-// Lives in its own client component file because it needs useState/
-// useTransition for the edit interaction.
 
 function formatMultiple(x: number): string {
   return `${x.toFixed(1)}x`;
@@ -408,23 +357,38 @@ function MultipleDetail({
   }
 
   const baseHoldsCurrent = current <= median;
+  const isPeerFallback = source === "peer_median_fallback";
+  const peerLabel = assumptions.peer_median_match_key ?? null;
+  const medianAnchorLabel = isPeerFallback ? "mediana sector" : "mediana 10y";
 
   return (
     <div className="space-y-2 text-[12px] leading-relaxed text-navy-600">
+      {isPeerFallback && (
+        <p className="rounded-md border border-dashed border-navy-200 bg-navy-50/50 px-3 py-2">
+          <strong>Sin histórico propio suficiente.</strong> Sustituimos la
+          mediana 10y por la <strong>mediana sectorial de Damodaran</strong>
+          {peerLabel ? ` (${peerLabel})` : ""}. La tabla anual no nos da Q1
+          sectorial, así que el estrés colapsa al caso base por defecto —
+          usa el override (✎) para asumir compresión adicional si el negocio
+          lo merece.
+        </p>
+      )}
       <p>
         <strong>Múltiplo de referencia:</strong> {label} ({formatMultiple(current)}{" "}
-        actual · {formatMultiple(median)} mediana 10y
-        {q1 !== null ? ` · ${formatMultiple(q1)} Q1 histórico` : ""}).{" "}
+        actual · {formatMultiple(median)} {medianAnchorLabel}
+        {q1 !== null && !isPeerFallback ? ` · ${formatMultiple(q1)} Q1 histórico` : ""}).{" "}
         {source === "ai_guide"
           ? "Determinado por la AI valuation guide como herramienta primaria para este negocio."
-          : "Determinado por dispatch automático según business type (no hay AI guide disponible o recomendaba un método no-multiple)."}
+          : isPeerFallback
+            ? "Determinado por dispatch automático según business type, anclado en Damodaran porque el propio histórico era insuficiente."
+            : "Determinado por dispatch automático según business type (no hay AI guide disponible o recomendaba un método no-multiple)."}
       </p>
       <p>
         <strong>Caso base:</strong>{" "}
         {baseHoldsCurrent ? (
           <>
             como el múltiplo actual ({formatMultiple(current)}) está al nivel o
-            por debajo de la mediana 10y ({formatMultiple(median)}), mantenemos
+            por debajo de la {medianAnchorLabel} ({formatMultiple(median)}), mantenemos
             el actual a 10 años — <em>no asumimos re-rating al alza</em>. La
             barateza, si la hay, ya se captura en FCF Yield; bake-in de
             re-expansión sería doble-conteo.
@@ -432,8 +396,8 @@ function MultipleDetail({
         ) : (
           <>
             como el múltiplo actual ({formatMultiple(current)}) cotiza por
-            encima de la mediana 10y ({formatMultiple(median)}), el caso base
-            asume reversión a la mediana sobre 10 años → terminal{" "}
+            encima de la {medianAnchorLabel} ({formatMultiple(median)}), el caso base
+            asume reversión sobre 10 años → terminal{" "}
             {formatMultiple(baseTerm)} ({signedPct(assumptions.multiple_change_base)}/año
             de drag).
           </>
@@ -441,9 +405,11 @@ function MultipleDetail({
       </p>
       <p>
         <strong>Estrés:</strong>{" "}
-        {assumptions.multiple_change_stress === 0
-          ? `el múltiplo actual ya está al nivel del Q1 histórico o por debajo (${q1 !== null ? formatMultiple(q1) : "—"}); no asumimos compresión adicional.`
-          : `el escenario malo asume vuelta al Q1 histórico (${stressTerm !== null ? formatMultiple(stressTerm) : "—"}) a lo largo de 10 años, equivalente a ${signedPct(assumptions.multiple_change_stress)}/año de compresión. Q1 (no la mediana) porque el escenario malo debe simular un cuartil bajo creíble, no la tendencia central.`}
+        {isPeerFallback
+          ? `sin Q1 sectorial fiable, el estrés iguala al caso base (${signedPct(assumptions.multiple_change_stress)}/año). Si quieres asumir compresión, override en Nx.`
+          : assumptions.multiple_change_stress === 0
+            ? `el múltiplo actual ya está al nivel del Q1 histórico o por debajo (${q1 !== null ? formatMultiple(q1) : "—"}); no asumimos compresión adicional.`
+            : `el escenario malo asume vuelta al Q1 histórico (${stressTerm !== null ? formatMultiple(stressTerm) : "—"}) a lo largo de 10 años, equivalente a ${signedPct(assumptions.multiple_change_stress)}/año de compresión. Q1 (no la mediana) porque el escenario malo debe simular un cuartil bajo creíble, no la tendencia central.`}
       </p>
     </div>
   );
@@ -532,50 +498,6 @@ function DetailsZone({
             </DetailSection>
           )}
 
-        {/* Tier thresholds */}
-        <DetailSection title="Umbrales por calidad del negocio">
-          <p className="mb-2 text-[12px] leading-relaxed text-navy-600">
-            {TIER_RATIONALE[assumptions.quality_tier]}
-          </p>
-          <div className="space-y-1">
-            {(
-              [
-                ["exceptional", 0.12],
-                ["good", 0.14],
-                ["mediocre", 0.17],
-              ] as const
-            ).map(([tier, threshold]) => {
-              const isCurrent = tier === assumptions.quality_tier;
-              return (
-                <div
-                  key={tier}
-                  className={`flex items-baseline justify-between rounded px-3 py-1 text-sm ${
-                    isCurrent
-                      ? "bg-navy-100 font-semibold text-navy-900"
-                      : "text-navy-500"
-                  }`}
-                >
-                  <span>
-                    {TIER_LABEL[tier]}{" "}
-                    {isCurrent && (
-                      <span className="text-[10px] font-semibold uppercase tracking-wider text-emerald-700">
-                        ← este negocio
-                      </span>
-                    )}
-                  </span>
-                  <span className="tabular-nums">≥ {pct(threshold)}</span>
-                </div>
-              );
-            })}
-            <div className="flex items-baseline justify-between rounded border-t border-navy-100 px-3 pt-2 text-sm text-navy-500">
-              <span>Floor (Treasury 10y + 2%)</span>
-              <span className="tabular-nums">
-                ≥ {pct(assumptions.floor)}
-              </span>
-            </div>
-          </div>
-        </DetailSection>
-
         {/* Link to the full explainer */}
         <div className="border-t border-navy-100 pt-3 text-right">
           <a
@@ -660,26 +582,6 @@ function DetailSection({
 // ────────────────────────────────────────────────────────────────────
 // Shared helpers
 // ────────────────────────────────────────────────────────────────────
-
-function CheckRow({
-  ok,
-  text,
-  tone,
-}: {
-  ok: boolean;
-  text: React.ReactNode;
-  tone: "positive" | "negative";
-}) {
-  const okColor = tone === "positive" ? "text-emerald-700" : "text-amber-700";
-  return (
-    <div className="flex items-baseline gap-2">
-      <span className={`flex-none ${ok ? okColor : "text-amber-700"}`}>
-        {ok ? "✓" : "×"}
-      </span>
-      <span className="text-navy-800">{text}</span>
-    </div>
-  );
-}
 
 function pct(x: number): string {
   return `${(x * 100).toFixed(1)}%`;

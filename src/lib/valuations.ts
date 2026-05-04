@@ -134,7 +134,10 @@ export type ImpliedReturnStoredAssumptions = {
   // scenario. Optional so legacy implied_return rows generated before this
   // metadata existed still parse.
   multiple_label?: "P/E" | "P/FCF" | "P/B";
-  multiple_source?: "ai_guide" | "deterministic_fallback";
+  multiple_source?:
+    | "ai_guide"
+    | "deterministic_fallback"
+    | "peer_median_fallback";
   multiple_current?: number | null;
   multiple_median?: number | null;
   multiple_q1?: number | null;
@@ -153,23 +156,21 @@ export type ImpliedReturnStoredAssumptions = {
   // median lookup. Surfaced in the UI so users see the specific category
   // (e.g. "Insurance - Property & Casualty") instead of just "industria".
   peer_median_match_key?: string | null;
-  // Tier-gated decision context
+  // Quality tier — surfaced as a context label in the calculator, never
+  // as a threshold driver. What return is acceptable for a given tier is
+  // a per-investor judgment; Moatboard shows the expected CAGR and lets
+  // the user calibrate.
   quality_tier: "exceptional" | "good" | "mediocre" | "poor";
-  threshold: number;
+  // Treasury 10y + 2% — kept as a factual reference line in the UI ("the
+  // bar a stress case would have to clear to beat the bond"), not as a
+  // pass/fail gate. `floor` is the precomputed sum, `treasury_yield` is
+  // the bare 10y rate at generation time so the UI can label transparently.
   floor: number;
   treasury_yield: number;
   // Outputs
   base_cagr: number;
   stress_cagr: number;
   optimistic_cagr: number;
-  passes_attractiveness: boolean;
-  passes_no_disaster: boolean;
-  verdict:
-    | "comprable"
-    | "no_comprable_caro"
-    | "no_comprable_riesgo"
-    | "no_comprable_ambos";
-  verdict_reason: string;
   // Optional cross-check (DCF / AFFO / Excess Returns / AI multiples). Kept
   // so users can see the deep-value lens in "Otros métodos" without losing
   // the legacy data path.

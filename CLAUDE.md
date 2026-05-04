@@ -86,7 +86,8 @@ src/
 ├── lib/                               # Domain logic, DB, AI, pure functions
 │   ├── db.ts                          # Neon serverless client
 │   ├── schema.sql                     # Source of truth for DB schema
-│   ├── financial.ts                   # yahoo-finance2 wrapper; fetchMultiYearFundamentals merges SEC with yfinance for sharesDiluted when SEC leaves it all-null
+│   ├── financial.ts                   # yahoo-finance2 wrapper; fetchMultiYearFundamentals merges SEC with yfinance for sharesDiluted when SEC leaves it all-null. Foreign filers (TSM/TM/ASML/BABA/NVO…) detected via financialCurrency mismatch and FX-converted to USD before downstream consumption (post-2026-04-30) — without it the implied-return math divided local-currency FCF by USD market cap and produced phantom yields (TSM 35% on $2T mcap)
+│   ├── fx.ts                          # FX rates via yfinance XXXUSD=X. getFxToUsd(currency) with 6h in-memory cache + USD short-circuit; applyFx(value, fxToUsd) helper for null-safe field conversion
 │   ├── scorecard.ts                   # Per-metric quality scoring (pure) + business-type helpers (isBalanceSheetBusiness, isRealEstate, isCommodityCyclical) + multi-year scorers (median + worst-year)
 │   ├── verdict.ts                     # Formulaic tier computation + reason templates (pure)
 │   ├── moats.ts                       # CRUD for moat_assessments

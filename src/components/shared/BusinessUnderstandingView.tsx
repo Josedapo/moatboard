@@ -26,7 +26,7 @@ export default function BusinessUnderstandingView({
                 key={i}
                 className="mb-2 text-sm leading-relaxed text-navy-700 last:mb-0"
               >
-                {p}
+                {renderInlineMarkdown(p)}
               </p>
             ))}
           </div>
@@ -51,7 +51,7 @@ export default function BusinessUnderstandingView({
                   {qa.question}
                 </summary>
                 <div className="border-t border-navy-200 px-4 py-3 text-sm leading-relaxed text-navy-700">
-                  {qa.answer}
+                  {renderInlineMarkdown(qa.answer)}
                 </div>
               </details>
             ))}
@@ -60,6 +60,20 @@ export default function BusinessUnderstandingView({
       )}
     </div>
   );
+}
+
+function renderInlineMarkdown(text: string) {
+  const parts = text.split(/(\*\*[^*]+?\*\*)/g);
+  return parts.map((part, i) => {
+    if (part.startsWith("**") && part.endsWith("**") && part.length > 4) {
+      return (
+        <strong key={i} className="font-semibold text-navy-900">
+          {part.slice(2, -2)}
+        </strong>
+      );
+    }
+    return <span key={i}>{part}</span>;
+  });
 }
 
 function parseSections(summary_md: string): SerializedSummary["sections"] {

@@ -15,13 +15,16 @@ import { updateImpliedReturnOverrideAction } from "@/app/dashboard/position/[id]
 
 export default function GrowthRowEditable({
   positionId,
+  ticker,
   assumptions,
   ephemeral = false,
 }: {
   positionId: number;
+  // Required when positionId <= 0 (Discovery puro). First save bootstraps
+  // a draft position + valuation row server-side.
+  ticker?: string;
   assumptions: ImpliedReturnStoredAssumptions;
-  // See MultipleRowEditable.tsx for the contract — read-only render
-  // when true (no pencil ✎, no inline editor).
+  // Reserved for future read-only contexts. Not used today.
   ephemeral?: boolean;
 }) {
   const autoBase = assumptions.growth.base;
@@ -37,6 +40,7 @@ export default function GrowthRowEditable({
       <td className="py-2 align-top text-right tabular-nums">
         <ScenarioCell
           positionId={positionId}
+          ticker={ticker}
           ephemeral={ephemeral}
           scenario="base"
           effective={effectiveBase}
@@ -47,6 +51,7 @@ export default function GrowthRowEditable({
       <td className="py-2 align-top text-right tabular-nums text-navy-700">
         <ScenarioCell
           positionId={positionId}
+          ticker={ticker}
           ephemeral={ephemeral}
           scenario="stress"
           effective={effectiveStress}
@@ -60,6 +65,7 @@ export default function GrowthRowEditable({
 
 function ScenarioCell({
   positionId,
+  ticker,
   ephemeral,
   scenario,
   effective,
@@ -67,6 +73,7 @@ function ScenarioCell({
   override,
 }: {
   positionId: number;
+  ticker: string | undefined;
   ephemeral: boolean;
   scenario: "base" | "stress";
   effective: number;
@@ -96,6 +103,7 @@ function ScenarioCell({
       try {
         await updateImpliedReturnOverrideAction({
           positionId,
+          ticker,
           baseGrowth: scenario === "base" ? decimalValue : undefined,
           stressGrowth: scenario === "stress" ? decimalValue : undefined,
         });

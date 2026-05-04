@@ -425,15 +425,21 @@ export default async function TickerFichaPage({ params }: Props) {
                 {analysis && !outsideFramework && (
                   <QualityBadge tier={analysis.tier} size="sm" />
                 )}
-                <WatchlistStarToggle
-                  ticker={ticker}
-                  isOnWatchlist={isWatchlisted}
-                />
-                {isWatchlisted && (
-                  <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-800">
+                <span className="inline-flex items-center gap-1.5">
+                  <WatchlistStarToggle
+                    ticker={ticker}
+                    isOnWatchlist={isWatchlisted}
+                  />
+                  <span
+                    className={`rounded-full border px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${
+                      isWatchlisted
+                        ? "border-amber-200 bg-amber-50 text-amber-800"
+                        : "border-navy-100 bg-navy-50 text-navy-400"
+                    }`}
+                  >
                     Watchlist
                   </span>
-                )}
+                </span>
               </div>
 
               {quote?.sector && (

@@ -4,7 +4,9 @@ import { auth } from "@/auth";
 import {
   getPositionById,
   updatePositionPreCommitment,
+  ensureDraftPosition,
 } from "@/lib/positions";
+import { ensureValuation } from "@/lib/positionFlow";
 import {
   fetchQuoteAndFundamentals,
   fetchManagementSignals,
@@ -301,23 +303,51 @@ export async function updateValuationAssumptionsAction({
 // multiple lands at 2.0x P/B"). null clears that scenario back to auto-
 // derived. Both fields independent — passing only one preserves the
 // other's existing state. Pure server-side recompute, no AI.
+//
+// Bootstrap path: when `positionId <= 0` (Discovery puro: ficha rendered
+// with `computeImpliedReturnEphemeral`), the action requires `ticker`
+// and lazily creates a draft position + persists a real valuation row
+// before applying the override. After this, the user transitions to the
+// non-ephemeral path on revalidate, and subsequent overrides hit the
+// real positionId directly.
 
 export async function updateImpliedReturnOverrideAction({
   positionId,
+  ticker,
   baseTerminalMultiple,
   stressTerminalMultiple,
   baseGrowth,
   stressGrowth,
 }: {
   positionId: number;
+  // Required when positionId <= 0 (bootstrap path for Discovery puro).
+  // Ignored otherwise — ownership is enforced via positionId.
+  ticker?: string;
   baseTerminalMultiple?: number | null;
   stressTerminalMultiple?: number | null;
   // Growth overrides are signed decimals (0.12 = 12%/year). null = reset.
   baseGrowth?: number | null;
   stressGrowth?: number | null;
 }) {
-  await assertPositionOwner(positionId);
-  const valuation = await getValuationByPositionId(positionId);
+  // Bootstrap when there's no real position yet (Discovery puro). Creates
+  // a draft + a real valuation row so the override has something to write
+  // against. ensureDraftPosition is idempotent, so consecutive edits before
+  // the first revalidate (race) reuse the same draft row.
+  let effectivePositionId = positionId;
+  if (positionId <= 0) {
+    if (!ticker) {
+      throw new Error("Ticker required to bootstrap a draft analysis.");
+    }
+    const session = await auth();
+    if (!session?.user?.id) throw new Error("Not authenticated");
+    const draft = await ensureDraftPosition(session.user.id, ticker);
+    effectivePositionId = draft.id;
+    const { quote, fundamentals } = await fetchQuoteAndFundamentals(ticker);
+    await ensureValuation(effectivePositionId, ticker, quote, fundamentals);
+  } else {
+    await assertPositionOwner(positionId);
+  }
+  const valuation = await getValuationByPositionId(effectivePositionId);
   if (!valuation) {
     throw new Error(
       "No valuation found for this position. Run valuation first.",
@@ -444,7 +474,6 @@ export async function updateImpliedReturnOverrideAction({
     growthStress: effectiveGrowthStress,
     multipleChangeBase: effectiveBaseChange,
     multipleChangeStress: effectiveStressChange,
-    qualityTier: stored.quality_tier,
     treasuryYield: stored.treasury_yield,
   });
 
@@ -461,14 +490,10 @@ export async function updateImpliedReturnOverrideAction({
     base_cagr: impliedReturn.baseCAGR,
     stress_cagr: impliedReturn.stressCAGR,
     optimistic_cagr: impliedReturn.optimisticCAGR,
-    passes_attractiveness: impliedReturn.passesAttractiveness,
-    passes_no_disaster: impliedReturn.passesNoDisaster,
-    verdict: impliedReturn.verdict,
-    verdict_reason: impliedReturn.reason,
   };
 
   await saveValuation({
-    positionId,
+    positionId: effectivePositionId,
     method: "implied_return",
     intrinsicValue: Number(valuation.intrinsic_value ?? 0),
     intrinsicValueLow: Number(valuation.intrinsic_value_low ?? 0),
@@ -479,11 +504,14 @@ export async function updateImpliedReturnOverrideAction({
     dcfTier: valuation.dcf_tier,
     relativeTier: valuation.relative_tier,
     assumptions: newAssumptions,
-    reasoning: `${impliedReturn.reason} (Multiple override edited.)`,
+    reasoning: `Override editado · base ${(impliedReturn.baseCAGR * 100).toFixed(1)}% / estrés ${(impliedReturn.stressCAGR * 100).toFixed(1)}%.`,
   });
 
-  revalidatePath(`/dashboard/position/${positionId}`);
-  revalidatePath(`/dashboard/position/${positionId}/trajectory`);
+  revalidatePath(`/dashboard/position/${effectivePositionId}`);
+  revalidatePath(`/dashboard/position/${effectivePositionId}/trajectory`);
+  if (ticker) {
+    revalidatePath(`/dashboard/ticker/${ticker.toUpperCase()}`);
+  }
 }
 
 // ─── Position-level pre-commitment ───────────────────────────────────────

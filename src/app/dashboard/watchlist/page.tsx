@@ -4,13 +4,12 @@ import { listWatchlistEnriched } from "@/lib/watchlistEntries";
 import { fetchQuoteAndFundamentals } from "@/lib/financial";
 import { deriveLiveImpliedReturn } from "@/lib/impliedReturn";
 import type { ImpliedReturnStoredAssumptions } from "@/lib/valuations";
-import type { ValuationVerdict } from "@/components/shared/BusinessSignalChips";
 import DashboardNav from "@/components/DashboardNav";
 import WatchlistStarToggle from "@/components/WatchlistStarToggle";
 import {
   BusinessTierChip,
+  ExpectedReturnChip,
   FlagsBadge,
-  ValuationVerdictChip,
 } from "@/components/shared/BusinessSignalChips";
 
 export const metadata = {
@@ -49,11 +48,13 @@ export default async function WatchlistPage() {
     ),
   );
 
-  // Derive each ticker's live verdict by re-running the implied-return
-  // formula against today's market cap. Falls back to the persisted
-  // verdict when the row pre-dates implied_return or live data is
-  // unavailable. Pure function, no AI / DB writes.
-  const liveVerdicts = new Map<string, ValuationVerdict | null>();
+  // Derive each ticker's live expected return by re-running the implied-
+  // return formula against today's market cap. Pure function, no AI / DB
+  // writes. Empty when no implied-return valuation exists for the ticker.
+  const liveCAGRs = new Map<
+    string,
+    { base: number | null; stress: number | null }
+  >();
   for (const item of items) {
     const stored = item.valuation_assumptions as
       | ImpliedReturnStoredAssumptions
@@ -61,9 +62,17 @@ export default async function WatchlistPage() {
     const marketCap = liveQuotes.get(item.ticker)?.marketCap ?? null;
     if (stored && marketCap) {
       const live = deriveLiveImpliedReturn(stored, marketCap);
-      liveVerdicts.set(item.ticker, live.verdict);
+      liveCAGRs.set(item.ticker, {
+        base: live.base_cagr,
+        stress: live.stress_cagr,
+      });
+    } else if (stored) {
+      liveCAGRs.set(item.ticker, {
+        base: stored.base_cagr,
+        stress: stored.stress_cagr,
+      });
     } else {
-      liveVerdicts.set(item.ticker, item.valuation_verdict);
+      liveCAGRs.set(item.ticker, { base: null, stress: null });
     }
   }
 
@@ -110,8 +119,9 @@ export default async function WatchlistPage() {
                     </div>
                     <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1.5">
                       <BusinessTierChip tier={item.business_tier} />
-                      <ValuationVerdictChip
-                        verdict={liveVerdicts.get(item.ticker) ?? null}
+                      <ExpectedReturnChip
+                        baseCAGR={liveCAGRs.get(item.ticker)?.base ?? null}
+                        stressCAGR={liveCAGRs.get(item.ticker)?.stress ?? null}
                       />
                       <FlagsBadge
                         analyzed={item.business_tier !== null}

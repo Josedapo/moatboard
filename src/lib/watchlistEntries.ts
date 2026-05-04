@@ -72,25 +72,16 @@ export async function removeFromWatchlist({
   `;
 }
 
-// WatchlistEntry enriched with cached quality verdict + qualitative red
-// flag counts + latest implied-return verdict. Used by /dashboard/watchlist
-// (renders tier + flags + verdict chip). Tier is per-user (latest
-// moatboard_analyses across this user's positions for the ticker, draft
-// or live). Flag counts are per-ticker (qualitative_red_flags is shared
-// across users).
+// WatchlistEntry enriched with cached quality tier + qualitative red flag
+// counts + latest implied-return assumptions blob. Used by /dashboard/
+// watchlist (renders tier + flags + base/stress CAGR). Tier is per-user
+// (latest moatboard_analyses across this user's positions for the ticker,
+// draft or live). Flag counts are per-ticker (qualitative_red_flags is
+// shared across users).
 export type EnrichedWatchlistEntry = WatchlistEntry & {
   business_tier: Tier | null;
   serious_flag_count: number;
   watch_flag_count: number;
-  // Latest implied-return verdict for this user/ticker. Null when no
-  // implied_return valuation exists (legacy DCF-only rows, or never
-  // valued).
-  valuation_verdict:
-    | "comprable"
-    | "no_comprable_caro"
-    | "no_comprable_riesgo"
-    | "no_comprable_ambos"
-    | null;
   // Latest implied-return assumptions blob for live-recompute against
   // today's market cap via deriveLiveImpliedReturn(). Typed as `unknown`
   // to keep this lib free of impliedReturn dep — caller casts.
@@ -121,14 +112,6 @@ export async function listWatchlistEnriched({
               jsonb_array_elements(qrf.flags) AS f
          WHERE qrf.ticker = we.ticker
            AND f->>'severity' = 'watch'), 0) AS watch_flag_count,
-      (SELECT v.assumptions->>'verdict'
-         FROM valuations v
-         JOIN positions p ON p.id = v.position_id
-         WHERE p.user_id = ${userId}
-           AND p.ticker = we.ticker
-           AND v.method = 'implied_return'
-         ORDER BY v.generated_at DESC
-         LIMIT 1) AS valuation_verdict,
       (SELECT v.assumptions
          FROM valuations v
          JOIN positions p ON p.id = v.position_id

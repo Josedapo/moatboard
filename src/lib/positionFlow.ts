@@ -63,7 +63,10 @@ import {
   deriveBaseMultiple,
   deriveStressMultiple,
 } from "@/lib/impliedReturn";
-import { selectPrimaryMultipleSnapshot } from "@/lib/multipleSelection";
+import {
+  selectPrimaryMultipleSnapshot,
+  buildPeerMedianFallback,
+} from "@/lib/multipleSelection";
 import { ensureValuationGuide } from "@/lib/valuationGuides";
 import { getPeerMedian } from "@/lib/peerMedians";
 import type { Tier } from "@/lib/verdict";
@@ -285,10 +288,9 @@ export async function computeAndSaveValuation(
   const carriedGrowthStressOverride =
     existingAssumptions?.growth_stress_override ?? null;
 
-  // Resolve the quality tier — needed for the implied-return threshold.
-  // Caller can pass it; otherwise we read from moatboard_analyses; final
-  // fallback is 'good' (middle-of-the-road threshold of 14% so the verdict
-  // doesn't artificially inflate or deflate when the analysis is missing).
+  // Resolve the quality tier — surfaced as a context label in the
+  // calculator. Caller can pass it; otherwise we read from moatboard_
+  // analyses; final fallback is 'good'.
   let resolvedTier: Tier = qualityTier ?? "good";
   if (qualityTier === undefined) {
     const analysis = await getAnalysisByPositionId(positionId);
@@ -370,28 +372,42 @@ export async function computeAndSaveValuation(
     pb: pbAvailable,
   });
 
-  const primaryMultiple = selectPrimaryMultipleSnapshot({
+  const ownHistoryPrimary = selectPrimaryMultipleSnapshot({
     guide: valuationGuide,
     relative: relativeContext?.snapshot,
     sector,
     industry,
   });
+  // When own-history fails (recent IPO, broken distribution), synthesize a
+  // snapshot from trailing data anchored on Damodaran's sector median so
+  // the override editor stays available and the user has a reference number.
+  // q1 = median by design; stress collapses to base unless overridden.
+  const fallbackResult = ownHistoryPrimary
+    ? null
+    : buildPeerMedianFallback({
+        fundamentals,
+        fcfYield,
+        sector,
+        industry,
+      });
+  const primaryMultiple = ownHistoryPrimary ?? fallbackResult?.selection ?? null;
   const primarySnapshot = primaryMultiple?.snapshot ?? null;
   const autoMultipleChangeBase = deriveMultipleChangeBase(primarySnapshot);
   const autoMultipleChangeStress = deriveMultipleChangeStress(primarySnapshot);
   const autoBaseTerminalMultiple = deriveBaseMultiple(primarySnapshot);
   const autoStressTerminalMultiple = deriveStressMultiple(primarySnapshot);
 
-  // Peer median (cross-sectional anchor) — informational only, drives
-  // the disclaimer in the calculator UI when the current multiple
-  // significantly exceeds peer norm. Does NOT change the verdict math.
-  const peerMedian = primaryMultiple
+  // Peer median (cross-sectional anchor). For the own-history path it's
+  // informational only — drives the calculator's "current cotiza Nx peer"
+  // disclaimer. For the peer fallback path it IS the anchor; we reuse the
+  // PeerMedianResult already computed inside buildPeerMedianFallback.
+  const peerMedian = ownHistoryPrimary
     ? getPeerMedian({
         sector,
         industry,
-        multipleLabel: primaryMultiple.label,
+        multipleLabel: ownHistoryPrimary.label,
       })
-    : null;
+    : (fallbackResult?.peer ?? null);
 
   // Apply overrides if Joseda manually edited the terminal multiple in
   // a prior turn. The override is the persisted %/año; we use it
@@ -423,7 +439,6 @@ export async function computeAndSaveValuation(
     growthStress: effectiveGrowthStress,
     multipleChangeBase: effectiveBaseChange,
     multipleChangeStress: effectiveStressChange,
-    qualityTier: resolvedTier,
     treasuryYield: treasury.currentPct,
   });
 
@@ -474,16 +489,11 @@ export async function computeAndSaveValuation(
     peer_median_source: peerMedian?.source ?? null,
     peer_median_match_key: peerMedian?.matchKey ?? null,
     quality_tier: resolvedTier,
-    threshold: impliedReturn.threshold,
     floor: impliedReturn.floor,
     treasury_yield: treasury.currentPct,
     base_cagr: impliedReturn.baseCAGR,
     stress_cagr: impliedReturn.stressCAGR,
     optimistic_cagr: impliedReturn.optimisticCAGR,
-    passes_attractiveness: impliedReturn.passesAttractiveness,
-    passes_no_disaster: impliedReturn.passesNoDisaster,
-    verdict: impliedReturn.verdict,
-    verdict_reason: impliedReturn.reason,
     cross_check: crossCheck,
     relative_valuation: relativeContext?.snapshot,
   };
@@ -503,7 +513,7 @@ export async function computeAndSaveValuation(
     relativeContext,
   );
 
-  const reasoning = `${impliedReturn.reason}${legacy ? ` Cross-check (${legacy.method}): ${legacy.reasoning}` : ""}`;
+  const reasoning = `Caso base ${(impliedReturn.baseCAGR * 100).toFixed(1)}% / estrés ${(impliedReturn.stressCAGR * 100).toFixed(1)}%.${legacy ? ` Cross-check (${legacy.method}): ${legacy.reasoning}` : ""}`;
 
   return saveValuation({
     positionId,
@@ -602,25 +612,34 @@ export async function computeImpliedReturnEphemeral(
     },
   ).catch(() => null);
 
-  const primaryMultiple = selectPrimaryMultipleSnapshot({
+  const ownHistoryPrimary = selectPrimaryMultipleSnapshot({
     guide: valuationGuide,
     relative: relativeContext?.snapshot,
     sector,
     industry,
   });
+  const fallbackResult = ownHistoryPrimary
+    ? null
+    : buildPeerMedianFallback({
+        fundamentals,
+        fcfYield,
+        sector,
+        industry,
+      });
+  const primaryMultiple = ownHistoryPrimary ?? fallbackResult?.selection ?? null;
   const primarySnapshot = primaryMultiple?.snapshot ?? null;
   const multipleChangeBase = deriveMultipleChangeBase(primarySnapshot);
   const multipleChangeStress = deriveMultipleChangeStress(primarySnapshot);
   const baseTerminalMultiple = deriveBaseMultiple(primarySnapshot);
   const stressTerminalMultiple = deriveStressMultiple(primarySnapshot);
 
-  const peerMedian = primaryMultiple
+  const peerMedian = ownHistoryPrimary
     ? getPeerMedian({
         sector,
         industry,
-        multipleLabel: primaryMultiple.label,
+        multipleLabel: ownHistoryPrimary.label,
       })
-    : null;
+    : (fallbackResult?.peer ?? null);
 
   const impliedReturn = computeImpliedReturn({
     fcfYield,
@@ -628,7 +647,6 @@ export async function computeImpliedReturnEphemeral(
     growthStress: growth.stress,
     multipleChangeBase,
     multipleChangeStress,
-    qualityTier: resolvedTier,
     treasuryYield: treasury.currentPct,
   });
 
@@ -663,16 +681,11 @@ export async function computeImpliedReturnEphemeral(
     peer_median_source: peerMedian?.source ?? null,
     peer_median_match_key: peerMedian?.matchKey ?? null,
     quality_tier: resolvedTier,
-    threshold: impliedReturn.threshold,
     floor: impliedReturn.floor,
     treasury_yield: treasury.currentPct,
     base_cagr: impliedReturn.baseCAGR,
     stress_cagr: impliedReturn.stressCAGR,
     optimistic_cagr: impliedReturn.optimisticCAGR,
-    passes_attractiveness: impliedReturn.passesAttractiveness,
-    passes_no_disaster: impliedReturn.passesNoDisaster,
-    verdict: impliedReturn.verdict,
-    verdict_reason: impliedReturn.reason,
     cross_check: undefined,
     relative_valuation: relativeContext?.snapshot,
   };
@@ -697,7 +710,7 @@ export async function computeImpliedReturnEphemeral(
     dcf_tier: "fair",
     relative_tier: relativeContext?.relativeTier ?? null,
     assumptions: stored,
-    reasoning: impliedReturn.reason,
+    reasoning: `Caso base ${(impliedReturn.baseCAGR * 100).toFixed(1)}% / estrés ${(impliedReturn.stressCAGR * 100).toFixed(1)}%.`,
     generated_at: new Date().toISOString(),
   };
 }

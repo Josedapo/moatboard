@@ -25,10 +25,19 @@ import type {
   RelativeValuationSnapshot,
 } from "@/lib/valuations";
 import type { MultipleSnapshot } from "@/lib/impliedReturn";
+import type { Fundamentals } from "@/lib/financial";
 import { isBalanceSheetBusiness, isRealEstate } from "@/lib/scorecard";
+import { getPeerMedian, type PeerMedianResult } from "@/lib/peerMedians";
 
 export type PrimaryMultipleLabel = "P/E" | "P/FCF" | "P/B";
-export type PrimaryMultipleSource = "ai_guide" | "deterministic_fallback";
+// "peer_median_fallback" — own-history snapshot was unusable (recent IPO,
+// short data, broken distribution). We synthesize a snapshot from trailing
+// data anchored on Damodaran's sector median (lib/peerMedians.ts) so the
+// override editor stays available and the user has a reference number.
+export type PrimaryMultipleSource =
+  | "ai_guide"
+  | "deterministic_fallback"
+  | "peer_median_fallback";
 
 export type PrimaryMultipleSelection = {
   snapshot: MultipleSnapshot;
@@ -170,4 +179,97 @@ function isUsable(s: RelativeMetricSnapshot | undefined | null): boolean {
     s.median > 0 &&
     s.q1 > 0
   );
+}
+
+// ─── Peer-median fallback ──────────────────────────────────────────────
+//
+// When `selectPrimaryMultipleSnapshot` returns null (own-history snapshot
+// unusable: recent IPO, broken distribution, missing data), we still want
+// the calculator to render the multiple-as-headline format and the override
+// editor to be reachable. We synthesize a snapshot from trailing data and
+// anchor the median on Damodaran's sector table (lib/peerMedians.ts).
+//
+// q1 = peer_median by design — without sector-Q1 in our hardcoded table,
+// stress collapses to base. The user can override stress manually if they
+// want to assume sector compression. Honest default; override is the escape.
+//
+// Returns null only when neither a synthetic current nor any sane label
+// can be produced — in which case we degrade further (median = current,
+// q1 = current; see buildSelfAnchoredFallback below).
+
+export type FallbackPrimaryMultipleResult = {
+  selection: PrimaryMultipleSelection;
+  // Surfaces to the persisted assumptions so the UI can label the anchor
+  // ("Insurance - Property & Casualty") and explain the source.
+  peer: PeerMedianResult | null;
+};
+
+export function buildPeerMedianFallback({
+  fundamentals,
+  fcfYield,
+  sector,
+  industry,
+}: {
+  fundamentals: Fundamentals | null;
+  // Already computed in positionFlow as freeCashflow / market_cap.
+  fcfYield: number;
+  sector: string | null;
+  industry: string | null;
+}): FallbackPrimaryMultipleResult | null {
+  const label = pickFallbackLabel(sector, industry);
+  const current = synthesizeCurrentMultiple(label, fundamentals, fcfYield);
+  if (current === null) return null;
+
+  const peer = getPeerMedian({ sector, industry, multipleLabel: label });
+
+  // No Damodaran entry for this industry/sector — degrade to a self-anchored
+  // synthetic (median = q1 = current). Override editor still functional.
+  const median = peer?.value ?? current;
+  const q1 = peer?.value ?? current;
+
+  return {
+    selection: {
+      label,
+      source: "peer_median_fallback",
+      snapshot: { current, median, q1 },
+      current,
+      median,
+      q1,
+    },
+    peer: peer ?? null,
+  };
+}
+
+function pickFallbackLabel(
+  sector: string | null,
+  industry: string | null,
+): PrimaryMultipleLabel {
+  // Same dispatch as `pickDeterministic`: P/B for balance-sheet, P/FCF for
+  // product/REIT. Avoids P/E because earnings noise (SBC, capex) is the
+  // exact reason we prefer P/FCF in the main path.
+  if (isBalanceSheetBusiness(sector, industry)) return "P/B";
+  if (isRealEstate(sector)) return "P/FCF";
+  return "P/FCF";
+}
+
+function synthesizeCurrentMultiple(
+  label: PrimaryMultipleLabel,
+  fundamentals: Fundamentals | null,
+  fcfYield: number,
+): number | null {
+  if (label === "P/FCF") {
+    // 1 / fcfYield. fcfYield is computed at the call site as
+    // freeCashflow / marketCap, so it already reflects today's price.
+    if (fcfYield > 0 && Number.isFinite(fcfYield)) return 1 / fcfYield;
+    return null;
+  }
+  if (label === "P/B") {
+    const ptb = fundamentals?.priceToBook ?? null;
+    if (ptb !== null && ptb > 0 && Number.isFinite(ptb)) return ptb;
+    return null;
+  }
+  // P/E — kept for completeness even though pickFallbackLabel never returns it.
+  const pe = fundamentals?.trailingPE ?? null;
+  if (pe !== null && pe > 0 && Number.isFinite(pe)) return pe;
+  return null;
 }

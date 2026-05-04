@@ -20,21 +20,27 @@ import { updateImpliedReturnOverrideAction } from "@/app/dashboard/position/[id]
 
 export default function MultipleRowEditable({
   positionId,
+  ticker,
   assumptions,
   ephemeral = false,
 }: {
   positionId: number;
+  // Required when positionId <= 0 (Discovery puro). The first save will
+  // bootstrap a draft position + valuation row server-side; from then on,
+  // the page renders the non-ephemeral path with the real positionId.
+  ticker?: string;
   assumptions: ImpliedReturnStoredAssumptions;
-  // When true, renders the row read-only: no pencil ✎, no inline editor.
-  // Used by /dashboard/ticker/[symbol] for users without a per-position
-  // valuation row (Discovery puro). The CTA to analyze lives at the
-  // calculator level, not on each cell.
+  // Reserved for future read-only contexts. Not used today — the ephemeral
+  // (Discovery puro) path is now editable via the bootstrap action.
   ephemeral?: boolean;
 }) {
   const label = assumptions.multiple_label ?? null;
   const current = assumptions.multiple_current ?? null;
   const baseTerm = assumptions.multiple_base_terminal ?? null;
   const stressTerm = assumptions.multiple_stress_terminal ?? null;
+  const isPeerFallback = assumptions.multiple_source === "peer_median_fallback";
+  const median = assumptions.multiple_median ?? null;
+  const q1 = assumptions.multiple_q1 ?? null;
 
   // Legacy fallback — show % only, no edit affordance.
   if (label === null || current === null || baseTerm === null) {
@@ -62,6 +68,7 @@ export default function MultipleRowEditable({
       <td className="py-2 align-top text-right tabular-nums">
         <ScenarioCell
           positionId={positionId}
+          ticker={ticker}
           ephemeral={ephemeral}
           scenario="base"
           label={label}
@@ -69,11 +76,11 @@ export default function MultipleRowEditable({
           terminal={baseTerm}
           changePct={assumptions.multiple_change_base}
           override={assumptions.multiple_change_base_override ?? null}
-          autoCaption={
-            current <= (assumptions.multiple_median ?? Infinity)
-              ? "actual, sin re-rating"
-              : "mediana 10y"
-          }
+          autoCaption={baseAutoCaption({
+            current,
+            median,
+            isPeerFallback,
+          })}
           autoTerminal={
             // When override is active, recompute the auto terminal so the
             // "auto: Nx" hint shows the model's value, not the override.
@@ -90,6 +97,7 @@ export default function MultipleRowEditable({
       <td className="py-2 align-top text-right tabular-nums">
         <ScenarioCell
           positionId={positionId}
+          ticker={ticker}
           ephemeral={ephemeral}
           scenario="stress"
           label={label}
@@ -97,9 +105,12 @@ export default function MultipleRowEditable({
           terminal={stressTerm ?? current}
           changePct={assumptions.multiple_change_stress}
           override={assumptions.multiple_change_stress_override ?? null}
-          autoCaption={
-            assumptions.multiple_change_stress === 0 ? "ya en Q1 hist." : "Q1 histórico"
-          }
+          autoCaption={stressAutoCaption({
+            current,
+            q1,
+            isPeerFallback,
+            stressChange: assumptions.multiple_change_stress,
+          })}
           autoTerminal={
             assumptions.multiple_change_stress_override !== null &&
             assumptions.multiple_change_stress_override !== undefined
@@ -117,6 +128,7 @@ export default function MultipleRowEditable({
 
 function ScenarioCell({
   positionId,
+  ticker,
   ephemeral,
   scenario,
   label,
@@ -128,6 +140,7 @@ function ScenarioCell({
   autoTerminal,
 }: {
   positionId: number;
+  ticker: string | undefined;
   ephemeral: boolean;
   scenario: "base" | "stress";
   label: "P/E" | "P/FCF" | "P/B";
@@ -163,6 +176,7 @@ function ScenarioCell({
       try {
         await updateImpliedReturnOverrideAction({
           positionId,
+          ticker,
           baseTerminalMultiple: scenario === "base" ? value : undefined,
           stressTerminalMultiple: scenario === "stress" ? value : undefined,
         });
@@ -284,6 +298,52 @@ function deriveAutoStressTerminal(
 ): number | null {
   if (q1 === null || q1 <= 0) return null;
   return q1 >= current ? current : q1;
+}
+
+// Caption under the base-case multiple. Three regimes:
+//   - own-history, current ≤ median  → "actual, sin re-rating"
+//   - own-history, current > median  → "mediana 10y"
+//   - peer fallback                  → "mediana sector" (Damodaran is the
+//     anchor; q1 = median by design so base/stress dynamics differ).
+function baseAutoCaption({
+  current,
+  median,
+  isPeerFallback,
+}: {
+  current: number;
+  median: number | null;
+  isPeerFallback: boolean;
+}): string {
+  if (isPeerFallback) {
+    return current <= (median ?? Infinity)
+      ? "actual ≤ peer"
+      : "mediana sector";
+  }
+  return current <= (median ?? Infinity)
+    ? "actual, sin re-rating"
+    : "mediana 10y";
+}
+
+// Caption under the stress-case multiple. Peer fallback has no sector Q1
+// in our hardcoded table, so q1 = median; stress collapses to base unless
+// the user overrides. We surface this explicitly so it's not confusing.
+function stressAutoCaption({
+  current,
+  q1,
+  isPeerFallback,
+  stressChange,
+}: {
+  current: number;
+  q1: number | null;
+  isPeerFallback: boolean;
+  stressChange: number;
+}): string {
+  if (isPeerFallback) {
+    return current <= (q1 ?? Infinity)
+      ? "sin Q1 sector — usa override"
+      : "mediana sector (sin Q1)";
+  }
+  return stressChange === 0 ? "ya en Q1 hist." : "Q1 histórico";
 }
 
 function deriveAutoChange(current: number, terminal: number): number {

@@ -3,6 +3,7 @@
 import type { MoatboardAnalysis as Analysis } from "@/lib/moatboardAnalyses";
 import type { Fundamentals } from "@/lib/financial";
 import type { Tier, MoatArchetype, MoatStrength } from "@/lib/verdict";
+import { computeLatestYearTier, TIER_LABELS, TIER_RANK } from "@/lib/verdict";
 import { scoreMetric, type MultiYearScore } from "@/lib/scorecard";
 import QualityBadge from "@/components/QualityBadge";
 import ScorecardCard from "@/components/ScorecardCard";
@@ -59,7 +60,7 @@ export default function MoatboardAnalysis({
 
       {analysis && (
         <div
-          className={`mb-6 rounded-lg border p-4 ${verdictBoxStyles(analysis.tier)}`}
+          className={`mb-3 rounded-lg border p-4 ${verdictBoxStyles(analysis.tier)}`}
         >
           <p className="text-sm leading-relaxed">{analysis.verdict_reason}</p>
           <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs opacity-80">
@@ -71,6 +72,13 @@ export default function MoatboardAnalysis({
             <span>Generated {formatDate(analysis.generated_at)}</span>
           </div>
         </div>
+      )}
+
+      {analysis && fundamentals && (
+        <LatestYearReadout
+          analysis={analysis}
+          fundamentals={fundamentals}
+        />
       )}
 
       {error && (
@@ -241,6 +249,62 @@ function localizeNote(note: string): string {
     return "Histórico insuficiente (menos de 3 años)";
   }
   return note;
+}
+
+function LatestYearReadout({
+  analysis,
+  fundamentals,
+}: {
+  analysis: Analysis;
+  fundamentals: Fundamentals;
+}) {
+  if (!analysis.scorecard_summary) return null;
+  const latestTier = computeLatestYearTier(
+    analysis.scorecard_summary,
+    analysis.moat_strength,
+    analysis.moat_archetype,
+    fundamentals,
+  );
+  if (!latestTier) return null;
+
+  const cmp = TIER_RANK[latestTier] - TIER_RANK[analysis.tier];
+  const same = cmp === 0;
+  const better = cmp > 0;
+
+  const tone = same
+    ? "border-navy-100 bg-navy-50/60 text-navy-600"
+    : better
+      ? "border-emerald-200 bg-emerald-50/60 text-emerald-900"
+      : "border-amber-200 bg-amber-50/60 text-amber-900";
+
+  return (
+    <div className={`mb-6 rounded-md border px-3 py-2 text-xs ${tone}`}>
+      <span className="font-semibold uppercase tracking-wider">
+        Último año (12 meses):
+      </span>{" "}
+      lee como{" "}
+      <strong className="font-semibold">{TIER_LABELS[latestTier]}</strong>
+      {same ? (
+        <> — coherente con el tier 10y.</>
+      ) : better ? (
+        <>
+          {" "}— mejor que el tier 10y.{" "}
+          <span className="italic">
+            Puede ser un cambio estructural reciente o solo un buen año
+            aislado; lee el último 10-K para distinguirlo antes de actuar.
+          </span>
+        </>
+      ) : (
+        <>
+          {" "}— peor que el tier 10y.{" "}
+          <span className="italic">
+            Puede ser un deterioro estructural reciente o solo un mal año
+            aislado; lee el último 10-K para distinguirlo antes de actuar.
+          </span>
+        </>
+      )}
+    </div>
+  );
 }
 
 function HiddenDimensionsNote({

@@ -327,15 +327,14 @@ export async function ensureSecFundamentals(
   // Mirror ensureSecRawCache: parsed cache row is keyed under canonical.
   const key = await getCanonicalTicker(ticker);
 
-  // First, ensure the raw cache is hot.
-  const raw = await ensureSecRawCache(key);
-  if (raw.status !== "ok" || !raw.raw_facts || !raw.cik) {
-    return { status: raw.status, cik: raw.cik };
-  }
-
-  // Read the existing row to see if parsed_annual is still fresh.
+  // Fast path: read parsed metadata WITHOUT raw_facts (the JSONB blob is
+  // 2-5MB; pulling it on every position page load consumed multi-MB of
+  // Neon egress per visit even when nothing needed re-parsing). When the
+  // cache is hot and complete, we serve directly from parsed_annual and
+  // never touch the raw column.
   const cachedRows = (await sql`
-    SELECT parsed_annual, parse_notes, years_available, earliest_year, latest_year,
+    SELECT cik, status, last_fetched, parsed_annual, parse_notes,
+           years_available, earliest_year, latest_year,
            latest_quarter_accession,
            TO_CHAR(latest_quarter_period_end, 'YYYY-MM-DD') AS latest_quarter_period_end,
            latest_quarter_form,
@@ -344,6 +343,9 @@ export async function ensureSecFundamentals(
     WHERE ticker = ${key}
     LIMIT 1
   `) as unknown as {
+    cik: string;
+    status: SecCacheStatus;
+    last_fetched: string;
     parsed_annual: unknown;
     parse_notes: unknown;
     years_available: number | null;
@@ -356,19 +358,20 @@ export async function ensureSecFundamentals(
   }[];
 
   const cached = cachedRows[0];
-  // Fast path: the parsed cache is complete AND carries the latest-
-  // filing metadata needed by delta alerts + quarterly snapshots. Rows
-  // cached before that column existed fall through to re-parse so they
-  // can backfill without waiting for TTL expiry.
-  if (
+  const fresh =
     cached &&
+    Date.now() - new Date(cached.last_fetched).getTime() < FUNDAMENTALS_TTL_MS;
+
+  if (
+    fresh &&
+    cached.status === "ok" &&
     Array.isArray(cached.parsed_annual) &&
     cached.years_available !== null &&
     cached.latest_quarter_accession !== null
   ) {
     return {
       status: "ok",
-      cik: raw.cik,
+      cik: cached.cik,
       parsed: {
         years: cached.parsed_annual as ParsedFundamentals["years"],
         parseNotes: cached.parse_notes as ParsedFundamentals["parseNotes"],
@@ -385,7 +388,13 @@ export async function ensureSecFundamentals(
     };
   }
 
-  // Run the parser.
+  // Slow path: cache stale, missing, or pre-dates a required column.
+  // Pull raw_facts (refreshing from SEC if needed) and re-parse.
+  const raw = await ensureSecRawCache(key);
+  if (raw.status !== "ok" || !raw.raw_facts || !raw.cik) {
+    return { status: raw.status, cik: raw.cik };
+  }
+
   let parsed: ParsedFundamentals;
   try {
     parsed = parseFundamentals(raw.raw_facts);

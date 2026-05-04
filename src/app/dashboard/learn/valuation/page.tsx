@@ -55,23 +55,18 @@ export default function LearnValuationPage() {
                 </a>
               </li>
               <li>
-                <a href="#decision" className="hover:text-navy-900">
-                  4 · La regla de decisión
-                </a>
-              </li>
-              <li>
-                <a href="#umbrales" className="hover:text-navy-900">
-                  5 · Por qué los umbrales por tier
+                <a href="#liston" className="hover:text-navy-900">
+                  4 · Por qué no fijamos un listón
                 </a>
               </li>
               <li>
                 <a href="#dcf" className="hover:text-navy-900">
-                  6 · Por qué no usamos DCF clásico como veredicto
+                  5 · Por qué no usamos DCF clásico como veredicto
                 </a>
               </li>
               <li>
                 <a href="#limites" className="hover:text-navy-900">
-                  7 · Casos límite
+                  6 · Casos límite
                 </a>
               </li>
             </ol>
@@ -235,83 +230,82 @@ export default function LearnValuationPage() {
           </p>
         </Section>
 
-        <Section id="decision" title="4 · La regla de decisión">
+        <Section id="liston" title="4 · Por qué no fijamos un listón">
           <p>
-            Una vez calculados el caso base y el caso de estrés del retorno
-            esperado, aplicamos una regla de dos pasos. Ambos pasos deben
-            cumplirse para que un negocio sea &quot;comprable a este precio&quot;.
+            Versiones anteriores de Moatboard imponían un veredicto binario
+            (&quot;comprable / no comprable&quot;) basado en umbrales fijos
+            por tier de calidad: 12% para excepcional, 14% para good, 17%
+            para mediocre. Lo retiramos.
           </p>
 
           <h3 className="mt-6 font-display text-lg italic text-navy-900">
-            Paso 1 · Atractivo
+            La razón: el listón es subjetivo
           </h3>
           <p>
-            <strong>Caso base ≥ umbral por calidad del tier.</strong> Si el
-            retorno esperado en el escenario base no supera el umbral mínimo
-            que pedimos a un negocio de su calidad, el precio es caro
-            relativamente — pasamos.
+            Qué retorno hace que un negocio sea comprable depende de dos
+            cosas que el framework no puede saber por ti:
           </p>
+          <ul className="space-y-2 text-navy-700">
+            <li>
+              <strong>Tu coste de oportunidad.</strong> Si tu alternativa
+              real son letras del Tesoro al 4.5%, un compounder excepcional
+              al 8% esperado puede ser perfectamente atractivo. Si tu
+              alternativa son fondos indexados al 9-10% histórico, exigirás
+              algo más. Si tu alternativa son private deals que tienes
+              identificados al 18%, ningún equity compounder pasa el filtro.
+            </li>
+            <li>
+              <strong>Tu convicción en el negocio.</strong> Un 14% esperado
+              en una empresa cuya tesis entiendes profundamente y cuyo moat
+              has estudiado años no es lo mismo que un 14% en una empresa
+              que acabas de descubrir. La varianza percibida cambia el
+              listón aceptable.
+            </li>
+          </ul>
 
           <h3 className="mt-6 font-display text-lg italic text-navy-900">
-            Paso 2 · No-desastre
+            Lo que mostramos en su lugar
           </h3>
           <p>
-            <strong>Caso de estrés ≥ floor (Treasury 10y + 2%).</strong> Si en
-            el escenario malo el retorno cae por debajo del bono soberano + un
-            margen modesto, estamos asumiendo riesgo asimétrico negativo —
-            pasamos. La regla no exige que el escenario malo sea bueno; exige
-            que <em>no sea desastre</em>.
+            Moatboard te entrega tres números y una referencia, y deja
+            la decisión en tu mano:
           </p>
+          <ul className="space-y-2 text-navy-700">
+            <li>
+              <strong>Caso base · CAGR esperado.</strong> Lo que el negocio
+              probablemente devolverá si las asunciones de growth y múltiplo
+              se cumplen.
+            </li>
+            <li>
+              <strong>Caso estresado · CAGR.</strong> Growth × 0.7 +
+              compresión del múltiplo a Q1 histórico. El escenario malo
+              creíble.
+            </li>
+            <li>
+              <strong>Caso optimista · CAGR.</strong> FCF Yield + crecimiento
+              completo, asumiendo el múltiplo estable. Para contextualizar.
+            </li>
+            <li>
+              <strong>Treasury 10y + 2% como referencia.</strong> No es un
+              gate, es un dato: el bono soberano más una prima de equity
+              modesta. Si el caso estresado cae por debajo, sabes que estás
+              asumiendo riesgo equity para retornos similares al cash. Tú
+              decides si esa asimetría te compensa.
+            </li>
+          </ul>
 
           <p className="mt-6">
-            El frame es Buffett puro: <em>Rule No. 1: Never lose money.</em>{" "}
-            Buscamos atractivo razonable en el caso base{" "}
-            <strong>y</strong> robustez en el escenario malo. Si solo se
-            cumple uno, no es comprable.
+            El frame sigue siendo Buffett: <em>Rule No. 1: Never lose
+            money.</em> Pero la traducción operativa es que tú definas qué
+            significa &quot;atractivo&quot; y qué significa
+            &quot;desastre&quot; para tu cartera y tu coste de oportunidad —
+            no Moatboard.
           </p>
 
           <ExampleTable />
         </Section>
 
-        <Section id="umbrales" title="5 · Por qué los umbrales por tier">
-          <p>
-            Los umbrales mínimos no son iguales para todos los negocios. Reflejan
-            la asimetría entre calidad y varianza:
-          </p>
-          <ul className="space-y-2 text-navy-700">
-            <li>
-              <strong>Exceptional · ≥ 12%.</strong> Un negocio con ROIC
-              sostenido &gt; 20%, moat ancho, runway largo: la varianza
-              alrededor del caso base es baja. El escenario malo no es
-              desastre. Un retorno esperado del 12% es suficiente.
-            </li>
-            <li>
-              <strong>Good · ≥ 14%.</strong> Moat menos duradero o runway más
-              corto: mayor probabilidad de erosión. Exigimos más prima.
-            </li>
-            <li>
-              <strong>Mediocre · ≥ 17%.</strong> Si vas a entrar en un negocio
-              de calidad media, la asimetría puede ir en tu contra: el
-              escenario malo puede ser realmente malo. Exigimos retorno alto
-              que compense.
-            </li>
-          </ul>
-          <p>
-            El floor de 6.5-7% (Treasury 10y + 2%) es independiente del tier.
-            Es el suelo absoluto que pedimos al escenario malo, sin importar
-            qué calidad de negocio sea, para no estar perdiendo vs el bono
-            soberano.
-          </p>
-          <p>
-            Una consecuencia interesante de la asimetría: un negocio
-            Exceptional con 12% esperado es mejor inversión que un Mediocre
-            con 18%, porque la varianza del Exceptional es mucho menor. La
-            disciplina de calidad protege la cartera más que la disciplina de
-            precio.
-          </p>
-        </Section>
-
-        <Section id="dcf" title="6 · Por qué no usamos DCF clásico como veredicto">
+        <Section id="dcf" title="5 · Por qué no usamos DCF clásico como veredicto">
           <p>
             El Discounted Cash Flow descuenta los flujos de caja futuros del
             negocio a una tasa &quot;hurdle&quot; (típicamente 10-14%) y los
@@ -351,7 +345,7 @@ export default function LearnValuationPage() {
           </p>
         </Section>
 
-        <Section id="limites" title="7 · Casos límite">
+        <Section id="limites" title="6 · Casos límite">
           <h3 className="mt-2 font-display text-lg italic text-navy-900">
             Compounders post-IPO con runway expansion
           </h3>
@@ -468,9 +462,7 @@ function ExampleTable() {
             <th className="px-3 py-2 text-left">Negocio</th>
             <th className="px-3 py-2 text-right">Base</th>
             <th className="px-3 py-2 text-right">Stress</th>
-            <th className="px-3 py-2 text-right">Umbral</th>
-            <th className="px-3 py-2 text-right">Floor</th>
-            <th className="px-3 py-2 text-left">Veredicto</th>
+            <th className="px-3 py-2 text-right">Floor de referencia</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-navy-100 tabular-nums text-navy-800">
@@ -478,36 +470,32 @@ function ExampleTable() {
             <td className="px-3 py-2">META · Exceptional</td>
             <td className="px-3 py-2 text-right">12.7%</td>
             <td className="px-3 py-2 text-right">11.2%</td>
-            <td className="px-3 py-2 text-right">12%</td>
-            <td className="px-3 py-2 text-right">7%</td>
-            <td className="px-3 py-2 text-emerald-700">Comprable</td>
+            <td className="px-3 py-2 text-right text-navy-500">7%</td>
           </tr>
           <tr>
             <td className="px-3 py-2">MSFT · Exceptional</td>
             <td className="px-3 py-2 text-right">12.2%</td>
             <td className="px-3 py-2 text-right">10.7%</td>
-            <td className="px-3 py-2 text-right">12%</td>
-            <td className="px-3 py-2 text-right">7%</td>
-            <td className="px-3 py-2 text-emerald-700">Comprable</td>
+            <td className="px-3 py-2 text-right text-navy-500">7%</td>
           </tr>
           <tr>
             <td className="px-3 py-2">INTU · Exceptional</td>
             <td className="px-3 py-2 text-right">13.0%</td>
             <td className="px-3 py-2 text-right">~11%</td>
-            <td className="px-3 py-2 text-right">12%</td>
-            <td className="px-3 py-2 text-right">7%</td>
-            <td className="px-3 py-2 text-emerald-700">Comprable</td>
+            <td className="px-3 py-2 text-right text-navy-500">7%</td>
           </tr>
           <tr>
             <td className="px-3 py-2">KNSL · Exceptional</td>
             <td className="px-3 py-2 text-right">~20%</td>
             <td className="px-3 py-2 text-right">~16%</td>
-            <td className="px-3 py-2 text-right">12%</td>
-            <td className="px-3 py-2 text-right">7%</td>
-            <td className="px-3 py-2 text-emerald-700">Comprable</td>
+            <td className="px-3 py-2 text-right text-navy-500">7%</td>
           </tr>
         </tbody>
       </table>
+      <p className="px-3 py-2 text-[11px] italic text-navy-500">
+        Sin columna de veredicto: si el listón aceptable para ti es 10%,
+        los cuatro pasan; si es 15%, solo KNSL pasa. Tú decides el listón.
+      </p>
     </div>
   );
 }

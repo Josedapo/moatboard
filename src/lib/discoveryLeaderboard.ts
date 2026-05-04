@@ -74,9 +74,31 @@ type LeaderboardRowRaw = Omit<
   shared_business_tier: BusinessTier | null;
 };
 
+// In-memory cache for the full leaderboard payload. The query returns
+// ~500KB-1MB per call (≈860 tickers × JSON_AGG of fund_breakdown) and
+// /dashboard/discovery is one of the most-visited surfaces. Without a
+// cache, hot-reload in dev (which re-runs Server Components on every
+// save) and back-and-forth navigation each fire the full query against
+// Neon — the kind of pattern that consumed the 5GB monthly egress cap
+// in late April 2026. TTL is short enough that 13F backfills (weekly)
+// and per-user wizard completions become visible within minutes.
+type CachedLeaderboard = {
+  rows: LeaderboardRow[];
+  meta: LeaderboardMeta;
+  expiresAt: number;
+};
+const LEADERBOARD_TTL_MS = 5 * 60 * 1000;
+const leaderboardCache = new Map<string, CachedLeaderboard>();
+
 export async function computeLeaderboard(
   userId: string | number,
 ): Promise<{ rows: LeaderboardRow[]; meta: LeaderboardMeta }> {
+  const cacheKey = String(userId);
+  const cached = leaderboardCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return { rows: cached.rows, meta: cached.meta };
+  }
+
   const raw = (await sql`
     WITH latest_filing AS (
       SELECT DISTINCT ON (fund_id)
@@ -242,13 +264,26 @@ export async function computeLeaderboard(
   }[];
   const m = metaRows[0];
 
-  return {
-    rows,
-    meta: {
-      latestQuarter: m.latest_quarter ?? null,
-      fundsCovered: Number(m.funds_covered),
-      tickersResolved: Number(m.resolved),
-      tickersUnresolved: Number(m.unresolved),
-    },
+  const meta: LeaderboardMeta = {
+    latestQuarter: m.latest_quarter ?? null,
+    fundsCovered: Number(m.funds_covered),
+    tickersResolved: Number(m.resolved),
+    tickersUnresolved: Number(m.unresolved),
   };
+
+  leaderboardCache.set(cacheKey, {
+    rows,
+    meta,
+    expiresAt: Date.now() + LEADERBOARD_TTL_MS,
+  });
+
+  return { rows, meta };
+}
+
+// Drop the cache entry for a given user. Called from server actions that
+// mutate state visible in the leaderboard (watchlist toggle, wizard
+// completion that lands a tier in moatboard_analyses) so the next visit
+// reflects the change without waiting for TTL expiry.
+export function invalidateLeaderboardCache(userId: string | number): void {
+  leaderboardCache.delete(String(userId));
 }
