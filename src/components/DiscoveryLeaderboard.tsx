@@ -74,8 +74,6 @@ const TIER_RANK: Record<BusinessTier, number> = {
   poor: 1,
 };
 
-type LeaderboardView = "analyzable" | "unsupported";
-
 // Client wrapper for the leaderboard: client-side filter + sort across
 // the pre-computed rows. Server does the heavy SQL aggregation; this
 // component is thin, just presentation + state for interactive UX.
@@ -84,7 +82,6 @@ export default function DiscoveryLeaderboard({
 }: {
   rows: LeaderboardRow[];
 }) {
-  const [view, setView] = useState<LeaderboardView>("analyzable");
   const [onlyWatchlist, setOnlyWatchlist] = useState(false);
   const [tierSet, setTierSet] = useState<Set<BusinessTier>>(new Set());
   const [flagsFilter, setFlagsFilter] = useState<FlagsFilterKey>("all");
@@ -94,15 +91,6 @@ export default function DiscoveryLeaderboard({
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [sortKey, setSortKey] = useState<SortKey>("conviction");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
-
-  const analyzableCount = useMemo(
-    () => rows.filter((r) => !r.is_unsupported).length,
-    [rows],
-  );
-  const unsupportedCount = useMemo(
-    () => rows.filter((r) => r.is_unsupported).length,
-    [rows],
-  );
 
   const toggleTier = (tier: BusinessTier) => {
     setTierSet((prev) => {
@@ -146,14 +134,6 @@ export default function DiscoveryLeaderboard({
   const filtered = useMemo(() => {
     const q = query.trim().toUpperCase();
     const passed = rows.filter((r) => {
-      // View split — Analizables vs No analizables. The "No analizables"
-      // tab holds rows whose framework verdict is null AND there's a
-      // reason for that (DPA error from the 2026-04-26 token-limit
-      // incident or framework-level rejection). Keeping them out of the
-      // main list removes noise while preserving the audit trail.
-      if (view === "analyzable" && r.is_unsupported) return false;
-      if (view === "unsupported" && !r.is_unsupported) return false;
-
       // Search — ticker OR issuer name, case-insensitive substring.
       if (q && !r.ticker.includes(q) && !r.issuer_name.toUpperCase().includes(q))
         return false;
@@ -161,15 +141,16 @@ export default function DiscoveryLeaderboard({
       // Watchlist toggle.
       if (onlyWatchlist && r.ticker_state !== "watchlist") return false;
 
-      // Tier multi-select. Only meaningful in the analyzable view —
-      // unsupported rows have no tier by definition.
-      if (view === "analyzable" && tierSet.size > 0) {
+      // Tier multi-select. Empty set = pass all (including untiered).
+      // Any tier picked = untiered rows fail (can't evaluate the gate).
+      if (tierSet.size > 0) {
         if (r.business_tier === null) return false;
         if (!tierSet.has(r.business_tier)) return false;
       }
 
-      // Flags tri-state. Same caveat — unsupported rows skip this.
-      if (view === "analyzable" && flagsFilter !== "all") {
+      // Flags tri-state. Untiered rows pass when "all", fail otherwise
+      // — we can't evaluate flags we haven't computed.
+      if (flagsFilter !== "all") {
         if (r.business_tier === null) return false;
         if (flagsFilter === "no_serious" && r.serious_flag_count > 0)
           return false;
@@ -209,7 +190,6 @@ export default function DiscoveryLeaderboard({
     });
   }, [
     rows,
-    view,
     query,
     onlyWatchlist,
     tierSet,
@@ -235,52 +215,6 @@ export default function DiscoveryLeaderboard({
 
   return (
     <div className="space-y-4">
-      {/* Row 0 — view tabs (Analizables vs No analizables) */}
-      <div className="flex items-center gap-0 border-b border-navy-200">
-        <button
-          type="button"
-          onClick={() => setView("analyzable")}
-          aria-pressed={view === "analyzable"}
-          className={
-            view === "analyzable"
-              ? "-mb-px border-b-2 border-navy-900 px-4 py-2 text-sm font-semibold text-navy-900"
-              : "-mb-px border-b-2 border-transparent px-4 py-2 text-sm font-medium text-navy-500 hover:text-navy-800"
-          }
-        >
-          Analizables
-          <span
-            className={
-              view === "analyzable"
-                ? "ml-2 text-navy-500"
-                : "ml-2 text-navy-400"
-            }
-          >
-            {analyzableCount}
-          </span>
-        </button>
-        <button
-          type="button"
-          onClick={() => setView("unsupported")}
-          aria-pressed={view === "unsupported"}
-          className={
-            view === "unsupported"
-              ? "-mb-px border-b-2 border-navy-900 px-4 py-2 text-sm font-semibold text-navy-900"
-              : "-mb-px border-b-2 border-transparent px-4 py-2 text-sm font-medium text-navy-500 hover:text-navy-800"
-          }
-        >
-          No analizables
-          <span
-            className={
-              view === "unsupported"
-                ? "ml-2 text-navy-500"
-                : "ml-2 text-navy-400"
-            }
-          >
-            {unsupportedCount}
-          </span>
-        </button>
-      </div>
-
       {/* Row 1 — search + summary */}
       <div className="flex flex-wrap items-center gap-3">
         <input
@@ -331,58 +265,52 @@ export default function DiscoveryLeaderboard({
           </span>
         </button>
 
-        {/* Tier and red-flag filters only meaningful in the analyzable
-            view — unsupported rows have no tier or computed flags. */}
-        {view === "analyzable" && (
-          <>
-            <span className="text-navy-300">·</span>
+        <span className="text-navy-300">·</span>
 
-            <span className="text-[10px] font-semibold uppercase tracking-wider text-navy-500">
-              Calidad
-            </span>
-            {TIER_OPTIONS.map((t) => {
-              const active = tierSet.has(t.key);
-              return (
-                <button
-                  key={t.key}
-                  type="button"
-                  onClick={() => toggleTier(t.key)}
-                  aria-pressed={active}
-                  className={
-                    active
-                      ? "rounded-full bg-navy-900 px-2.5 py-1 font-semibold text-white"
-                      : "rounded-full border border-navy-200 bg-white px-2.5 py-1 font-medium text-navy-700 hover:border-navy-400 hover:text-navy-900"
-                  }
-                >
-                  {t.label}
-                </button>
-              );
-            })}
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-navy-500">
+          Calidad
+        </span>
+        {TIER_OPTIONS.map((t) => {
+          const active = tierSet.has(t.key);
+          return (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => toggleTier(t.key)}
+              aria-pressed={active}
+              className={
+                active
+                  ? "rounded-full bg-navy-900 px-2.5 py-1 font-semibold text-white"
+                  : "rounded-full border border-navy-200 bg-white px-2.5 py-1 font-medium text-navy-700 hover:border-navy-400 hover:text-navy-900"
+              }
+            >
+              {t.label}
+            </button>
+          );
+        })}
 
-            <span className="text-navy-300">·</span>
+        <span className="text-navy-300">·</span>
 
-            <span className="text-[10px] font-semibold uppercase tracking-wider text-navy-500">
-              Red flags
-            </span>
-            {FLAGS_FILTERS.map((f) => {
-              const active = flagsFilter === f.key;
-              return (
-                <button
-                  key={f.key}
-                  type="button"
-                  onClick={() => setFlagsFilter(f.key)}
-                  className={
-                    active
-                      ? "rounded-full bg-navy-900 px-2.5 py-1 font-semibold text-white"
-                      : "rounded-full border border-navy-200 bg-white px-2.5 py-1 font-medium text-navy-700 hover:border-navy-400 hover:text-navy-900"
-                  }
-                >
-                  {f.label}
-                </button>
-              );
-            })}
-          </>
-        )}
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-navy-500">
+          Red flags
+        </span>
+        {FLAGS_FILTERS.map((f) => {
+          const active = flagsFilter === f.key;
+          return (
+            <button
+              key={f.key}
+              type="button"
+              onClick={() => setFlagsFilter(f.key)}
+              className={
+                active
+                  ? "rounded-full bg-navy-900 px-2.5 py-1 font-semibold text-white"
+                  : "rounded-full border border-navy-200 bg-white px-2.5 py-1 font-medium text-navy-700 hover:border-navy-400 hover:text-navy-900"
+              }
+            >
+              {f.label}
+            </button>
+          );
+        })}
       </div>
 
       {/* Row 3 — numeric mins (separate line so categorical chips above stay on one line) */}
@@ -547,10 +475,7 @@ function LeaderboardTableRow({
           {row.issuer_name}
         </td>
         <td className="px-3 py-3">
-          <BusinessTierChip
-            tier={row.business_tier}
-            notCoveredReason={row.not_covered_reason}
-          />
+          <BusinessTierChip tier={row.business_tier} />
         </td>
         <td className="px-3 py-3">
           <FlagsBadge
