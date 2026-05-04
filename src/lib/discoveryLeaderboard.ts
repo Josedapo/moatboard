@@ -209,12 +209,26 @@ export async function computeLeaderboard(
              AND f->>'severity' = 'watch'),
         0
       ) AS watch_flag_count,
-      -- not_covered reason from the shared cache. Lets the chip render
-      -- "no soportado" with a tooltip explaining why instead of a silent —.
-      (SELECT dpa.not_covered_reason
-         FROM discovery_pre_analyses dpa
-         WHERE dpa.ticker = fh.ticker AND dpa.status = 'not_covered'
-         LIMIT 1) AS not_covered_reason
+      -- Reason surfaced in the chip tooltip when no tier is available.
+      -- Two flavors:
+      --   1. status='not_covered' → framework-level rejection (SEC <5y,
+      --      <5 applicable dimensions, etc.). The reason is human-readable.
+      --   2. status='error' → analysis pipeline crashed (token-limit,
+      --      JSON parse error, network). Surfaced as "Análisis falló: …"
+      --      so the user sees it as different from "nadie lo ha mirado".
+      -- Without this fallback, error rows silently render as "—" same as
+      -- never-analyzed tickers, and Discovery looks inconsistent vs the
+      -- ficha (which fires the unsupported-business gate when applicable).
+      COALESCE(
+        (SELECT dpa.not_covered_reason
+           FROM discovery_pre_analyses dpa
+           WHERE dpa.ticker = fh.ticker AND dpa.status = 'not_covered'
+           LIMIT 1),
+        (SELECT 'Análisis falló: ' || COALESCE(dpa.error_message, 'error desconocido')
+           FROM discovery_pre_analyses dpa
+           WHERE dpa.ticker = fh.ticker AND dpa.status = 'error'
+           LIMIT 1)
+      ) AS not_covered_reason
     FROM fund_holdings fh
     -- Per-user watchlist overlay: canonicalize the user's watchlist_entries
     -- row before joining so a star under either share class attaches to

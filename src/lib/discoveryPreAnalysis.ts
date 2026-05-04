@@ -269,12 +269,26 @@ export async function markError(
   const canonical = await getCanonicalTicker(ticker);
   // Truncate to fit VARCHAR(500); raw error stack on stderr already.
   const safeMessage = message.slice(0, 480);
+  // Clear any stale tier/scorecard from a previous successful run — once
+  // the analysis fails, the cached verdict is unreliable. Without this,
+  // the leaderboard could surface the old tier on a row whose ficha
+  // refuses to render (since the unsupported gate fires per the latest
+  // run, not the cache).
   await sql`
     INSERT INTO discovery_pre_analyses (ticker, status, error_message)
     VALUES (${canonical}, 'error', ${safeMessage})
     ON CONFLICT (ticker) DO UPDATE SET
       status = 'error',
       error_message = EXCLUDED.error_message,
+      tier = NULL,
+      applicable_dimensions = NULL,
+      scorecard_summary = NULL,
+      moat_strength = NULL,
+      moat_archetype = NULL,
+      has_serious_red_flags = FALSE,
+      serious_red_flags_count = 0,
+      watch_red_flags_count = 0,
+      not_covered_reason = NULL,
       evaluated_at = NOW()
   `;
 }
