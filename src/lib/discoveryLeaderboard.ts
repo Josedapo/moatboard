@@ -90,10 +90,16 @@ type CachedLeaderboard = {
 const LEADERBOARD_TTL_MS = 5 * 60 * 1000;
 const leaderboardCache = new Map<string, CachedLeaderboard>();
 
+// Bump when the SHAPE of `LeaderboardRow` changes OR when we suspect
+// long-lived Vercel function instances are serving stale data and we
+// want a guaranteed flush across all instances on next deploy. Old
+// entries become unreachable because the key no longer matches.
+const CACHE_VERSION = "v2";
+
 export async function computeLeaderboard(
   userId: string | number,
 ): Promise<{ rows: LeaderboardRow[]; meta: LeaderboardMeta }> {
-  const cacheKey = String(userId);
+  const cacheKey = `${userId}:${CACHE_VERSION}`;
   const cached = leaderboardCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) {
     return { rows: cached.rows, meta: cached.meta };
@@ -299,5 +305,5 @@ export async function computeLeaderboard(
 // completion that lands a tier in moatboard_analyses) so the next visit
 // reflects the change without waiting for TTL expiry.
 export function invalidateLeaderboardCache(userId: string | number): void {
-  leaderboardCache.delete(String(userId));
+  leaderboardCache.delete(`${userId}:${CACHE_VERSION}`);
 }
