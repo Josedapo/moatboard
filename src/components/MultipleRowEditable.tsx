@@ -274,11 +274,9 @@ function ScenarioCell({
       </div>
       <div className="text-[11px] font-normal italic text-navy-400">
         {isOverride
-          ? `${signedPct(changePct)}/año implícito${
-              autoTerminal !== null
-                ? ` · auto sería ${autoTerminal.toFixed(1)}x`
-                : ""
-            }`
+          ? autoTerminal !== null
+            ? `auto sería ${autoTerminal.toFixed(1)}x`
+            : ""
           : `${signedPct(changePct)}/año`}
       </div>
     </div>
