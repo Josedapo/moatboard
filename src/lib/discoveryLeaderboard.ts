@@ -52,6 +52,14 @@ export type LeaderboardRow = {
   // cache stores the reason — surfaced in the chip tooltip so the user
   // knows why no tier appears.
   not_covered_reason: string | null;
+  // True when the ticker has no tier from anywhere AND there's a reason
+  // for that (DPA status='not_covered' or 'error'). Drives the
+  // Analizables vs No analizables split in the Discovery UI: keeping
+  // these out of the main list removes the noise from the 2026-04-26
+  // token-limit incident's residual error rows. A row whose user has
+  // analyzed it (user_business_tier non-null) is analyzable regardless
+  // of any stale DPA error.
+  is_unsupported: boolean;
 };
 
 export type LeaderboardMeta = {
@@ -68,7 +76,7 @@ export type LeaderboardMeta = {
 // that holds both share classes contributes once with summed weight.
 type LeaderboardRowRaw = Omit<
   LeaderboardRow,
-  "business_tier" | "business_tier_source"
+  "business_tier" | "business_tier_source" | "is_unsupported"
 > & {
   user_business_tier: BusinessTier | null;
   shared_business_tier: BusinessTier | null;
@@ -261,12 +269,19 @@ export async function computeLeaderboard(
         : r.shared_business_tier !== null
           ? "shared"
           : null;
+    // Unsupported when there's no tier from any source AND the framework
+    // (or pipeline) gave a reason. A row whose user has their own
+    // analysis (user_business_tier non-null) is analyzable even if the
+    // shared DPA is in 'error' state from a past failure — the user's
+    // verdict overrides.
+    const is_unsupported =
+      business_tier === null && r.not_covered_reason !== null;
     const {
       user_business_tier: _u,
       shared_business_tier: _s,
       ...rest
     } = r;
-    return { ...rest, business_tier, business_tier_source };
+    return { ...rest, business_tier, business_tier_source, is_unsupported };
   });
 
   const metaRows = (await sql`

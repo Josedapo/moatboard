@@ -32,6 +32,8 @@ import {
   prepareUnderstandingFiling,
   prepareRedFlagsFiling,
 } from "@/lib/filingForPrompt";
+import { upsertPreAnalysisFromExisting } from "@/lib/preAnalysisFlow";
+import { invalidateLeaderboardCache } from "@/lib/discoveryLeaderboard";
 
 async function requireUserId(): Promise<string | number | null> {
   const session = await auth();
@@ -48,6 +50,13 @@ export async function analyzeQualityAction(ticker: string): Promise<void> {
   const upper = ticker.toUpperCase();
   const draft = await ensureDraftPosition(userId, upper);
   await ensureAnalysis(draft.id, upper);
+  // Propagate to the shared per-ticker DPA cache. Without this, a row
+  // stuck at status='error' from a past pipeline failure (token limit,
+  // etc.) would stay 'error' even after the user successfully analyzes
+  // the ticker — Discovery would keep showing "no soportado" while the
+  // ficha shows a real verdict. Best-effort, never blocks the action.
+  await upsertPreAnalysisFromExisting(upper).catch(() => null);
+  invalidateLeaderboardCache(userId);
   revalidateFicha(upper);
 }
 
@@ -83,7 +92,8 @@ export async function analyzeUnderstandingAction(ticker: string): Promise<void> 
 }
 
 export async function analyzeRedFlagsAction(ticker: string): Promise<void> {
-  if (!(await requireUserId())) return;
+  const userId = await requireUserId();
+  if (!userId) return;
   const upper = ticker.toUpperCase();
   const existing = await getRedFlags(upper);
   if (existing) {
@@ -107,6 +117,10 @@ export async function analyzeRedFlagsAction(ticker: string): Promise<void> {
     last10kPeriodEnd: filing?.reportDate ?? null,
     model,
   });
+  // Same propagation as analyzeQualityAction — red flag counts feed the
+  // shared DPA cache, which Discovery reads for the chip render.
+  await upsertPreAnalysisFromExisting(upper).catch(() => null);
+  invalidateLeaderboardCache(userId);
   revalidateFicha(upper);
 }
 
@@ -119,7 +133,8 @@ export async function analyzeRedFlagsAction(ticker: string): Promise<void> {
 // when the user has run one piece via the wizard previously and the
 // other is now missing on the ficha.
 export async function analyzeBusinessAction(ticker: string): Promise<void> {
-  if (!(await requireUserId())) return;
+  const userId = await requireUserId();
+  if (!userId) return;
   const upper = ticker.toUpperCase();
 
   const [existingUnderstanding, existingRedFlags] = await Promise.all([
@@ -194,6 +209,10 @@ export async function analyzeBusinessAction(ticker: string): Promise<void> {
   }
 
   await Promise.all(tasks);
+  // Same propagation as the per-piece actions — only red flags affects
+  // DPA counts, but cheap to call either way (idempotent).
+  await upsertPreAnalysisFromExisting(upper).catch(() => null);
+  invalidateLeaderboardCache(userId);
   revalidateFicha(upper);
 }
 
