@@ -169,28 +169,6 @@ export function deriveBaseMultiple(
   return snapshot.current <= snapshot.median ? snapshot.current : snapshot.median;
 }
 
-// Inverse of deriveBaseMultiple / deriveStressMultiple — given a user-
-// supplied terminal multiple, return the equivalent annualized signed
-// change over 10 years. Used by the override server action to convert
-// "Joseda asume 2.0x P/B al año 10" into the persisted %/año form.
-//
-// Returns 0 (no change) when inputs are unusable rather than throwing —
-// the caller then treats it as "no override" semantically.
-export function multipleToAnnualizedChange(
-  currentMultiple: number,
-  terminalMultiple: number,
-): number {
-  if (
-    !Number.isFinite(currentMultiple) ||
-    !Number.isFinite(terminalMultiple) ||
-    currentMultiple <= 0 ||
-    terminalMultiple <= 0
-  ) {
-    return 0;
-  }
-  return Math.pow(terminalMultiple / currentMultiple, 1 / 10) - 1;
-}
-
 // Re-derive the implied-return assumptions at a fresh market cap (today's
 // price × shares outstanding). The persisted assumptions row freezes the
 // snapshot from the last regenerate; this helper produces a "live" version
@@ -242,28 +220,43 @@ export function deriveLiveImpliedReturn(
   const median = stored.multiple_median ?? null;
   const q1 = stored.multiple_q1 ?? null;
 
-  // Multiple change — recompute against live current unless the user has
-  // an override active. Override semantics: stored as annualized rate at
-  // the time of edit; we keep the rate verbatim.
+  // Override resolution. Two override paths exist:
+  //   1. Absolute terminal Nx (current model) — `multiple_*_terminal_override`.
+  //      The terminal stays fixed; the annualized rate re-derives against
+  //      the live current. This matches Joseda's mental model: "this is the
+  //      multiple I believe the business should converge to; the price
+  //      oscillates around it".
+  //   2. Annualized rate (legacy, pre-migration) — `multiple_change_*_override`.
+  //      Kept as fallback for rows that haven't been migrated yet. Used
+  //      verbatim, terminal recomputed from current * (1+rate)^10.
+  //
+  // New rows write only path 1. The migration script converts legacy rows.
+  const baseTerminalOverride = stored.multiple_base_terminal_override ?? null;
+  const stressTerminalOverride = stored.multiple_stress_terminal_override ?? null;
+
   const liveBaseChange =
-    stored.multiple_change_base_override !== null &&
-    stored.multiple_change_base_override !== undefined
-      ? stored.multiple_change_base_override
-      : liveCurrent !== null && median !== null && median > 0
-        ? liveCurrent > median
-          ? Math.pow(median / liveCurrent, 1 / 10) - 1
-          : 0
-        : stored.multiple_change_base;
+    baseTerminalOverride !== null && liveCurrent !== null && liveCurrent > 0
+      ? Math.pow(baseTerminalOverride / liveCurrent, 1 / 10) - 1
+      : stored.multiple_change_base_override !== null &&
+          stored.multiple_change_base_override !== undefined
+        ? stored.multiple_change_base_override
+        : liveCurrent !== null && median !== null && median > 0
+          ? liveCurrent > median
+            ? Math.pow(median / liveCurrent, 1 / 10) - 1
+            : 0
+          : stored.multiple_change_base;
 
   const liveStressChange =
-    stored.multiple_change_stress_override !== null &&
-    stored.multiple_change_stress_override !== undefined
-      ? stored.multiple_change_stress_override
-      : liveCurrent !== null && q1 !== null && q1 > 0
-        ? liveCurrent > q1
-          ? Math.pow(q1 / liveCurrent, 1 / 10) - 1
-          : 0
-        : stored.multiple_change_stress;
+    stressTerminalOverride !== null && liveCurrent !== null && liveCurrent > 0
+      ? Math.pow(stressTerminalOverride / liveCurrent, 1 / 10) - 1
+      : stored.multiple_change_stress_override !== null &&
+          stored.multiple_change_stress_override !== undefined
+        ? stored.multiple_change_stress_override
+        : liveCurrent !== null && q1 !== null && q1 > 0
+          ? liveCurrent > q1
+            ? Math.pow(q1 / liveCurrent, 1 / 10) - 1
+            : 0
+          : stored.multiple_change_stress;
 
   // Growth — overrides respected verbatim; otherwise persisted auto values.
   const effectiveGrowthBase =

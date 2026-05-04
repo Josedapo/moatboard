@@ -279,9 +279,15 @@ export async function computeAndSaveValuation(
     existingValuation?.method === "implied_return"
       ? (existingValuation.assumptions as ImpliedReturnStoredAssumptions)
       : null;
-  const carriedBaseOverride =
+  const carriedBaseTerminalOverride =
+    existingAssumptions?.multiple_base_terminal_override ?? null;
+  const carriedStressTerminalOverride =
+    existingAssumptions?.multiple_stress_terminal_override ?? null;
+  // Legacy rate-based overrides — only honored if the absolute terminal
+  // override isn't set. Kept for rows that haven't been migrated yet.
+  const legacyBaseChangeOverride =
     existingAssumptions?.multiple_change_base_override ?? null;
-  const carriedStressOverride =
+  const legacyStressChangeOverride =
     existingAssumptions?.multiple_change_stress_override ?? null;
   const carriedGrowthBaseOverride =
     existingAssumptions?.growth_base_override ?? null;
@@ -410,21 +416,39 @@ export async function computeAndSaveValuation(
     : (fallbackResult?.peer ?? null);
 
   // Apply overrides if Joseda manually edited the terminal multiple in
-  // a prior turn. The override is the persisted %/año; we use it
-  // directly instead of the auto-derived value. Terminal multiple shown
-  // in UI is computed from current * (1+override)^10 so it reflects
-  // exactly what the user typed.
-  const effectiveBaseChange = carriedBaseOverride ?? autoMultipleChangeBase;
+  // a prior turn. Two paths:
+  //   1. Absolute terminal Nx (current model) — terminal stays anchored,
+  //      change %/año re-derives against the (possibly new) current.
+  //   2. Legacy rate-based — used verbatim, terminal recomputed from
+  //      new_current * (1+rate)^10. Only consulted when the absolute
+  //      override isn't present.
+  const liveCurrent = primaryMultiple?.current ?? null;
+
+  const effectiveBaseChange =
+    carriedBaseTerminalOverride !== null &&
+    liveCurrent !== null &&
+    liveCurrent > 0
+      ? Math.pow(carriedBaseTerminalOverride / liveCurrent, 1 / 10) - 1
+      : (legacyBaseChangeOverride ?? autoMultipleChangeBase);
   const effectiveStressChange =
-    carriedStressOverride ?? autoMultipleChangeStress;
+    carriedStressTerminalOverride !== null &&
+    liveCurrent !== null &&
+    liveCurrent > 0
+      ? Math.pow(carriedStressTerminalOverride / liveCurrent, 1 / 10) - 1
+      : (legacyStressChangeOverride ?? autoMultipleChangeStress);
+
   const baseTerminalMultiple =
-    carriedBaseOverride !== null && primaryMultiple?.current
-      ? primaryMultiple.current * Math.pow(1 + carriedBaseOverride, 10)
-      : autoBaseTerminalMultiple;
+    carriedBaseTerminalOverride !== null
+      ? carriedBaseTerminalOverride
+      : legacyBaseChangeOverride !== null && liveCurrent !== null
+        ? liveCurrent * Math.pow(1 + legacyBaseChangeOverride, 10)
+        : autoBaseTerminalMultiple;
   const stressTerminalMultiple =
-    carriedStressOverride !== null && primaryMultiple?.current
-      ? primaryMultiple.current * Math.pow(1 + carriedStressOverride, 10)
-      : autoStressTerminalMultiple;
+    carriedStressTerminalOverride !== null
+      ? carriedStressTerminalOverride
+      : legacyStressChangeOverride !== null && liveCurrent !== null
+        ? liveCurrent * Math.pow(1 + legacyStressChangeOverride, 10)
+        : autoStressTerminalMultiple;
 
   // Growth overrides applied: when Joseda has manually set a growth_*_override,
   // it replaces the auto-derived growth.base / growth.stress in the
@@ -475,8 +499,12 @@ export async function computeAndSaveValuation(
     growth_stress_override: carriedGrowthStressOverride,
     multiple_change_base: effectiveBaseChange,
     multiple_change_stress: effectiveStressChange,
-    multiple_change_base_override: carriedBaseOverride,
-    multiple_change_stress_override: carriedStressOverride,
+    multiple_base_terminal_override: carriedBaseTerminalOverride,
+    multiple_stress_terminal_override: carriedStressTerminalOverride,
+    // Legacy fields preserved verbatim — null on already-migrated rows;
+    // still readable for rows whose migration hasn't run yet.
+    multiple_change_base_override: legacyBaseChangeOverride,
+    multiple_change_stress_override: legacyStressChangeOverride,
     multiple_label: primaryMultiple?.label,
     multiple_source: primaryMultiple?.source,
     multiple_current: primaryMultiple?.current ?? null,
@@ -667,6 +695,8 @@ export async function computeImpliedReturnEphemeral(
     growth_stress_override: null,
     multiple_change_base: multipleChangeBase,
     multiple_change_stress: multipleChangeStress,
+    multiple_base_terminal_override: null,
+    multiple_stress_terminal_override: null,
     multiple_change_base_override: null,
     multiple_change_stress_override: null,
     multiple_label: primaryMultiple?.label,

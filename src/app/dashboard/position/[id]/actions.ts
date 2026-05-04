@@ -39,10 +39,7 @@ import {
   type DcfStoredAssumptions,
   type ImpliedReturnStoredAssumptions,
 } from "@/lib/valuations";
-import {
-  computeImpliedReturn,
-  multipleToAnnualizedChange,
-} from "@/lib/impliedReturn";
+import { computeImpliedReturn } from "@/lib/impliedReturn";
 import {
   createTransaction,
   getCostBasis,
@@ -390,21 +387,19 @@ export async function updateImpliedReturnOverrideAction({
     "Stress terminal multiple",
   );
 
-  // Convert each Nx → annualized signed decimal. null → null (reset).
-  // Note: "only one passed" semantic — if a field is undefined we keep
-  // the existing override; if null we clear it.
-  const newBaseOverride =
+  // Persist the absolute terminal Nx ("the multiple I believe this business
+  // should converge to"), not a rate. The annualized rate is derived live
+  // against the current multiple at render time, so when price moves the
+  // anchor stays put. null → null (reset).
+  // "only one passed" semantic — undefined keeps existing override; null clears.
+  const newBaseTerminalOverride =
     baseTerminalMultiple === undefined
-      ? (stored.multiple_change_base_override ?? null)
-      : baseTerm === null
-        ? null
-        : multipleToAnnualizedChange(currentMultiple, baseTerm);
-  const newStressOverride =
+      ? (stored.multiple_base_terminal_override ?? null)
+      : baseTerm;
+  const newStressTerminalOverride =
     stressTerminalMultiple === undefined
-      ? (stored.multiple_change_stress_override ?? null)
-      : stressTerm === null
-        ? null
-        : multipleToAnnualizedChange(currentMultiple, stressTerm);
+      ? (stored.multiple_stress_terminal_override ?? null)
+      : stressTerm;
 
   // Growth overrides — same undefined/null/value semantics as multiples.
   // Validate range: −10% to +30% per year (growth above 30% is implausible
@@ -440,9 +435,7 @@ export async function updateImpliedReturnOverrideAction({
 
   // Auto-derived values are persisted in the change fields when no
   // override existed. To recover them, derive from current/median/q1
-  // exactly as positionFlow.ts does. Since the existing change fields
-  // already reflect "effective" (override or auto), we need to re-derive
-  // when an override is being cleared and there was previously one set.
+  // exactly as positionFlow.ts does.
   const median = stored.multiple_median ?? null;
   const q1 = stored.multiple_q1 ?? null;
   const autoBaseChange =
@@ -454,17 +447,30 @@ export async function updateImpliedReturnOverrideAction({
       ? Math.pow(q1 / currentMultiple, 1 / 10) - 1
       : 0;
 
-  const effectiveBaseChange = newBaseOverride ?? autoBaseChange;
-  const effectiveStressChange = newStressOverride ?? autoStressChange;
+  // Effective change: when an absolute terminal override is active, derive
+  // the implied %/año against the current multiple at *this* moment. The
+  // terminal stays anchored; the rate is just the math output, not the
+  // user's expressed intent.
+  const effectiveBaseChange =
+    newBaseTerminalOverride !== null && newBaseTerminalOverride > 0
+      ? Math.pow(newBaseTerminalOverride / currentMultiple, 1 / 10) - 1
+      : autoBaseChange;
+  const effectiveStressChange =
+    newStressTerminalOverride !== null && newStressTerminalOverride > 0
+      ? Math.pow(newStressTerminalOverride / currentMultiple, 1 / 10) - 1
+      : autoStressChange;
 
   // Effective growth: override (if non-null) or the auto-derived value
   // already persisted in stored.growth.base/stress.
   const effectiveGrowthBase = newGrowthBaseOverride ?? stored.growth.base;
   const effectiveGrowthStress = newGrowthStressOverride ?? stored.growth.stress;
 
-  // Recompute terminals to reflect the new effective changes.
-  const newBaseTerminal = currentMultiple * Math.pow(1 + effectiveBaseChange, 10);
+  // Effective terminal: override is the anchor; otherwise derive from change.
+  const newBaseTerminal =
+    newBaseTerminalOverride ??
+    currentMultiple * Math.pow(1 + effectiveBaseChange, 10);
   const newStressTerminal =
+    newStressTerminalOverride ??
     currentMultiple * Math.pow(1 + effectiveStressChange, 10);
 
   // Re-run the implied return formula with the new effective values.
@@ -481,8 +487,13 @@ export async function updateImpliedReturnOverrideAction({
     ...stored,
     multiple_change_base: effectiveBaseChange,
     multiple_change_stress: effectiveStressChange,
-    multiple_change_base_override: newBaseOverride,
-    multiple_change_stress_override: newStressOverride,
+    multiple_base_terminal_override: newBaseTerminalOverride,
+    multiple_stress_terminal_override: newStressTerminalOverride,
+    // Clear legacy rate-based overrides on any edit — once the absolute
+    // model has written, the legacy fallback path is no longer needed for
+    // this row.
+    multiple_change_base_override: null,
+    multiple_change_stress_override: null,
     multiple_base_terminal: newBaseTerminal,
     multiple_stress_terminal: newStressTerminal,
     growth_base_override: newGrowthBaseOverride,

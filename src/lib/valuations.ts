@@ -116,10 +116,17 @@ export type ImpliedReturnStoredAssumptions = {
   };
   multiple_change_base: number; // signed, annualized — effective value used in CAGR (override if present, else auto-derived)
   multiple_change_stress: number; // signed, annualized
-  // User-supplied overrides. When non-null, replace the auto-derived
-  // multiple_change_*. Persisted alongside so we keep an audit trail of
-  // "what did the model derive vs what did Joseda correct". Cleared by
-  // setting to null via updateImpliedReturnOverrideAction (Reset path).
+  // User-supplied terminal overrides. Persisted as the absolute Nx target
+  // ("the multiple I believe this business should converge to long-term"),
+  // not as a rate — so when price moves, the terminal stays anchored and
+  // the implied %/año re-derives against the new current. This matches the
+  // mental model: the multiple is the anchor, the price oscillates around
+  // it. Cleared by setting to null via updateImpliedReturnOverrideAction.
+  multiple_base_terminal_override?: number | null;
+  multiple_stress_terminal_override?: number | null;
+  // Legacy rate-based overrides — kept readable for rows that haven't been
+  // migrated to the absolute-terminal model yet. Always null on new rows.
+  // Migration script: scripts/migrate-multiple-overrides-to-absolute.mjs.
   multiple_change_base_override?: number | null;
   multiple_change_stress_override?: number | null;
   // Same override pattern for sustainable growth assumptions. Used when

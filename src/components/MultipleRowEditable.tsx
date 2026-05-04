@@ -3,12 +3,14 @@
 // Multiple row in the Implied Return calculator's calculation table.
 // Renders the auto-derived terminal multiple per scenario, and supports
 // inline override editing — Joseda enters his own terminal multiple in
-// Nx (e.g. "2.0" = "I assume P/B lands at 2x in 10 years"), and the
-// server converts to %/año + recomputes CAGRs.
+// Nx ("the multiple I believe this business should converge to long-term").
+// The override is the absolute Nx anchor; the implied %/año re-derives
+// against the live current at every render, so when price moves the
+// terminal stays put and the rate adjusts.
 //
 // Visual states per cell:
 //   - viewing (auto):     "30.1x" headline + "mediana 10y" caption + "−6.3%/año" italic
-//   - viewing (override): "2.0x" headline (emerald accent) + "manual override" + "auto: 4.1x · −7.0%/año" muted
+//   - viewing (override): "25.0x" headline (emerald accent) + "manual override" + "compresión implícita −1.8%/año" muted
 //   - editing:            input + Save + Cancel + (Reset if override active)
 //
 // Falls back to legacy "% only" rendering when the multiple metadata
@@ -75,7 +77,7 @@ export default function MultipleRowEditable({
           current={current}
           terminal={baseTerm}
           changePct={assumptions.multiple_change_base}
-          override={assumptions.multiple_change_base_override ?? null}
+          isOverride={isBaseOverrideActive(assumptions)}
           autoCaption={baseAutoCaption({
             current,
             median,
@@ -84,8 +86,7 @@ export default function MultipleRowEditable({
           autoTerminal={
             // When override is active, recompute the auto terminal so the
             // "auto: Nx" hint shows the model's value, not the override.
-            assumptions.multiple_change_base_override !== null &&
-            assumptions.multiple_change_base_override !== undefined
+            isBaseOverrideActive(assumptions)
               ? deriveAutoBaseTerminal(
                   current,
                   assumptions.multiple_median ?? null,
@@ -104,7 +105,7 @@ export default function MultipleRowEditable({
           current={current}
           terminal={stressTerm ?? current}
           changePct={assumptions.multiple_change_stress}
-          override={assumptions.multiple_change_stress_override ?? null}
+          isOverride={isStressOverrideActive(assumptions)}
           autoCaption={stressAutoCaption({
             current,
             q1,
@@ -112,8 +113,7 @@ export default function MultipleRowEditable({
             stressChange: assumptions.multiple_change_stress,
           })}
           autoTerminal={
-            assumptions.multiple_change_stress_override !== null &&
-            assumptions.multiple_change_stress_override !== undefined
+            isStressOverrideActive(assumptions)
               ? deriveAutoStressTerminal(
                   current,
                   assumptions.multiple_q1 ?? null,
@@ -135,7 +135,7 @@ function ScenarioCell({
   current,
   terminal,
   changePct,
-  override,
+  isOverride,
   autoCaption,
   autoTerminal,
 }: {
@@ -147,13 +147,12 @@ function ScenarioCell({
   current: number;
   terminal: number;
   changePct: number;
-  override: number | null;
+  isOverride: boolean;
   autoCaption: string;
   // The auto-derived terminal — only set when override is active so we
   // can render "auto: Nx" alongside the override value.
   autoTerminal: number | null;
 }) {
-  const isOverride = override !== null;
   const [editing, setEditing] = useState(false);
   const [pending, startTransition] = useTransition();
   const [draft, setDraft] = useState(terminal.toFixed(2));
@@ -274,11 +273,36 @@ function ScenarioCell({
         {isOverride ? "manual override" : autoCaption}
       </div>
       <div className="text-[11px] font-normal italic text-navy-400">
-        {isOverride && autoTerminal !== null
-          ? `auto: ${autoTerminal.toFixed(1)}x · ${signedPct(deriveAutoChange(current, autoTerminal))}/año`
+        {isOverride
+          ? `${signedPct(changePct)}/año implícito${
+              autoTerminal !== null
+                ? ` · auto sería ${autoTerminal.toFixed(1)}x`
+                : ""
+            }`
           : `${signedPct(changePct)}/año`}
       </div>
     </div>
+  );
+}
+
+// Override active when the absolute-terminal field is set OR (for legacy
+// rows that haven't been migrated yet) the rate-based field is set. Either
+// signals user intent for that scenario.
+function isBaseOverrideActive(a: ImpliedReturnStoredAssumptions): boolean {
+  return (
+    (a.multiple_base_terminal_override !== null &&
+      a.multiple_base_terminal_override !== undefined) ||
+    (a.multiple_change_base_override !== null &&
+      a.multiple_change_base_override !== undefined)
+  );
+}
+
+function isStressOverrideActive(a: ImpliedReturnStoredAssumptions): boolean {
+  return (
+    (a.multiple_stress_terminal_override !== null &&
+      a.multiple_stress_terminal_override !== undefined) ||
+    (a.multiple_change_stress_override !== null &&
+      a.multiple_change_stress_override !== undefined)
   );
 }
 
@@ -344,11 +368,6 @@ function stressAutoCaption({
       : "mediana sector (sin Q1)";
   }
   return stressChange === 0 ? "ya en Q1 hist." : "Q1 histórico";
-}
-
-function deriveAutoChange(current: number, terminal: number): number {
-  if (current <= 0 || terminal <= 0) return 0;
-  return Math.pow(terminal / current, 1 / 10) - 1;
 }
 
 function signedPct(x: number): string {
