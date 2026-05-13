@@ -4,6 +4,6 @@
   "private": true,
   "description": "Static landing while Moatboard is on hold. See README.md.",
   "scripts": {
-    "vercel-build": "echo Static deploy; no build step required."
+    "vercel-build": "echo Static deploy - no build needed"
   }
 }
